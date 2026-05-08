@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./.venv/Scripts/python.exe -m pytest -q)",
+      "Bash(./.venv/Scripts/log-analyze.exe --help)",
+      "Bash(./.venv/Scripts/python.exe -c \"from log_analyzer.schema import AnalysisResult, ConfigId; from log_analyzer.baseline_agent import SYSTEM_PROMPT; print\\('imports OK; schema_version=', AnalysisResult.model_fields['schema_version'].default\\); print\\('prompt chars=', len\\(SYSTEM_PROMPT\\)\\)\")"
+    ]
+  }
+}

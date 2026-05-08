@@ -1,0 +1,231 @@
+2026-05-06T13:00:00.000Z fw01 kernel: [INFO] interface eth0 link up 1000Mbps full-duplex
+2026-05-06T13:00:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:00:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:00:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:00:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:00:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:01:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:01:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:01:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:01:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:01:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:01:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:02:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:02:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:02:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:02:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:02:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:02:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:03:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:03:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:03:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:03:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:03:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:03:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:04:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:04:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:04:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:04:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:04:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:04:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:05:00.000Z fw01 fwd: [INFO] connection established src=10.0.0.40:52030 dst=10.0.20.5:443 proto=tcp
+2026-05-06T13:05:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:05:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:05:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:05:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:05:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:06:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:06:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:06:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:06:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:06:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:06:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:07:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:07:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:07:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:07:30.000Z fw01 fwd: [INFO] policy v411 -> v412 applied (added rule id=5045 src=10.0.30.0/24 dst=10.0.20.5 dport=443)
+2026-05-06T13:07:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:07:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:08:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:08:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:08:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:08:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:08:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:08:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:09:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:09:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:09:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:09:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:09:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:09:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:10:00.000Z fw01 fwd: [INFO] connection established src=10.0.0.40:52060 dst=10.0.20.5:443 proto=tcp
+2026-05-06T13:10:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:10:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:10:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:10:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:10:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:11:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:11:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:11:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:11:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:11:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:11:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:12:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:12:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:12:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:12:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:12:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:12:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:13:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:13:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:13:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:13:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:13:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:13:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:14:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:14:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:14:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:14:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:14:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:14:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:15:00.000Z fw01 fwd: [INFO] connection established src=10.0.0.40:52090 dst=10.0.20.5:443 proto=tcp
+2026-05-06T13:15:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:15:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:15:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:15:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:15:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:16:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:16:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:16:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:16:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:16:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:16:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:17:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:17:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:17:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:17:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:17:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:17:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:18:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:18:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:18:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:18:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:18:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:18:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:19:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:19:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:19:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:19:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:19:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:19:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:20:00.000Z fw01 fwd: [INFO] connection established src=10.0.0.40:52120 dst=10.0.20.5:443 proto=tcp
+2026-05-06T13:20:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:20:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:20:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:20:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:20:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:21:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:21:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:21:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:21:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:21:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:21:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:22:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:22:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:22:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:22:30.000Z fw01 fwd: [INFO] policy v411 -> v412 applied (added rule id=5135 src=10.0.30.0/24 dst=10.0.20.5 dport=443)
+2026-05-06T13:22:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:22:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:23:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:23:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:23:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:23:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:23:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:23:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:24:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:24:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:24:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:24:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:24:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:24:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:25:00.000Z fw01 fwd: [INFO] connection established src=10.0.0.40:52150 dst=10.0.20.5:443 proto=tcp
+2026-05-06T13:25:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:25:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:25:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:25:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:25:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:26:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:26:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:26:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:26:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:26:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:26:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:27:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:27:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:27:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:27:30.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:27:40.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:27:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:20.000Z fw01 fwd: [WARN] policy reload requested by admin user=ops01
+2026-05-06T13:28:21.000Z fw01 fwd: [INFO] policy v413 -> v414 applied (deleted rule id=4001 src=10.0.40.0/24 dst=10.0.20.5 dport=80)
+2026-05-06T13:28:22.000Z fw01 fwd: [ERROR] DENY src=10.0.40.17 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T13:28:23.000Z fw01 fwd: [ERROR] DENY src=10.0.40.21 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T13:28:24.000Z fw01 fwd: [ERROR] DENY src=10.0.40.30 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T13:28:25.000Z fw01 fwd: [ERROR] DENY src=10.0.40.55 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T13:28:26.000Z fw01 fwd: [ERROR] DENY src=10.0.40.71 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T13:28:27.000Z fw01 fwd: [ERROR] DENY src=10.0.40.92 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T13:28:28.000Z fw01 fwd: [ERROR] DENY src=10.0.40.105 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T13:28:29.000Z fw01 fwd: [ERROR] DENY src=10.0.40.118 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T13:28:30.000Z fw01 fwd: [WARN] tcp retransmit threshold exceeded src=10.0.40.21 dst=10.0.20.5 retries=3
+2026-05-06T13:28:31.000Z fw01 app01: [ERROR] upstream timeout backend=10.0.20.5:80 client=10.0.40.21 elapsed=5004ms
+2026-05-06T13:28:32.000Z fw01 app01: [ERROR] upstream timeout backend=10.0.20.5:80 client=10.0.40.30 elapsed=5002ms
+2026-05-06T13:28:33.000Z fw01 fwd: [WARN] connection rate spike client_subnet=10.0.40.0/24 dport=80 cps=120 baseline=4
+2026-05-06T13:28:34.000Z fw01 app01: [ERROR] 502 bad gateway upstream=10.0.20.5 client=10.0.40.55
+2026-05-06T13:28:45.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:46.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:47.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:48.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:49.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:50.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:51.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:52.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:53.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:54.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:55.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:56.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:57.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:58.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:28:59.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:00.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:01.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:02.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:03.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:04.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:05.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:06.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:07.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:08.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:09.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:10.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:11.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:12.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:13.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:14.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:15.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:16.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:17.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:18.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:19.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:20.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:21.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:22.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:23.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:24.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:25.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:26.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:27.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:28.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:29.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T13:29:40.000Z fw01 ops-bot: [INFO] auto-page sent owner=net-team severity=mid summary="403 spike on 10.0.40.0/24 -> 10.0.20.5"

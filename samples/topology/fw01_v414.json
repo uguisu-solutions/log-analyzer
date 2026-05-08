@@ -1,0 +1,49 @@
+{
+  "topology_id": "fw01_v414",
+  "described_at": "2026-05-06T14:00:00Z",
+  "scope_note": "samples/logs/sample_firewall.log と sample_firewall_large.log のシナリオに対応するモックトポロジ。read_topology(target_ip) の応答用。",
+  "hosts": [
+    {
+      "ip": "10.0.20.5",
+      "hostname": "app-server-1",
+      "subnet": "10.0.20.0/24",
+      "role": "web_app_backend",
+      "expected_inbound": [
+        {"src_subnet": "10.0.30.0/24", "dport": 443, "protocol": "tcp", "purpose": "client_https"},
+        {"src_subnet": "10.0.40.0/24", "dport": 80,  "protocol": "tcp", "purpose": "client_http_legacy"}
+      ]
+    },
+    {
+      "ip": "10.0.0.1",
+      "hostname": "fw01",
+      "role": "firewall",
+      "policy_version": "v414",
+      "active_rules": [
+        {"id": 8821, "src": "10.0.30.0/24", "dst": "10.0.20.5", "dport": 443, "action": "permit"}
+      ],
+      "removed_rules": [
+        {
+          "id": 4001,
+          "src": "10.0.40.0/24",
+          "dst": "10.0.20.5",
+          "dport": 80,
+          "removed_at_version": "v414",
+          "removed_at_time": "2026-05-06T14:22:41Z",
+          "previous_action": "permit"
+        }
+      ]
+    }
+  ],
+  "neighbors": [
+    {"src": "10.0.0.1",       "dst": "10.0.20.5", "type": "firewall_to_app"},
+    {"src": "10.0.30.0/24",   "dst": "10.0.0.1",  "type": "client_to_firewall"},
+    {"src": "10.0.40.0/24",   "dst": "10.0.0.1",  "type": "client_to_firewall"}
+  ],
+  "policy": {
+    "current_version": "v414",
+    "previous_version": "v413",
+    "change_summary": "rule id=4001 (10.0.40.0/24 -> 10.0.20.5:80) was deleted",
+    "approver": "ops01",
+    "approval_ticket": "（モック: 該当チケット見つからず＝変更管理外の可能性）"
+  }
+}

@@ -1,0 +1,43 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+.pytest_cache/
+
+# --- 仮想環境 ---
+.venv/
+venv/
+env/
+
+# --- Node / Vite ---
+node_modules/
+.vite/
+
+# --- Build outputs ---
+dist/
+
+# --- 環境変数（.env.example はトラッキング、実値は除外） ---
+.env
+.env.local
+.env.*.local
+
+# --- ランタイムデータ ---
+# SQLite に保存されるユーザー定義構成は実行時データ扱い（リポジトリには含めない）
+apps/agents/data/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# --- Claude Code ---
+# settings.json はプロジェクト共有設定としてトラッキング、
+# settings.local.json は個人設定として除外
+.claude/settings.local.json
+.claude/.credentials.json

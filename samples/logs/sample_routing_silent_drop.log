@@ -1,0 +1,20 @@
+2026-05-06T15:00:00.012Z rt01 net: [INFO] interface eth0 link up 10000Mbps full-duplex
+2026-05-06T15:00:01.222Z rt01 net: [INFO] connection established src=10.0.0.42:52001 dst=10.0.20.5:443 proto=tcp
+2026-05-06T15:00:05.119Z rt01 net: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T15:00:18.402Z rt01 net: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T15:00:25.000Z rt01 net: [INFO] connection established src=10.0.30.5:38001 dst=10.0.20.5:443 proto=tcp
+2026-05-06T15:00:30.119Z rt01 net: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T15:01:30.000Z rt01 net: [WARN] tcp syn retransmit dst=10.0.20.5:443 src=10.0.50.11:48211 retries=3
+2026-05-06T15:01:30.500Z rt01 net: [WARN] tcp syn retransmit dst=10.0.20.5:443 src=10.0.50.12:48212 retries=3
+2026-05-06T15:01:31.100Z rt01 net: [WARN] tcp connect retry exhausted dst=10.0.20.5:443 src=10.0.50.11 elapsed=15000ms
+2026-05-06T15:01:31.600Z rt01 net: [WARN] tcp connect retry exhausted dst=10.0.20.5:443 src=10.0.50.12 elapsed=15000ms
+2026-05-06T15:01:32.000Z rt01 net: [WARN] icmp echo reply not received target=10.0.20.5 source=10.0.50.11 timeout=5000ms
+2026-05-06T15:01:33.500Z rt01 net: [WARN] connection rate spike client_subnet=10.0.50.0/24 dport=443 cps=80 baseline=2
+2026-05-06T15:01:35.000Z rt01 net: [WARN] tcp syn retransmit dst=10.0.20.5:443 src=10.0.50.13:48213 retries=3
+2026-05-06T15:01:35.500Z rt01 net: [WARN] tcp connect retry exhausted dst=10.0.20.5:443 src=10.0.50.13 elapsed=15000ms
+2026-05-06T15:01:40.000Z rt01 net: [WARN] tcp syn retransmit dst=10.0.20.5:443 src=10.0.50.14:48214 retries=3
+2026-05-06T15:01:42.000Z rt01 net: [WARN] tcp connect retry exhausted dst=10.0.20.5:443 src=10.0.50.14 elapsed=15000ms
+2026-05-06T15:01:45.000Z rt01 net: [WARN] tcp syn retransmit dst=10.0.20.5:443 src=10.0.50.15:48215 retries=3
+2026-05-06T15:01:46.500Z rt01 net: [WARN] tcp connect retry exhausted dst=10.0.20.5:443 src=10.0.50.15 elapsed=15000ms
+2026-05-06T15:01:48.000Z rt01 net: [WARN] icmp echo reply not received target=10.0.20.5 source=10.0.50.13 timeout=5000ms
+2026-05-06T15:02:00.000Z rt01 ops-bot: [WARN] alert raised: subnet 10.0.50.0/24 cannot reach 10.0.20.5 (silent drop, no RST observed)

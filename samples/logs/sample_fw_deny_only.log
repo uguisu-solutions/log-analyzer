@@ -1,0 +1,15 @@
+2026-05-06T17:00:00.012Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T17:00:10.402Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T17:00:25.000Z fw01 fwd: [INFO] policy v413 -> v414 applied (deleted rule id=4001 src=10.0.40.0/24 dst=10.0.20.5 dport=80)
+2026-05-06T17:00:30.118Z fw01 fwd: [ERROR] DENY src=10.0.40.17 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:30.220Z fw01 fwd: [ERROR] DENY src=10.0.40.21 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:30.318Z fw01 fwd: [ERROR] DENY src=10.0.40.30 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:30.501Z fw01 fwd: [ERROR] DENY src=10.0.40.55 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:31.118Z fw01 fwd: [ERROR] DENY src=10.0.40.71 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:31.602Z fw01 fwd: [ERROR] DENY src=10.0.40.92 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:32.110Z fw01 fwd: [ERROR] DENY src=10.0.40.105 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:32.602Z fw01 fwd: [ERROR] DENY src=10.0.40.118 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:33.110Z fw01 fwd: [ERROR] DENY src=10.0.40.130 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:34.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-06T17:00:38.000Z fw01 fwd: [ERROR] DENY src=10.0.40.42 dst=10.0.20.5 dport=80 reason=no-match policy=v414
+2026-05-06T17:00:42.000Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1

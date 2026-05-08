@@ -1,0 +1,39 @@
+services:
+  langfuse-db:
+    image: postgres:16-alpine
+    container_name: langfuse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  langfuse-server:
+    image: langfuse/langfuse:2
+    container_name: langfuse-server
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-please-change-me-in-prod}
+      SALT: ${LANGFUSE_SALT:-please-change-me-in-prod}
+      NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_INIT_ORG_ID: ibc-poc
+      LANGFUSE_INIT_ORG_NAME: IBC PoC
+      LANGFUSE_INIT_PROJECT_ID: log-analyzer
+      LANGFUSE_INIT_PROJECT_NAME: log-analyzer
+    ports:
+      - "3000:3000"
+
+volumes:
+  langfuse-db-data:
