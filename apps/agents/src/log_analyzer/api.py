@@ -25,7 +25,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from log_analyzer import prompt_slots, storage
+from log_analyzer import pipeline_runner, prompt_slots, storage
 from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.schema import AnalysisResult
 
@@ -45,6 +45,106 @@ app.add_middleware(
 # このファイルは apps/agents/src/log_analyzer/api.py、リポジトリルートは 4 階層上
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _LOGS_DIR = _REPO_ROOT / "samples" / "logs"
+
+# UI 表示用の説明的ラベル。コード ID（config1..config5）はトレース名・DB・JSON で固定。
+# モデル名は slot 別に上書き可能なのでラベルには含めない（パイプライン構造のみ表現）。
+BUILTIN_CONFIG_LABELS: dict[str, str] = {
+    "config1": "config1 — ベースライン（単一 LLM）",
+    "config2": "config2 — フィルタ + 圧縮（前処理 → 分析の 2 段）",
+    "config3": "config3 — マルチモデル並列（3 モデル並列 → 統合）",
+    "config4": "config4 — ラリー型（LangGraph orchestrator + 監視 + rally）",
+    "config5": "config5 — ユーザー定義パイプライン（DAG 自由設計）",
+}
+
+# 選択 UI から除外する builtin。config5 は pipeline_def 必須なので、
+# 直接 builtin として選んでも実行不可。ユーザーは構成設計タブで pipeline を作成し、
+# user:N として保存してから利用する。
+HIDDEN_BUILTIN_CONFIGS: set[str] = {"config5"}
+
+
+# config1〜4 の固定グラフ構造（React Flow 描画用）。
+# 各ノードは type / slot_id / fixed_model を持つ:
+#   - type=input: 入力ノード（編集不可）
+#   - type=slot: 通常の slot ノード（slot_id でプロンプト/モデル編集可）
+#   - type=slot_instance: 複数モデル並列で同じ slot を共有する場合（モデルは固定）
+BUILTIN_STRUCTURES: dict[str, dict] = {
+    "config1": {
+        "nodes": [
+            {"id": "input", "type": "input", "label": "入力ログ"},
+            {"id": "analyze", "type": "slot", "slot_id": "analyze", "label": "分析（最終出力）"},
+        ],
+        "edges": [
+            {"source": "input", "target": "analyze"},
+        ],
+    },
+    "config2": {
+        "nodes": [
+            {"id": "input", "type": "input", "label": "入力ログ"},
+            {"id": "filter_stage", "type": "static", "label": "ルールフィルタ\n(deterministic)"},
+            {"id": "triage", "type": "slot", "slot_id": "triage", "label": "Triage 圧縮"},
+            {"id": "analyze", "type": "slot", "slot_id": "analyze", "label": "分析（最終出力）"},
+        ],
+        "edges": [
+            {"source": "input", "target": "filter_stage"},
+            {"source": "filter_stage", "target": "triage"},
+            {"source": "triage", "target": "analyze"},
+        ],
+    },
+    "config3": {
+        "nodes": [
+            {"id": "input", "type": "input", "label": "入力ログ"},
+            {
+                "id": "sonnet",
+                "type": "slot_instance",
+                "slot_id": "analyze",
+                "fixed_model": "claude-sonnet-4-5",
+                "label": "Sonnet\n(slot: analyze)",
+            },
+            {
+                "id": "haiku",
+                "type": "slot_instance",
+                "slot_id": "analyze",
+                "fixed_model": "claude-haiku-4-5",
+                "label": "Haiku\n(slot: analyze)",
+            },
+            {
+                "id": "openai",
+                "type": "slot_instance",
+                "slot_id": "analyze",
+                "fixed_model": "gpt-4o-mini",
+                "label": "GPT-4o-mini\n(slot: analyze)",
+            },
+            {"id": "integrate", "type": "slot", "slot_id": "integrate", "label": "統合（最終出力）"},
+        ],
+        "edges": [
+            {"source": "input", "target": "sonnet"},
+            {"source": "input", "target": "haiku"},
+            {"source": "input", "target": "openai"},
+            {"source": "sonnet", "target": "integrate"},
+            {"source": "haiku", "target": "integrate"},
+            {"source": "openai", "target": "integrate"},
+        ],
+    },
+    "config4": {
+        "nodes": [
+            {"id": "input", "type": "input", "label": "入力ログ"},
+            {"id": "orchestrator", "type": "slot", "slot_id": "orchestrator", "label": "オーケストレータ"},
+            {"id": "fw_monitor", "type": "slot", "slot_id": "fw_monitor", "label": "FW 監視"},
+            {"id": "routing_monitor", "type": "slot", "slot_id": "routing_monitor", "label": "Routing 監視"},
+            {"id": "app_monitor", "type": "slot", "slot_id": "app_monitor", "label": "App 監視"},
+            {"id": "integrator", "type": "slot", "slot_id": "integrator", "label": "統合（最終出力）"},
+        ],
+        "edges": [
+            {"source": "input", "target": "orchestrator"},
+            {"source": "orchestrator", "target": "fw_monitor"},
+            {"source": "orchestrator", "target": "routing_monitor"},
+            {"source": "orchestrator", "target": "app_monitor"},
+            {"source": "fw_monitor", "target": "integrator"},
+            {"source": "routing_monitor", "target": "integrator"},
+            {"source": "app_monitor", "target": "integrator"},
+        ],
+    },
+}
 
 # 比較ビュー（Phase 2 W6）で 4 構成同時実行することを想定し max_workers=4。
 # 各 runner 内部でもモデル API を並列呼び出しするので、ピーク時の同時リクエスト数は 10+ になる
@@ -75,11 +175,13 @@ class LogsResponse(BaseModel):
 
 class RunRequest(BaseModel):
     log_name: str
-    config: str  # "config1" .. "config4" / "user:<id>"
+    config: str  # "config1" .. "config5" / "user:<id>"
     # ad-hoc overrides（builtin config 選択時に編集中の slot を即時試す経路）。
-    # config が "user:<id>" の場合は無視され、保存済みの overrides が使われる。
+    # config が "user:<id>" の場合は無視され、保存済みの値が使われる。
     overrides: dict[str, str] | None = None
     model_overrides: dict[str, str] | None = None
+    # config5（user_pipeline）でのみ使用。ad-hoc プレビュー実行時にここで pipeline_def を渡す。
+    pipeline: dict | None = None
 
 
 class SlotInfo(BaseModel):
@@ -101,6 +203,7 @@ class SavedConfigDTO(BaseModel):
     base_config: str
     overrides: dict[str, str]
     model_overrides: dict[str, str] = {}
+    pipeline: dict | None = None
     created_at: str
     updated_at: str
 
@@ -112,29 +215,66 @@ class SavedConfigsResponse(BaseModel):
 class CreateSavedConfigRequest(BaseModel):
     name: str
     base_config: str
-    overrides: dict[str, str]
+    overrides: dict[str, str] = {}
     model_overrides: dict[str, str] = {}
+    pipeline: dict | None = None
 
 
 class UpdateSavedConfigRequest(BaseModel):
-    overrides: dict[str, str]
+    overrides: dict[str, str] = {}
     model_overrides: dict[str, str] = {}
+    pipeline: dict | None = None
+
+
+class NodeTypeDef(BaseModel):
+    type: str
+    label: str
+    description: str
+    fixed: bool
+    editable_fields: list[str]
+    default_prompt: str | None = None
+    default_model: str | None = None
+    default_input_template: str | None = None
+
+
+class NodeTypesResponse(BaseModel):
+    node_types: list[NodeTypeDef]
+    allowed_models: list[str]
+
+
+class PipelineDefaultResponse(BaseModel):
+    pipeline: dict
 
 
 @app.get("/api/configs", response_model=ConfigsResponse)
 def list_configs() -> ConfigsResponse:
     builtins: list[ConfigEntry] = [
-        ConfigEntry(id=cid, label=cid, type="builtin", base_config=cid)
+        ConfigEntry(
+            id=cid,
+            label=BUILTIN_CONFIG_LABELS.get(cid, cid),
+            type="builtin",
+            base_config=cid,
+        )
         for cid in CONFIG_RUNNERS.keys()
+        if cid not in HIDDEN_BUILTIN_CONFIGS
     ]
     user_configs: list[ConfigEntry] = []
     for sc in storage.list_saved_configs():
+        base = sc["base_config"]
+        # config5（pipeline）派生は構造そのものをユーザーが設計しているのでベース表記不要、
+        # config1〜4 派生は slot 上書きなのでベース構成が分かる方が選択時に判断しやすい
+        if base == "config5":
+            label = sc["name"]
+        else:
+            base_label = BUILTIN_CONFIG_LABELS.get(base, base)
+            base_short = base_label.split("—", 1)[-1].split("（", 1)[0].split("(", 1)[0].strip()
+            label = f"{sc['name']}（{base}: {base_short}）"
         user_configs.append(
             ConfigEntry(
                 id=f"user:{sc['id']}",
-                label=f"{sc['name']}（{sc['base_config']} ベース）",
+                label=label,
                 type="user",
-                base_config=sc["base_config"],
+                base_config=base,
             )
         )
     return ConfigsResponse(configs=builtins + user_configs)
@@ -157,6 +297,28 @@ def list_logs() -> LogsResponse:
     return LogsResponse(logs=entries)
 
 
+class BuiltinStructureResponse(BaseModel):
+    base_config: str
+    nodes: list[dict]
+    edges: list[dict]
+
+
+@app.get("/api/configs/{base_config}/structure", response_model=BuiltinStructureResponse)
+def get_builtin_structure(base_config: str) -> BuiltinStructureResponse:
+    """builtin config1〜4 の固定グラフ構造を返す（React Flow 描画用）。"""
+    if base_config not in BUILTIN_STRUCTURES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"no fixed structure for base_config={base_config}",
+        )
+    s = BUILTIN_STRUCTURES[base_config]
+    return BuiltinStructureResponse(
+        base_config=base_config,
+        nodes=s["nodes"],
+        edges=s["edges"],
+    )
+
+
 @app.get("/api/prompt-slots/{base_config}", response_model=PromptSlotsResponse)
 def get_prompt_slots(base_config: str) -> PromptSlotsResponse:
     if base_config not in prompt_slots.VALID_BASE_CONFIGS:
@@ -165,6 +327,35 @@ def get_prompt_slots(base_config: str) -> PromptSlotsResponse:
     return PromptSlotsResponse(
         base_config=base_config,
         slots=[SlotInfo(**s) for s in slots],
+    )
+
+
+@app.get("/api/node-types", response_model=NodeTypesResponse)
+def get_node_types() -> NodeTypesResponse:
+    """構成5（user_pipeline）の UI で使えるノードタイプ定義を返す。"""
+    return NodeTypesResponse(
+        node_types=[NodeTypeDef(**nt) for nt in pipeline_runner.NODE_TYPE_DEFS],
+        allowed_models=pipeline_runner.ALLOWED_MODELS,
+    )
+
+
+@app.get("/api/pipelines/default", response_model=PipelineDefaultResponse)
+def get_default_pipeline() -> PipelineDefaultResponse:
+    """新規 pipeline 作成時の出発点（input → output の最小構成）を返す。"""
+    return PipelineDefaultResponse(
+        pipeline={
+            "nodes": [
+                {"id": "input", "type": "input"},
+                {
+                    "id": "output",
+                    "type": "output",
+                    "prompt": pipeline_runner.DEFAULT_OUTPUT_PROMPT,
+                    "model": "claude-sonnet-4-5",
+                    "input_template": pipeline_runner.DEFAULT_INPUT_TEMPLATE_OUTPUT,
+                },
+            ],
+            "edges": [{"source": "input", "target": "output"}],
+        }
     )
 
 
@@ -200,10 +391,18 @@ def create_saved_config_endpoint(req: CreateSavedConfigRequest) -> SavedConfigDT
         raise HTTPException(status_code=400, detail=f"unknown base_config: {req.base_config}")
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="name は必須")
-    _validate_overrides(req.base_config, req.overrides, req.model_overrides)
+    if req.base_config == "config5":
+        if not req.pipeline:
+            raise HTTPException(status_code=400, detail="config5 は pipeline が必須")
+        try:
+            pipeline_runner.validate_pipeline(req.pipeline)
+        except pipeline_runner.PipelineValidationError as e:
+            raise HTTPException(status_code=400, detail=f"pipeline 検証失敗: {e}")
+    else:
+        _validate_overrides(req.base_config, req.overrides, req.model_overrides)
     try:
         saved = storage.create_saved_config(
-            req.name, req.base_config, req.overrides, req.model_overrides
+            req.name, req.base_config, req.overrides, req.model_overrides, req.pipeline
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"保存失敗: {e}")
@@ -215,8 +414,18 @@ def update_saved_config_endpoint(config_id: int, req: UpdateSavedConfigRequest) 
     existing = storage.get_saved_config(config_id)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"config id={config_id} not found")
-    _validate_overrides(existing["base_config"], req.overrides, req.model_overrides)
-    saved = storage.update_saved_config(config_id, req.overrides, req.model_overrides)
+    if existing["base_config"] == "config5":
+        if not req.pipeline:
+            raise HTTPException(status_code=400, detail="config5 は pipeline が必須")
+        try:
+            pipeline_runner.validate_pipeline(req.pipeline)
+        except pipeline_runner.PipelineValidationError as e:
+            raise HTTPException(status_code=400, detail=f"pipeline 検証失敗: {e}")
+    else:
+        _validate_overrides(existing["base_config"], req.overrides, req.model_overrides)
+    saved = storage.update_saved_config(
+        config_id, req.overrides, req.model_overrides, req.pipeline
+    )
     if saved is None:
         raise HTTPException(status_code=404, detail=f"config id={config_id} not found")
     return SavedConfigDTO(**saved)
@@ -234,14 +443,20 @@ def _resolve_run_target(
     config: str,
     ad_hoc_prompt_overrides: dict[str, str] | None,
     ad_hoc_model_overrides: dict[str, str] | None,
-) -> tuple[str, dict[str, str], dict[str, str]]:
-    """`config` 文字列を `(base_config, prompt_overrides, model_overrides)` に解決する。
+    ad_hoc_pipeline: dict | None,
+) -> tuple[str, dict[str, str], dict[str, str], dict | None]:
+    """`config` 文字列を `(base_config, prompt_overrides, model_overrides, pipeline)` に解決。
 
-    builtin: base_config はそのまま、overrides は ad-hoc 値
+    builtin: base_config はそのまま、上書き類は ad-hoc 値
     user:<id>: 保存済みから読み出す（ad-hoc は無視）
     """
     if config in CONFIG_RUNNERS:
-        return config, ad_hoc_prompt_overrides or {}, ad_hoc_model_overrides or {}
+        return (
+            config,
+            ad_hoc_prompt_overrides or {},
+            ad_hoc_model_overrides or {},
+            ad_hoc_pipeline,
+        )
     if config.startswith("user:"):
         try:
             saved_id = int(config.split(":", 1)[1])
@@ -254,6 +469,7 @@ def _resolve_run_target(
             saved["base_config"],
             dict(saved["overrides"]),
             dict(saved.get("model_overrides", {})),
+            saved.get("pipeline"),
         )
     raise HTTPException(status_code=400, detail=f"unknown config: {config}")
 
@@ -264,25 +480,40 @@ async def run_config(req: RunRequest) -> AnalysisResult:
     if not log_path.exists() or log_path.suffix != ".log":
         raise HTTPException(status_code=404, detail=f"log not found: {req.log_name}")
 
-    base_config, p_overrides, m_overrides = _resolve_run_target(
-        req.config, req.overrides, req.model_overrides
+    base_config, p_overrides, m_overrides, pipeline = _resolve_run_target(
+        req.config, req.overrides, req.model_overrides, req.pipeline
     )
-    if p_overrides or m_overrides:
-        # ad-hoc / 保存済みのいずれでも slot_id とモデル名を検証
-        _validate_overrides(base_config, p_overrides, m_overrides)
+
+    if base_config == "config5":
+        if not pipeline:
+            raise HTTPException(status_code=400, detail="config5 は pipeline が必須")
+        try:
+            pipeline_runner.validate_pipeline(pipeline)
+        except pipeline_runner.PipelineValidationError as e:
+            raise HTTPException(status_code=400, detail=f"pipeline 検証失敗: {e}")
+    else:
+        if p_overrides or m_overrides:
+            _validate_overrides(base_config, p_overrides, m_overrides)
 
     log_text = log_path.read_text(encoding="utf-8", errors="replace")
     runner = CONFIG_RUNNERS[base_config]
 
     loop = asyncio.get_running_loop()
-    # runner は sync で 30〜60 秒かかる。event loop を塞がないよう thread pool にオフロード
-    result = await loop.run_in_executor(
-        _executor,
-        lambda: runner(
-            log_text,
-            str(log_path),
-            prompt_overrides=p_overrides,
-            model_overrides=m_overrides,
-        ),
-    )
+    if base_config == "config5":
+        result = await loop.run_in_executor(
+            _executor,
+            lambda: runner(
+                log_text, str(log_path), pipeline_def=pipeline,
+            ),
+        )
+    else:
+        result = await loop.run_in_executor(
+            _executor,
+            lambda: runner(
+                log_text,
+                str(log_path),
+                prompt_overrides=p_overrides,
+                model_overrides=m_overrides,
+            ),
+        )
     return result

@@ -34,6 +34,7 @@ class ConfigId(str, Enum):
     CONFIG2 = "config2"
     CONFIG3 = "config3"
     CONFIG4 = "config4"
+    CONFIG5 = "config5"
 
 
 class RootCauseCandidate(BaseModel):

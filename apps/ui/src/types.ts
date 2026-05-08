@@ -19,8 +19,72 @@ export interface SavedConfigDTO {
   base_config: string
   overrides: Record<string, string>
   model_overrides: Record<string, string>
+  pipeline: PipelineDef | null
   created_at: string
   updated_at: string
+}
+
+// 構成5（user_pipeline）用のノード定義 ─────────────────────────
+
+export type PipelineNodeType = 'input' | 'llm' | 'output'
+
+export interface PipelineNode {
+  id: string
+  type: PipelineNodeType
+  prompt?: string
+  model?: string
+  input_template?: string
+  // React Flow 描画位置（保存時にも残す: UI で開いた時にレイアウトが復元される）
+  position?: { x: number; y: number }
+}
+
+export interface PipelineEdge {
+  source: string
+  target: string
+}
+
+export interface PipelineDef {
+  nodes: PipelineNode[]
+  edges: PipelineEdge[]
+}
+
+export interface NodeTypeDef {
+  type: PipelineNodeType
+  label: string
+  description: string
+  fixed: boolean
+  editable_fields: string[]
+  default_prompt?: string | null
+  default_model?: string | null
+  default_input_template?: string | null
+}
+
+export interface NodeTypesResponse {
+  node_types: NodeTypeDef[]
+  allowed_models: string[]
+}
+
+// builtin config1〜4 の固定構造ノード（/api/configs/{base}/structure） ─────
+
+export type BuiltinNodeKind = 'input' | 'slot' | 'slot_instance' | 'static'
+
+export interface BuiltinStructureNode {
+  id: string
+  type: BuiltinNodeKind
+  label: string
+  slot_id?: string
+  fixed_model?: string
+}
+
+export interface BuiltinStructureEdge {
+  source: string
+  target: string
+}
+
+export interface BuiltinStructureResponse {
+  base_config: string
+  nodes: BuiltinStructureNode[]
+  edges: BuiltinStructureEdge[]
 }
 
 export interface LogEntry {

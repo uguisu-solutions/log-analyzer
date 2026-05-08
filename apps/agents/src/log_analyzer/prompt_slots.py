@@ -52,6 +52,9 @@ SLOT_DEFS: dict[str, dict[str, dict]] = {
         "app_monitor": {"label": "App 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
         "integrator": {"label": "統合", "default_model": "claude-sonnet-4-5", "model_overridable": True},
     },
+    # config5（user_pipeline）は slot ベースの上書きを持たない。
+    # ノード定義は pipeline_def 全体で UI が直接編集する。
+    "config5": {},
 }
 
 
@@ -83,6 +86,9 @@ def get_default_prompts(base_config: str) -> dict[str, str]:
             **DEFAULT_MONITOR_PROMPTS,
             "integrator": INTEGRATOR_PROMPT,
         }
+    if base_config == "config5":
+        # config5 は slot を持たない（ノード定義そのものを編集する）
+        return {}
     raise ValueError(f"unknown base_config: {base_config}")
 
 
