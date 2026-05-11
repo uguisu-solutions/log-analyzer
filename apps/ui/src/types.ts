@@ -91,6 +91,16 @@ export interface LogEntry {
   name: string
   bytes: number
   lines: number
+  modified_at: string  // ISO8601 (UTC)
+}
+
+export interface LogContent {
+  name: string
+  bytes: number
+  total_lines: number
+  preview_lines: number
+  truncated: boolean
+  content: string
 }
 
 export interface RootCauseCandidate {

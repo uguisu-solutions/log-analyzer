@@ -17,11 +17,13 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -168,10 +170,54 @@ class LogEntry(BaseModel):
     name: str
     bytes: int
     lines: int
+    modified_at: str  # ISO8601 (UTC)
 
 
 class LogsResponse(BaseModel):
     logs: list[LogEntry]
+
+
+class LogContentResponse(BaseModel):
+    name: str
+    bytes: int
+    total_lines: int
+    preview_lines: int  # 実際に返した行数
+    truncated: bool
+    content: str  # 先頭 preview_lines 行をくっつけたテキスト
+
+
+class LogUploadResponse(BaseModel):
+    name: str
+    bytes: int
+    lines: int
+
+
+# アップロード制限
+_MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+_PREVIEW_MAX_LINES = 200  # プレビューで返す最大行数
+# パストラバーサル防止のためファイル名は英数字 / _ - . のみ許可
+_VALID_LOG_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.log$")
+
+
+def _safe_log_path(name: str) -> Path:
+    """``name`` を検証し、samples/logs/ 配下の安全な絶対パスを返す。
+
+    パスセパレータや `..` を含む名前、`.log` 以外の拡張子は弾く。
+    """
+    if not _VALID_LOG_NAME_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "ファイル名は英数字 / _ / - / . のみ、拡張子は .log を必須とします: "
+                f"{name!r}"
+            ),
+        )
+    target = (_LOGS_DIR / name).resolve()
+    # _LOGS_DIR の外を指していないことを念のため確認（_VALID_LOG_NAME_RE で
+    # パスセパレータは弾いているが多重防御）
+    if _LOGS_DIR.resolve() not in target.parents:
+        raise HTTPException(status_code=400, detail=f"invalid log path: {name}")
+    return target
 
 
 class RunRequest(BaseModel):
@@ -291,14 +337,107 @@ def list_logs() -> LogsResponse:
     entries: list[LogEntry] = []
     for path in sorted(_LOGS_DIR.glob("*.log")):
         text = path.read_text(encoding="utf-8", errors="replace")
+        stat = path.stat()
         entries.append(
             LogEntry(
                 name=path.name,
-                bytes=path.stat().st_size,
+                bytes=stat.st_size,
                 lines=len(text.splitlines()),
+                modified_at=datetime.fromtimestamp(
+                    stat.st_mtime, tz=timezone.utc
+                ).isoformat(),
             )
         )
     return LogsResponse(logs=entries)
+
+
+@app.post("/api/logs", response_model=LogUploadResponse)
+async def upload_log(file: UploadFile = File(...)) -> LogUploadResponse:
+    """`.log` ファイルを samples/logs/ にアップロードする。
+
+    ルール:
+    - 拡張子は .log のみ
+    - 同名既存があれば 409 で拒否（事故防止）
+    - 10 MB を超えるファイルは 413 で拒否
+    """
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="ファイル名が空です")
+    target = _safe_log_path(file.filename)
+
+    if target.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"同名のログが既に存在します: {file.filename}",
+        )
+
+    # サイズ制限はチャンクで読みつつ判定（メモリで丸ごと持たない）
+    written = 0
+    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    try:
+        with tmp_path.open("wb") as fh:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > _MAX_LOG_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"ファイルサイズが上限を超えています "
+                            f"({written} > {_MAX_LOG_SIZE_BYTES} bytes)"
+                        ),
+                    )
+                fh.write(chunk)
+        tmp_path.rename(target)
+    except HTTPException:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+    except Exception as e:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise HTTPException(status_code=500, detail=f"アップロード失敗: {e}")
+
+    text = target.read_text(encoding="utf-8", errors="replace")
+    return LogUploadResponse(
+        name=target.name,
+        bytes=written,
+        lines=len(text.splitlines()),
+    )
+
+
+@app.get("/api/logs/{name}/content", response_model=LogContentResponse)
+def get_log_content(name: str) -> LogContentResponse:
+    """ログ先頭 N 行（既定 200 行）をプレビュー用に返す。"""
+    target = _safe_log_path(name)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"ログが見つかりません: {name}")
+    text = target.read_text(encoding="utf-8", errors="replace")
+    all_lines = text.splitlines()
+    preview = all_lines[:_PREVIEW_MAX_LINES]
+    return LogContentResponse(
+        name=name,
+        bytes=target.stat().st_size,
+        total_lines=len(all_lines),
+        preview_lines=len(preview),
+        truncated=len(all_lines) > len(preview),
+        content="\n".join(preview),
+    )
+
+
+@app.delete("/api/logs/{name}")
+def delete_log(name: str) -> dict:
+    """ログファイルを削除。"""
+    target = _safe_log_path(name)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"ログが見つかりません: {name}")
+    try:
+        target.unlink()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"削除失敗: {e}")
+    return {"deleted": name}
 
 
 class BuiltinStructureResponse(BaseModel):
