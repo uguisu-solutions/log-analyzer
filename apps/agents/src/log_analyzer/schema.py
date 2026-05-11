@@ -89,6 +89,17 @@ class GraphEdge(BaseModel):
     target: str
 
 
+class OrchestratorDecisionDTO(BaseModel):
+    """構成4 オーケストレータの 1 ラウンドの判断を UI に渡すための DTO。"""
+
+    round: int
+    action: str  # "invoke" | "finalize"
+    invoke: list[str] = Field(default_factory=list)
+    focus_hints: dict[str, str] = Field(default_factory=dict)
+    rationale: str = ""
+    forced: bool = False  # rally_max_rounds 到達による強制 finalize の場合 True
+
+
 class AnalysisResult(BaseModel):
     schema_version: str = "v0.1"
     trace_id: UUID = Field(default_factory=uuid4)
@@ -103,3 +114,7 @@ class AnalysisResult(BaseModel):
     # 後方互換（v0.1 のクライアントがこのフィールドを知らなくてもデコードできる）
     execution_graph_nodes: list[GraphNode] = Field(default_factory=list)
     execution_graph_edges: list[GraphEdge] = Field(default_factory=list)
+    # 構成4（rally）専用。他構成では 0 / 空配列のまま
+    orchestrator_rounds: int = 0
+    orchestrator_max_rounds: int = 0
+    orchestrator_history: list[OrchestratorDecisionDTO] = Field(default_factory=list)

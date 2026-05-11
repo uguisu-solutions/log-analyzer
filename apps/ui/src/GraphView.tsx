@@ -70,14 +70,38 @@ export function GraphView({ nodes, edges }: Props) {
   )
 }
 
+/** DFS でバックエッジを除いた DAG を返す（サイクル構造の longest-path 無限ループ回避）。 */
+function dagEdges(nodes: GraphNodeData[], edges: GraphEdgeData[]): GraphEdgeData[] {
+  const adj = new Map<string, string[]>()
+  edges.forEach(e => {
+    if (!adj.has(e.source)) adj.set(e.source, [])
+    adj.get(e.source)!.push(e.target)
+  })
+  const visited = new Set<string>()
+  const inStack = new Set<string>()
+  const back = new Set<string>()
+  function dfs(u: string) {
+    visited.add(u)
+    inStack.add(u)
+    for (const v of adj.get(u) ?? []) {
+      if (inStack.has(v)) back.add(`${u}->${v}`)
+      else if (!visited.has(v)) dfs(v)
+    }
+    inStack.delete(u)
+  }
+  nodes.forEach(n => { if (!visited.has(n.id)) dfs(n.id) })
+  return edges.filter(e => !back.has(`${e.source}->${e.target}`))
+}
+
 function layoutGraph(
   nodes: GraphNodeData[],
   edges: GraphEdgeData[],
 ): { rfNodes: Node[]; rfEdges: Edge[] } {
-  // 入次数 0 のノードを root として BFS で深度を割り当てる
+  // 深さ計算は back-edge を除いた DAG で行う（rfEdges 描画は元の cyclic edges のまま）
+  const layoutEdges = dagEdges(nodes, edges)
   const incoming = new Map<string, number>()
   nodes.forEach(n => incoming.set(n.id, 0))
-  edges.forEach(e => incoming.set(e.target, (incoming.get(e.target) ?? 0) + 1))
+  layoutEdges.forEach(e => incoming.set(e.target, (incoming.get(e.target) ?? 0) + 1))
 
   const depth = new Map<string, number>()
   const queue: string[] = []
@@ -87,10 +111,11 @@ function layoutGraph(
       queue.push(n.id)
     }
   })
-  while (queue.length > 0) {
+  let safety = nodes.length * nodes.length + 16
+  while (queue.length > 0 && safety-- > 0) {
     const cur = queue.shift() as string
     const curDepth = depth.get(cur) ?? 0
-    edges
+    layoutEdges
       .filter(e => e.source === cur)
       .forEach(e => {
         const newDepth = curDepth + 1

@@ -11,7 +11,7 @@ import time
 
 import anthropic
 
-from log_analyzer.rally._helpers import extract_json
+from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.rally.state import Config4State
 
 INTEGRATOR_PROMPT = """\
@@ -64,15 +64,28 @@ def integrator_node(state: Config4State) -> dict:
 
     client = anthropic.Anthropic()
     started = time.perf_counter()
+    # 複数ラウンドのラリーで monitor_results が肥大すると応答も長くなりやすい。
+    # 切断による JSON parse 失敗を避けるため余裕を持たせる
     response = client.messages.create(
         model=model,
-        max_tokens=2000,
+        max_tokens=4000,
         system=system_prompt,
         messages=[{"role": "user", "content": user_input}],
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
     raw = response.content[0].text
-    parsed = extract_json(raw)
+    parsed, parse_error = safe_extract_json(
+        raw,
+        fallback={
+            "root_cause_candidates": [],
+            "recommended_actions": [],
+            "confidence": 0.0,
+        },
+    )
+    if parse_error:
+        # 後段が info_loss_flags に転記できるようマークしておく
+        parsed["_parse_error"] = parse_error
+        parsed["_raw_truncated"] = raw[-500:]
 
     return {
         "integrator_result": parsed,

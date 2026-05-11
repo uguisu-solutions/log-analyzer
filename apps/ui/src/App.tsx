@@ -15,9 +15,77 @@ const API_BASE = 'http://localhost:8000'
 
 type Mode = 'single' | 'compare' | 'builder'
 
+function OrchestratorHistoryView({ result }: { result: AnalysisResult }) {
+  // 構成4 のみ意味のあるデータ。古い API レスポンスや他構成ではフィールドが
+  // undefined / 0 / 空のことがあるので防御的に読む
+  const rounds = result.orchestrator_rounds ?? 0
+  const maxRounds = result.orchestrator_max_rounds ?? 0
+  const history = result.orchestrator_history ?? []
+  if (rounds === 0 || history.length === 0) {
+    return null
+  }
+  const totalLLMRounds = history.filter(d => !d.forced || d.action === 'invoke').length
+  const forcedFinalize = history.some(d => d.forced && d.action === 'finalize')
+  const invokeRounds = history.filter(d => d.action === 'invoke').length
+  return (
+    <section className="orchestrator-history">
+      <h3>オーケストレータ判断履歴（{rounds} ラウンド / 上限 {maxRounds}）</h3>
+      <div className="orchestrator-summary">
+        <span className="kv">
+          <span className="k">LLM 判断回数</span>
+          <span className="v">{totalLLMRounds}</span>
+        </span>
+        <span className="kv">
+          <span className="k">監視再呼出</span>
+          <span className="v">{invokeRounds} 回</span>
+        </span>
+        {forcedFinalize && (
+          <span className="kv warn">
+            <span className="k">⚠</span>
+            <span className="v">上限到達で強制 finalize</span>
+          </span>
+        )}
+      </div>
+      <ol className="orchestrator-rounds">
+        {history.map((d, i) => {
+          const invoke = d.invoke ?? []
+          const focusHints = d.focus_hints ?? {}
+          const focusKeys = Object.keys(focusHints)
+          return (
+            <li key={i} className={`orch-round action-${d.action}${d.forced ? ' forced' : ''}`}>
+              <div className="orch-round-header">
+                <span className="round-num">round {d.round}</span>
+                <span className={`action-badge action-${d.action}`}>{d.action}</span>
+                {d.forced && <span className="forced-badge">forced</span>}
+                {d.action === 'invoke' && invoke.length > 0 && (
+                  <span className="invoke-list">→ {invoke.join(', ')}</span>
+                )}
+              </div>
+              {d.rationale && <div className="orch-rationale">{d.rationale}</div>}
+              {focusKeys.length > 0 && (
+                <details className="focus-hints">
+                  <summary>focus_hints ({focusKeys.length})</summary>
+                  <ul>
+                    {focusKeys.map(k => (
+                      <li key={k}>
+                        <code>{k}</code>: {focusHints[k]}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
+}
+
 function ResultDetails({ result }: { result: AnalysisResult }) {
   return (
     <>
+      <OrchestratorHistoryView result={result} />
       <h3>根本原因候補（{result.root_cause_candidates.length}）</h3>
       <ol className="candidates">
         {result.root_cause_candidates.map((c, i) => (
@@ -129,6 +197,10 @@ function App() {
 
   // Builder mode（構成設計）
   const [builderEditingId, setBuilderEditingId] = useState<string | null>('__new__')
+
+  // 構成4 専用ランタイムパラメータ
+  const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
+  const [rallyForceMinRounds, setRallyForceMinRounds] = useState<number>(0)
 
   const selectedConfigEntry = configList.find(c => c.id === selectedConfig)
   const selectedBaseConfig = selectedConfigEntry?.base_config ?? ''
@@ -378,6 +450,11 @@ function App() {
         if (Object.keys(ov).length > 0) body.overrides = ov
         if (Object.keys(mov).length > 0) body.model_overrides = mov
       }
+      // 構成4（rally）はランタイムパラメータも送る
+      if (selectedBaseConfig === 'config4') {
+        body.rally_max_rounds = rallyMaxRounds
+        if (rallyForceMinRounds > 0) body.rally_force_min_rounds = rallyForceMinRounds
+      }
       // user の場合は overrides は無視される（保存値が使われる）
       const r = await fetch(`${API_BASE}/api/runs`, {
         method: 'POST',
@@ -525,6 +602,44 @@ function App() {
               この構成は <strong>config5（user_pipeline）</strong> ベースです。プロンプトとモデルの編集は
               <strong>「構成設計（pipeline）」</strong>タブで行ってください。
             </div>
+          )}
+
+          {selectedConfigEntry && selectedBaseConfig === 'config4' && (
+            <section className="rally-controls">
+              <div className="rally-controls-title">
+                ラリー制御（config4 専用）
+              </div>
+              <div className="rally-controls-row">
+                <label className="rally-control">
+                  <span className="rally-label">最大ラウンド数</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={6}
+                    value={rallyMaxRounds}
+                    onChange={e => setRallyMaxRounds(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
+                    disabled={singleRunning}
+                  />
+                  <span className="rally-hint">orchestrator が回せる上限（1〜6）</span>
+                </label>
+                <label className="rally-control">
+                  <span className="rally-label">強制最小ラウンド（PoC デモ用）</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={rallyMaxRounds}
+                    value={rallyForceMinRounds}
+                    onChange={e => setRallyForceMinRounds(Math.max(0, Math.min(rallyMaxRounds, Number(e.target.value) || 0)))}
+                    disabled={singleRunning}
+                  />
+                  <span className="rally-hint">
+                    {rallyForceMinRounds > 0
+                      ? `${rallyForceMinRounds} 未満で finalize を選んでも override で再呼出を強制`
+                      : '0=本番挙動（LLM 判断のまま）'}
+                  </span>
+                </label>
+              </div>
+            </section>
           )}
 
           {selectedConfigEntry && selectedBaseConfig !== 'config5' && (
