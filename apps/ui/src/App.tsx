@@ -127,7 +127,10 @@ function ResultDetails({ result }: { result: AnalysisResult }) {
   )
 }
 
-function ResultSummaryGrid({ result }: { result: AnalysisResult }) {
+function ResultSummaryGrid({ result, langfuseHost }: { result: AnalysisResult; langfuseHost: string | null }) {
+  // Langfuse v2 のトレース URL 規約: ${host}/trace/${trace_id}
+  // host が null（未設定）ならリンクではなくテキスト表示
+  const traceUrl = langfuseHost ? `${langfuseHost}/trace/${result.trace_id}` : null
   return (
     <div className="summary-grid">
       <div className="summary-card">
@@ -156,7 +159,15 @@ function ResultSummaryGrid({ result }: { result: AnalysisResult }) {
       )}
       <div className="summary-card">
         <div className="summary-label">trace_id</div>
-        <div className="summary-value mono small">{result.trace_id}</div>
+        <div className="summary-value mono small">
+          {traceUrl ? (
+            <a href={traceUrl} target="_blank" rel="noopener noreferrer" className="trace-link">
+              {result.trace_id} ↗
+            </a>
+          ) : (
+            result.trace_id
+          )}
+        </div>
       </div>
     </div>
   )
@@ -169,6 +180,8 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [selectedLog, setSelectedLog] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
+  // Langfuse UI への直リンク用ホスト URL（バックエンドから取得、未設定なら null）
+  const [langfuseHost, setLangfuseHost] = useState<string | null>(null)
 
   // Single mode
   const [selectedConfig, setSelectedConfig] = useState<string>('')
@@ -290,6 +303,13 @@ function App() {
       }
     })
     loadLogs()
+    // Langfuse host を取得（失敗してもクリティカルではないので catch して無視）
+    fetch(`${API_BASE}/api/runtime-config`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { langfuse_host: string | null } | null) => {
+        if (d?.langfuse_host) setLangfuseHost(d.langfuse_host)
+      })
+      .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -748,7 +768,7 @@ function App() {
           {singleResult && (
             <section className="result">
               <h2>結果</h2>
-              <ResultSummaryGrid result={singleResult} />
+              <ResultSummaryGrid result={singleResult} langfuseHost={langfuseHost} />
 
               <h3>エージェント組織図</h3>
               <GraphView

@@ -49,13 +49,15 @@ def _route_after_orchestrator(state: Config4State) -> list[str]:
     return ["integrator"]
 
 
+_ALL_MONITORS: tuple[str, ...] = ("fw", "routing", "app", "dns", "sec")
+
+
 def build_graph():
     graph = StateGraph(Config4State)
 
     graph.add_node("orchestrator", orchestrator_node)
-    graph.add_node("fw", MONITOR_FNS["fw"])
-    graph.add_node("routing", MONITOR_FNS["routing"])
-    graph.add_node("app", MONITOR_FNS["app"])
+    for m in _ALL_MONITORS:
+        graph.add_node(m, MONITOR_FNS[m])
     graph.add_node("integrator", integrator_node)
 
     graph.add_edge(START, "orchestrator")
@@ -64,16 +66,11 @@ def build_graph():
     graph.add_conditional_edges(
         "orchestrator",
         _route_after_orchestrator,
-        {
-            "fw": "fw",
-            "routing": "routing",
-            "app": "app",
-            "integrator": "integrator",
-        },
+        {**{m: m for m in _ALL_MONITORS}, "integrator": "integrator"},
     )
 
     # 各監視 → orchestrator に戻る（fan-in、orchestrator が再評価）
-    for m in ("fw", "routing", "app"):
+    for m in _ALL_MONITORS:
         graph.add_edge(m, "orchestrator")
 
     graph.add_edge("integrator", END)

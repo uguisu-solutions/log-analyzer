@@ -1,0 +1,55 @@
+{
+  "config_set_id": "service_configs_v1",
+  "described_at": "2026-05-08T00:00:00Z",
+  "scope_note": "DNS / Security / App の get_config(service) ツール用のモック。Phase 2 後半で実機構成管理 DB に置換予定。",
+  "services": {
+    "dns01": {
+      "hostname": "dns01",
+      "ip": "10.0.50.2",
+      "role": "internal_resolver",
+      "type": "bind9",
+      "version": "9.18.21",
+      "zones": ["example.internal", "10.in-addr.arpa"],
+      "upstream_primary": "10.0.50.1",
+      "upstream_secondary": null,
+      "ttl_default": 300,
+      "max_stale": 3600,
+      "last_zone_xfer_at": "2026-05-08T08:30:00Z",
+      "known_issue": "upstream_secondary 未設定（v3 計画書では冗長化必須項目だが未対応）"
+    },
+    "auth-server": {
+      "hostname": "auth-server",
+      "ip": "10.0.0.10",
+      "role": "ssh_bastion_and_auth",
+      "ssh_config": {
+        "PermitRootLogin": "no",
+        "PasswordAuthentication": "yes",
+        "MaxAuthTries": 6,
+        "AllowUsers": ["deploy", "ops01", "ops02"],
+        "Fail2Ban_enabled": true,
+        "Fail2Ban_bantime_sec": 600
+      },
+      "sudoers": {
+        "deploy": "NOT_IN_SUDOERS",
+        "ops01": "ALL=(ALL) NOPASSWD: ALL",
+        "ops02": "ALL=(ALL) /usr/bin/systemctl"
+      },
+      "osquery_enabled": true,
+      "outbound_whitelist": ["update.internal", "anthropic.com", "github.com"]
+    },
+    "app-server-1": {
+      "hostname": "app-server-1",
+      "ip": "10.0.20.5",
+      "role": "web_app_backend",
+      "runtime": "Java 17 (OpenJDK)",
+      "max_heap_mb": 512,
+      "expected_workers": 4,
+      "endpoints": [
+        {"path": "/api/users", "expected_latency_ms": 50},
+        {"path": "/api/export", "expected_latency_ms": 5000, "rows_threshold": 50000, "note": "rows>50000 で OOM 報告あり"}
+      ],
+      "depends_on": ["dns01", "db.example.internal", "cache.example.internal"],
+      "known_issue": "max_heap=512m は v3 計画書で 1024m に増やす提案中。/api/export の rows 上限未実装"
+    }
+  }
+}

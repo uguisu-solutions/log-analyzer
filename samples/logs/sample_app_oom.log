@@ -1,0 +1,26 @@
+2026-05-08T11:02:00.114Z app-server-1 systemd: Started myapp.service - Application Server
+2026-05-08T11:02:01.221Z app-server-1 myapp[3201]: [INFO] starting workers=4 max_heap=512m
+2026-05-08T11:02:02.001Z app-server-1 myapp[3201]: [INFO] listening on :8080
+2026-05-08T11:02:15.554Z app-server-1 myapp[3201]: [INFO] req_id=a1b GET /api/users 200 18ms
+2026-05-08T11:08:32.991Z app-server-1 myapp[3201]: [INFO] req_id=c4d POST /api/export 200 2.1s rows=15000
+2026-05-08T11:15:01.002Z app-server-1 myapp[3201]: [INFO] heap_used=420m/512m (82%) gc_count=23
+2026-05-08T11:22:18.402Z app-server-1 myapp[3201]: [WARN] heap_used=465m/512m (90%) gc_count=58 full_gc=3
+2026-05-08T11:22:18.880Z app-server-1 myapp[3201]: [WARN] gc_pause=850ms (over 500ms threshold)
+2026-05-08T11:25:11.118Z app-server-1 myapp[3201]: [INFO] req_id=e9f POST /api/export 200 12.4s rows=80000
+2026-05-08T11:25:14.221Z app-server-1 myapp[3201]: [WARN] heap_used=502m/512m (98%) gc_count=72 full_gc=8
+2026-05-08T11:25:14.222Z app-server-1 myapp[3201]: [WARN] gc_pause=2.1s
+2026-05-08T11:25:18.991Z app-server-1 myapp[3201]: [ERROR] java.lang.OutOfMemoryError: Java heap space
+2026-05-08T11:25:18.992Z app-server-1 myapp[3201]: [ERROR] at com.example.export.ExportService.buildCsv(ExportService.java:142)
+2026-05-08T11:25:18.993Z app-server-1 myapp[3201]: [ERROR] at com.example.api.ExportController.handle(ExportController.java:88)
+2026-05-08T11:25:19.001Z app-server-1 kernel: [WARN] Out of memory: Killed process 3201 (myapp) total-vm:1234567kB rss=512345kB
+2026-05-08T11:25:19.221Z app-server-1 systemd: myapp.service: Main process exited, code=killed, status=9/KILL
+2026-05-08T11:25:19.222Z app-server-1 systemd: myapp.service: Failed with result 'signal'.
+2026-05-08T11:25:20.402Z app-server-1 systemd: myapp.service: Scheduled restart job, restart counter is at 1.
+2026-05-08T11:25:21.001Z app-server-1 myapp[3489]: [INFO] starting workers=4 max_heap=512m
+2026-05-08T11:25:22.114Z fw01 fwd: [INFO] connection refused src=10.0.30.0/24 dst=10.0.20.5:8080 (target down 0.8s)
+2026-05-08T11:25:33.002Z app-server-1 myapp[3489]: [INFO] req_id=h2j POST /api/export 200 3.2s rows=12000
+2026-05-08T11:32:58.221Z app-server-1 myapp[3489]: [WARN] heap_used=440m/512m (86%) gc_count=41
+2026-05-08T11:35:01.118Z app-server-1 myapp[3489]: [ERROR] java.lang.OutOfMemoryError: Java heap space
+2026-05-08T11:35:01.222Z app-server-1 kernel: [WARN] Out of memory: Killed process 3489 (myapp)
+2026-05-08T11:35:02.001Z app-server-1 systemd: myapp.service: Scheduled restart job, restart counter is at 2.
+2026-05-08T11:35:11.554Z app-server-1 myapp[3712]: [INFO] starting workers=4 max_heap=512m

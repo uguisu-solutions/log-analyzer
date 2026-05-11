@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -127,7 +128,7 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"source": "openai", "target": "integrate"},
         ],
     },
-    # 編集画面のワークフロー図:
+    # 編集画面のワークフロー図 (5 監視構成):
     # 正方向のデータフロー（実線）と、orchestrator 再入のフィードバック（破線）を区別。
     # フロント側で kind=feedback のエッジは dagre レイアウト計算から除外し
     # 破線オレンジ + ラベル「再評価」で描画する。
@@ -138,6 +139,8 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"id": "fw_monitor", "type": "slot", "slot_id": "fw_monitor", "label": "FW 監視"},
             {"id": "routing_monitor", "type": "slot", "slot_id": "routing_monitor", "label": "Routing 監視"},
             {"id": "app_monitor", "type": "slot", "slot_id": "app_monitor", "label": "App 監視"},
+            {"id": "dns_monitor", "type": "slot", "slot_id": "dns_monitor", "label": "DNS 監視"},
+            {"id": "sec_monitor", "type": "slot", "slot_id": "sec_monitor", "label": "Security 監視"},
             {"id": "integrator", "type": "slot", "slot_id": "integrator", "label": "統合（最終出力）"},
         ],
         "edges": [
@@ -146,13 +149,19 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"source": "orchestrator", "target": "fw_monitor"},
             {"source": "orchestrator", "target": "routing_monitor"},
             {"source": "orchestrator", "target": "app_monitor"},
+            {"source": "orchestrator", "target": "dns_monitor"},
+            {"source": "orchestrator", "target": "sec_monitor"},
             {"source": "fw_monitor", "target": "integrator"},
             {"source": "routing_monitor", "target": "integrator"},
             {"source": "app_monitor", "target": "integrator"},
+            {"source": "dns_monitor", "target": "integrator"},
+            {"source": "sec_monitor", "target": "integrator"},
             # 再評価フィードバック（破線で描画、レイアウト計算では無視）
             {"source": "fw_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
             {"source": "routing_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
             {"source": "app_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
+            {"source": "dns_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
+            {"source": "sec_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
         ],
     },
 }
@@ -302,6 +311,25 @@ class NodeTypesResponse(BaseModel):
 
 class PipelineDefaultResponse(BaseModel):
     pipeline: dict
+
+
+class RuntimeConfigResponse(BaseModel):
+    """UI が初期化時に取得する実行時設定（Langfuse 直リンク用 host 等）。"""
+
+    langfuse_host: str | None = None
+
+
+@app.get("/api/runtime-config", response_model=RuntimeConfigResponse)
+def get_runtime_config() -> RuntimeConfigResponse:
+    """ブラウザ UI が trace_id から Langfuse UI 直リンクを生成するのに使う。
+
+    LANGFUSE_HOST が未設定 / 既定 localhost なら null を返し、UI 側は
+    リンクではなくテキスト表示にフォールバックする。
+    """
+    host = os.environ.get("LANGFUSE_HOST", "").strip()
+    if not host:
+        return RuntimeConfigResponse(langfuse_host=None)
+    return RuntimeConfigResponse(langfuse_host=host.rstrip("/"))
 
 
 @app.get("/api/configs", response_model=ConfigsResponse)
