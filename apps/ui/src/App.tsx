@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { BuiltinConfigCanvas } from './BuiltinConfigCanvas'
 import { GraphView } from './GraphView'
+import { LogManager } from './LogManager'
 import { PipelineBuilder } from './PipelineBuilder'
 import type {
   AnalysisResult,
@@ -13,7 +14,7 @@ import './App.css'
 
 const API_BASE = 'http://localhost:8000'
 
-type Mode = 'single' | 'compare' | 'builder'
+type Mode = 'single' | 'compare' | 'builder' | 'logs'
 
 function OrchestratorHistoryView({ result }: { result: AnalysisResult }) {
   // 構成4 のみ意味のあるデータ。古い API レスポンスや他構成ではフィールドが
@@ -262,6 +263,24 @@ function App() {
       })
   }, [])
 
+  const loadLogs = useCallback(() => {
+    return fetch(`${API_BASE}/api/logs`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((d: { logs: LogEntry[] }) => {
+        setLogs(d.logs)
+        // 削除されたログを selectedLog に持っていた場合は別のログに切り替え
+        setSelectedLog(prev => {
+          if (d.logs.some(l => l.name === prev)) return prev
+          return d.logs[0]?.name ?? ''
+        })
+        return d.logs
+      })
+      .catch(e => {
+        setError(`ログ一覧取得失敗: ${e.message}`)
+        return [] as LogEntry[]
+      })
+  }, [])
+
   useEffect(() => {
     loadConfigs().then(configs => {
       if (configs.length > 0 && !selectedConfig) setSelectedConfig(configs[0].id)
@@ -270,13 +289,7 @@ function App() {
         setCompareSelected(new Set(builtinIds))
       }
     })
-    fetch(`${API_BASE}/api/logs`)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then((d: { logs: LogEntry[] }) => {
-        setLogs(d.logs)
-        if (d.logs.length > 0) setSelectedLog(d.logs[0].name)
-      })
-      .catch(e => setError(`ログ一覧取得失敗: ${e.message}`))
+    loadLogs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -544,6 +557,13 @@ function App() {
         >
           構成設計（pipeline）
         </button>
+        <button
+          onClick={() => setMode('logs')}
+          className={mode === 'logs' ? 'tab active' : 'tab'}
+          disabled={singleRunning || isCompareRunning}
+        >
+          ログ管理
+        </button>
       </div>
 
       {mode === 'builder' && (
@@ -556,6 +576,10 @@ function App() {
           editingConfigId={builderEditingId}
           onEditingConfigIdChange={setBuilderEditingId}
         />
+      )}
+
+      {mode === 'logs' && (
+        <LogManager logs={logs} onLogsChange={loadLogs} />
       )}
 
       {mode === 'single' && (
