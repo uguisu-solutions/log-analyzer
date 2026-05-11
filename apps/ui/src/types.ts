@@ -122,6 +122,15 @@ export interface GraphEdgeData {
   target: string
 }
 
+export interface OrchestratorDecision {
+  round: number
+  action: string  // "invoke" | "finalize"
+  invoke: string[]
+  focus_hints: Record<string, string>
+  rationale: string
+  forced: boolean
+}
+
 export interface AnalysisResult {
   schema_version: string
   trace_id: string
@@ -141,4 +150,8 @@ export interface AnalysisResult {
   info_loss_flags: string[]
   execution_graph_nodes: GraphNodeData[]
   execution_graph_edges: GraphEdgeData[]
+  // 構成4 専用（他構成では 0 / 空）
+  orchestrator_rounds: number
+  orchestrator_max_rounds: number
+  orchestrator_history: OrchestratorDecision[]
 }

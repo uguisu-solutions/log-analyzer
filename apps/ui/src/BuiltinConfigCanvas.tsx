@@ -43,13 +43,48 @@ const KIND_STYLES: Record<BuiltinStructureNode['type'], { bg: string; border: st
   slot_instance: { bg: '#e0e7ff', border: '#6366f1' },
 }
 
+/** DFS でバックエッジ（祖先方向のエッジ）を検出して除外する。
+ * config4 の orchestrator ループのように本来サイクル構造でも、
+ * レイヤー化レイアウトのために前方向 DAG として扱う必要がある。
+ */
+function removeBackEdges(
+  nodes: BuiltinStructureNode[],
+  edges: { source: string; target: string }[],
+): { source: string; target: string }[] {
+  const adj = new Map<string, string[]>()
+  edges.forEach(e => {
+    if (!adj.has(e.source)) adj.set(e.source, [])
+    adj.get(e.source)!.push(e.target)
+  })
+  const visited = new Set<string>()
+  const inStack = new Set<string>()
+  const back = new Set<string>()  // "source->target"
+  function dfs(u: string) {
+    visited.add(u)
+    inStack.add(u)
+    for (const v of adj.get(u) ?? []) {
+      if (inStack.has(v)) {
+        back.add(`${u}->${v}`)
+      } else if (!visited.has(v)) {
+        dfs(v)
+      }
+    }
+    inStack.delete(u)
+  }
+  nodes.forEach(n => { if (!visited.has(n.id)) dfs(n.id) })
+  return edges.filter(e => !back.has(`${e.source}->${e.target}`))
+}
+
 function autoLayout(
   nodes: BuiltinStructureNode[],
   edges: { source: string; target: string }[],
 ): Record<string, { x: number; y: number }> {
+  // サイクルを含む構造（config4 の orchestrator ループ）では back-edge を
+  // 除いた DAG で深さを計算しないと、longest-path ループが終わらない
+  const dagEdges = removeBackEdges(nodes, edges)
   const indeg: Record<string, number> = {}
   nodes.forEach(n => (indeg[n.id] = 0))
-  edges.forEach(e => (indeg[e.target] = (indeg[e.target] ?? 0) + 1))
+  dagEdges.forEach(e => (indeg[e.target] = (indeg[e.target] ?? 0) + 1))
   const depth: Record<string, number> = {}
   const queue: string[] = []
   nodes.forEach(n => {
@@ -58,10 +93,12 @@ function autoLayout(
       queue.push(n.id)
     }
   })
-  while (queue.length > 0) {
+  // 念のため反復回数を上限化（万が一 back-edge 検出を擦り抜けても固まらない）
+  let safety = nodes.length * nodes.length + 16
+  while (queue.length > 0 && safety-- > 0) {
     const cur = queue.shift() as string
     const cd = depth[cur] ?? 0
-    edges
+    dagEdges
       .filter(e => e.source === cur)
       .forEach(e => {
         if ((depth[e.target] ?? -1) < cd + 1) {

@@ -35,6 +35,18 @@ def main() -> int:
         default="config1",
         help="Configuration to run (default: config1)",
     )
+    parser.add_argument(
+        "--rally-max-rounds",
+        type=int,
+        default=None,
+        help="config4 のみ: orchestrator が回せる最大ラウンド数（既定 3）",
+    )
+    parser.add_argument(
+        "--rally-force-min-rounds",
+        type=int,
+        default=None,
+        help="config4 のみ: PoC デモ用、min 未達で finalize を invoke に override する",
+    )
     args = parser.parse_args()
 
     if not args.log_path.exists():
@@ -43,7 +55,13 @@ def main() -> int:
 
     log_text = args.log_path.read_text(encoding="utf-8", errors="replace")
     runner = CONFIG_RUNNERS[args.config]
-    result = runner(log_text, log_ref=str(args.log_path))
+    extra_kwargs: dict = {}
+    if args.config == "config4":
+        if args.rally_max_rounds is not None:
+            extra_kwargs["rally_max_rounds"] = args.rally_max_rounds
+        if args.rally_force_min_rounds is not None:
+            extra_kwargs["rally_force_min_rounds"] = args.rally_force_min_rounds
+    result = runner(log_text, log_ref=str(args.log_path), **extra_kwargs)
     sys.stdout.write(result.model_dump_json(indent=2) + "\n")
     return 0
 

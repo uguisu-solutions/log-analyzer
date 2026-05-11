@@ -3,6 +3,11 @@
 3 監視はモデル（Sonnet 4.5）と全体構造を共有し、System Prompt と
 ツール呼び出しの観点だけが異なる。各監視は ``read_topology`` を 1 回叩いて
 トポロジ情報を LLM のコンテキストに含める。
+
+設計メモ（再入対応版）:
+- 監視は ``escalate_to`` を返さない。判断はオーケストレータに集約済み。
+- ``state["focus_hints"][role]`` がある場合、その自然文を user input に
+  注入し、観点を絞った追加分析を行う。
 """
 from __future__ import annotations
 
@@ -14,11 +19,9 @@ from typing import Callable
 
 import anthropic
 
-from log_analyzer.rally._helpers import extract_json
+from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.rally.state import Config4State
 from log_analyzer.rally.tools import read_topology
-
-_VALID_ESCALATIONS = {"fw", "routing", "app"}
 
 
 # 各監視のデフォルト System Prompt は公開シンボル（prompt_slots からも参照される）
@@ -26,67 +29,64 @@ FW_PROMPT = """\
 あなたはファイアウォール監視エージェントです。
 与えられたログとトポロジ情報から、FW レイヤの異常（policy / DENY / ACL）を検出し、
 構造化 JSON で報告してください。
+オーケストレータから「観点指示」が与えられた場合は、その観点に沿って分析してください。
 
 出力 (JSON のみ):
 {
   "findings": [
     {"category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["log line excerpt"]}
   ],
-  "escalate_to": ["routing"],
   "tool_calls_made": ["read_topology(<ip>)"],
   "confidence": 0.0
 }
 
 ルール:
 - findings は最大 3 件、確度の高い順
-- escalate_to: 自レイヤの所見から、別の監視レイヤ (`routing` / `app`) で
-  追加調査が必要だと判断した場合のみ列挙。なければ空配列
-- 例: 「FW の DENY が連続 → 下流で upstream timeout の可能性 → routing を escalate」
 - summary の自然文は日本語、フィールド名・enum 値は英語
 - トポロジ情報を根拠に使う場合は evidence にトポロジ由来であることを明記
+- 観点指示があった場合、その観点で検出できなければ findings を空配列にしてもよい（誇張しない）
 """
 
 ROUTING_PROMPT = """\
 あなたはルーティング・接続性の監視エージェントです。
 与えられたログとトポロジ情報から、L3-L4 の異常（タイムアウト / 再送 / 経路 / 帯域）を
 検出し、構造化 JSON で報告してください。
+オーケストレータから「観点指示」が与えられた場合は、その観点に沿って分析してください。
 
 出力 (JSON のみ):
 {
   "findings": [
     {"category": "Net|FW|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["log line excerpt"]}
   ],
-  "escalate_to": ["fw"],
   "tool_calls_made": ["read_topology(<ip>)"],
   "confidence": 0.0
 }
 
 ルール:
 - findings は最大 3 件、確度の高い順
-- escalate_to: タイムアウトや再送の根本原因が FW のポリシー変更や App 側の応答遅延に
-  起因する疑いがあれば、それぞれ `fw` / `app` を入れる。なければ空配列
 - summary の自然文は日本語、フィールド名・enum 値は英語
+- 観点指示があった場合、その観点で検出できなければ findings を空配列にしてもよい
 """
 
 APP_PROMPT = """\
 あなたはアプリケーション層の監視エージェントです。
 与えられたログとトポロジ情報から、L7 の異常（5xx / プロセス / OOM / バックエンド応答）を
 検出し、構造化 JSON で報告してください。
+オーケストレータから「観点指示」が与えられた場合は、その観点に沿って分析してください。
 
 出力 (JSON のみ):
 {
   "findings": [
     {"category": "App|Net|FW|DNS|Sec|Unknown", "summary": "...", "evidence": ["log line excerpt"]}
   ],
-  "escalate_to": ["routing"],
   "tool_calls_made": ["read_topology(<ip>)"],
   "confidence": 0.0
 }
 
 ルール:
 - findings は最大 3 件、確度の高い順
-- escalate_to: 502/503 や upstream timeout から FW / routing 側に原因がありそうなら escalate
 - summary の自然文は日本語、フィールド名・enum 値は英語
+- 観点指示があった場合、その観点で検出できなければ findings を空配列にしてもよい
 """
 
 
@@ -99,12 +99,17 @@ def _extract_target_ip(log: str) -> str:
     return match.group(1) if match else "unknown"
 
 
-def _build_user_input(log: str, topology: dict) -> str:
-    return (
-        f"## ログ\n{log}\n\n"
+def _build_user_input(log: str, topology: dict, focus_hint: str | None) -> str:
+    parts = [
+        f"## ログ\n{log}",
         f"## ツール read_topology の結果\n"
-        f"{json.dumps(topology, ensure_ascii=False, indent=2)}\n"
-    )
+        f"{json.dumps(topology, ensure_ascii=False, indent=2)}",
+    ]
+    if focus_hint:
+        parts.append(
+            f"## 今ラウンドの観点指示（オーケストレータより）\n{focus_hint}"
+        )
+    return "\n\n".join(parts) + "\n"
 
 
 def _make_monitor(role: str, default_prompt: str) -> Callable[[Config4State], dict]:
@@ -118,29 +123,28 @@ def _make_monitor(role: str, default_prompt: str) -> Callable[[Config4State], di
         log = state["log_text"]
         target_ip = _extract_target_ip(log)
         topology = read_topology(target_ip)
-        user_input = _build_user_input(log, topology)
+        focus_hint = (state.get("focus_hints") or {}).get(role)
+        user_input = _build_user_input(log, topology, focus_hint)
 
         client = anthropic.Anthropic()
         started = time.perf_counter()
         response = client.messages.create(
             model=model,
-            max_tokens=1500,
+            max_tokens=2000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_input}],
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
         raw = response.content[0].text
-        parsed = extract_json(raw)
-
-        # 自分自身への escalate は意味が無いので除外
-        escalate_to = [
-            e for e in parsed.get("escalate_to", [])
-            if e in _VALID_ESCALATIONS and e != role
-        ]
+        parsed, parse_error = safe_extract_json(
+            raw,
+            fallback={"findings": [], "tool_calls_made": [], "confidence": 0.0},
+        )
+        if parse_error:
+            parsed["_parse_error"] = parse_error
 
         return {
             "monitor_results": {role: parsed},
-            "escalations": escalate_to,
             "token_log": [
                 {
                     "role": f"{role}_monitor",
@@ -152,6 +156,7 @@ def _make_monitor(role: str, default_prompt: str) -> Callable[[Config4State], di
                     "raw_output": raw,
                     "tool_target_ip": target_ip,
                     "round": state.get("rally_round", 1),
+                    "focus_hint": focus_hint,
                 }
             ],
         }

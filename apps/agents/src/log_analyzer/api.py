@@ -52,7 +52,7 @@ BUILTIN_CONFIG_LABELS: dict[str, str] = {
     "config1": "config1 — ベースライン（単一 LLM）",
     "config2": "config2 — フィルタ + 圧縮（前処理 → 分析の 2 段）",
     "config3": "config3 — マルチモデル並列（3 モデル並列 → 統合）",
-    "config4": "config4 — ラリー型（LangGraph orchestrator + 監視 + rally）",
+    "config4": "config4 — オーケストレータ駆動（LangGraph orchestrator が監視を再評価しながらラリー）",
     "config5": "config5 — ユーザー定義パイプライン（DAG 自由設計）",
 }
 
@@ -128,7 +128,7 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
     "config4": {
         "nodes": [
             {"id": "input", "type": "input", "label": "入力ログ"},
-            {"id": "orchestrator", "type": "slot", "slot_id": "orchestrator", "label": "オーケストレータ"},
+            {"id": "orchestrator", "type": "slot", "slot_id": "orchestrator", "label": "オーケストレータ\n(再入・最大3ラウンド)"},
             {"id": "fw_monitor", "type": "slot", "slot_id": "fw_monitor", "label": "FW 監視"},
             {"id": "routing_monitor", "type": "slot", "slot_id": "routing_monitor", "label": "Routing 監視"},
             {"id": "app_monitor", "type": "slot", "slot_id": "app_monitor", "label": "App 監視"},
@@ -139,9 +139,10 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"source": "orchestrator", "target": "fw_monitor"},
             {"source": "orchestrator", "target": "routing_monitor"},
             {"source": "orchestrator", "target": "app_monitor"},
-            {"source": "fw_monitor", "target": "integrator"},
-            {"source": "routing_monitor", "target": "integrator"},
-            {"source": "app_monitor", "target": "integrator"},
+            {"source": "fw_monitor", "target": "orchestrator"},
+            {"source": "routing_monitor", "target": "orchestrator"},
+            {"source": "app_monitor", "target": "orchestrator"},
+            {"source": "orchestrator", "target": "integrator"},
         ],
     },
 }
@@ -182,6 +183,9 @@ class RunRequest(BaseModel):
     model_overrides: dict[str, str] | None = None
     # config5（user_pipeline）でのみ使用。ad-hoc プレビュー実行時にここで pipeline_def を渡す。
     pipeline: dict | None = None
+    # config4（rally）専用ランタイムパラメータ。base_config が config4 のときのみ有効。
+    rally_max_rounds: int | None = None
+    rally_force_min_rounds: int | None = None
 
 
 class SlotInfo(BaseModel):
@@ -504,6 +508,18 @@ async def run_config(req: RunRequest) -> AnalysisResult:
             _executor,
             lambda: runner(
                 log_text, str(log_path), pipeline_def=pipeline,
+            ),
+        )
+    elif base_config == "config4":
+        result = await loop.run_in_executor(
+            _executor,
+            lambda: runner(
+                log_text,
+                str(log_path),
+                prompt_overrides=p_overrides,
+                model_overrides=m_overrides,
+                rally_max_rounds=req.rally_max_rounds,
+                rally_force_min_rounds=req.rally_force_min_rounds,
             ),
         )
     else:
