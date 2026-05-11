@@ -48,10 +48,11 @@ ehthumbs.db
 *.swo
 
 # --- Claude Code ---
-# settings.json はプロジェクト共有設定としてトラッキング、
-# settings.local.json は個人設定として除外
-.claude/settings.local.json
-.claude/.credentials.json
+# allowlist 方式: .claude/ は基本除外、settings.json だけ共有設定としてトラッキング。
+# こうしておくと Claude Code が将来追加するキャッシュ・セッションログ・個人設定等が
+# 自動的に除外され、誤って秘密情報を commit するリスクが減る
+.claude/*
+!.claude/settings.json
 
 # --- 開発者個人の作業ファイル（公開リポジトリには含めない） ---
 # RESUME.md: セッション再開ガイド（個人メモ用途、内部の作業状態を含む）
