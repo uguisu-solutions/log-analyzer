@@ -6,6 +6,11 @@ __pycache__/
 .eggs/
 build/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # --- 仮想環境 ---
 .venv/
@@ -15,9 +20,13 @@ env/
 # --- Node / Vite ---
 node_modules/
 .vite/
+.eslintcache
+*.tsbuildinfo
 
 # --- Build outputs ---
 dist/
+dist-ssr/
+*.local
 
 # --- 環境変数（.env.example はトラッキング、実値は除外） ---
 .env
@@ -33,6 +42,8 @@ apps/agents/data/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
+ehthumbs.db
 *.swp
 *.swo
 
@@ -41,3 +52,15 @@ Thumbs.db
 # settings.local.json は個人設定として除外
 .claude/settings.local.json
 .claude/.credentials.json
+
+# --- 開発者個人の作業ファイル（公開リポジトリには含めない） ---
+# RESUME.md: セッション再開ガイド（個人メモ用途、内部の作業状態を含む）
+# app_overview.html: 説明資料の作業コピー（必要なら別途配布）
+RESUME.md
+app_overview.html
+
+# --- 内部資料（社内のみで共有、公開リポジトリには含めない） ---
+# preset/ の .pptx は社員向け / 構築提案資料
+# reports/ の進捗レポートは経営判断材料を含む
+docs/preset/
+docs/reports/
