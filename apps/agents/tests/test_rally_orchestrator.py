@@ -43,16 +43,17 @@ def test_normalize_dedup_duplicate_monitors_in_invoke():
 
 
 def test_normalize_invalid_monitor_names_are_dropped():
+    """5 監視 (fw/routing/app/dns/sec) 以外の名前は除外される。"""
     raw = {
         "action": "invoke",
-        "invoke": ["fw", "dns", "sec", "routing"],
-        "focus_hints": {"fw": "x", "dns": "ignored"},
+        "invoke": ["fw", "ipam", "bogus", "routing", "dns"],
+        "focus_hints": {"fw": "x", "ipam": "ignored", "bogus": "ignored"},
         "rationale": "",
     }
     out = _normalize_decision(raw, next_round=1)
-    assert out["invoke"] == ["fw", "routing"]
-    assert "dns" not in out["focus_hints"]
-    assert "sec" not in out["focus_hints"]
+    assert out["invoke"] == ["fw", "routing", "dns"]
+    assert "ipam" not in out["focus_hints"]
+    assert "bogus" not in out["focus_hints"]
 
 
 def test_normalize_invoke_with_empty_list_becomes_finalize():

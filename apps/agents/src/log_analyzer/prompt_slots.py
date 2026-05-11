@@ -50,6 +50,8 @@ SLOT_DEFS: dict[str, dict[str, dict]] = {
         "fw_monitor": {"label": "FW 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
         "routing_monitor": {"label": "Routing 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
         "app_monitor": {"label": "App 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
+        "dns_monitor": {"label": "DNS 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
+        "sec_monitor": {"label": "Security 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
         "integrator": {"label": "統合", "default_model": "claude-sonnet-4-5", "model_overridable": True},
     },
     # config5（user_pipeline）は slot ベースの上書きを持たない。

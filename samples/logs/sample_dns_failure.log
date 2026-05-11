@@ -1,0 +1,21 @@
+2026-05-08T09:12:01.012Z dns01 named[1142]: zone example.internal/IN: loaded serial 2026050800
+2026-05-08T09:12:01.221Z dns01 named[1142]: listening on IPv4 interface eth0, 10.0.50.2#53
+2026-05-08T09:12:15.554Z dns01 named[1142]: client @0x7f9c800c 10.0.30.18#54221: query: app.example.internal IN A + (10.0.50.2)
+2026-05-08T09:12:15.602Z app01 nginx: [INFO] forward 10.0.30.18 -> app-server-1 dst=10.0.20.5:443 status=200 ttfb=42ms
+2026-05-08T09:14:02.890Z dns01 named[1142]: zone example.internal/IN: refresh: failure trying primary: timed out
+2026-05-08T09:14:33.241Z dns01 named[1142]: zone example.internal/IN: refresh: retry limit for primary 10.0.50.1 reached
+2026-05-08T09:14:34.012Z dns01 named[1142]: zone example.internal/IN: serving stale data (expired by 0s, max-stale=3600)
+2026-05-08T09:15:11.118Z dns01 named[1142]: client @0x7f9c802a 10.0.30.21#54998: query: app.example.internal IN A + (10.0.50.2)
+2026-05-08T09:15:11.119Z dns01 named[1142]: SERVFAIL: zone example.internal not authoritative and lame
+2026-05-08T09:15:11.402Z app01 nginx: [ERR] upstream resolution failed host=db.example.internal err=SERVFAIL
+2026-05-08T09:15:11.405Z app01 app[2841]: [ERROR] db connection failed: getaddrinfo EAI_AGAIN db.example.internal
+2026-05-08T09:15:11.602Z app01 nginx: [ERR] 502 Bad Gateway upstream=db.example.internal:5432 reason=resolve_failed
+2026-05-08T09:16:08.991Z dns01 named[1142]: client 10.0.30.45#55012: query: cache.example.internal IN A + (10.0.50.2)
+2026-05-08T09:16:08.992Z dns01 named[1142]: SERVFAIL: lame server resolving 'cache.example.internal' (in 'example.internal'?): 10.0.50.1#53
+2026-05-08T09:16:09.214Z app01 app[2841]: [ERROR] cache backend unreachable: dns lookup failed cache.example.internal
+2026-05-08T09:16:09.215Z app01 app[2841]: [WARN] fallback to in-memory cache, performance degradation expected
+2026-05-08T09:17:22.005Z dns01 named[1142]: queries: 1234/min, SERVFAIL ratio 78%
+2026-05-08T09:17:30.882Z fw01 fwd: [INFO] outbound from 10.0.50.2 to 10.0.50.1:53 permit (rule id=2201)
+2026-05-08T09:17:31.001Z fw01 fwd: [INFO] outbound from 10.0.50.2 to 10.0.50.1:53 timeout (no response)
+2026-05-08T09:18:02.211Z dns01 named[1142]: zone example.internal/IN: refresh: failure trying primary: timed out
+2026-05-08T09:18:45.122Z app01 nginx: [ERR] 502 Bad Gateway rate: 142 req/min (was 3 req/min baseline)

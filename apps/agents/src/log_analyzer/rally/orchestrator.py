@@ -26,20 +26,23 @@ ORCHESTRATOR_PROMPT = """\
 あなたはネットワーク／システムインフラのトリアージ・オーケストレータです。
 ログと、これまでに各監視エージェントから得た結果を見て、次に何をすべきかを判断してください。
 
-監視エージェント:
+監視エージェント (5 種類):
 - fw: ファイアウォール関連（policy / DENY / ACL の異常）
 - routing: ルーティング・接続性関連（タイムアウト / 経路 / TCP 再送 / 帯域）
 - app: アプリケーション層（5xx / プロセスエラー / OOM / 502 bad gateway）
+- dns: DNS 解決の異常（SERVFAIL / NXDOMAIN / ゾーン転送失敗 / 上流タイムアウト）
+- sec: セキュリティ（侵入 / 特権昇格 / C2 通信 / 既知 IOC 接触）
 
 選択肢:
 - action="invoke": さらに監視エージェントを呼ぶ（observation を絞る focus_hints を渡せる）
 - action="finalize": 統合段階に進む
 
 判断ルール:
-- 初回（監視結果が空）: 必要そうな監視を 1 つ以上選ぶ。判断不能なら 3 つすべて
+- 初回（監視結果が空）: ログの語彙（kernel/iptables→fw, named/SERVFAIL→dns, sshd/sudo→sec 等）から
+  関連する監視を 1 つ以上選ぶ。判断不能なら 5 つすべて
 - 監視結果がある場合:
   - finding が薄い／confidence が低い／矛盾がある → 該当監視を再呼出（focus_hints で観点を変える）
-  - 既存結果から別レイヤの調査が必要と判明 → 該当監視を追加呼出
+  - 既存結果から別レイヤの調査が必要と判明（例: dns 失敗 → app 502 の連鎖）→ 該当監視を追加呼出
   - すべての主要原因が裏付けられた・これ以上情報が増えない → finalize
 - 同じ監視を同じ観点で再呼出するのは禁止。focus_hints は前回と必ず異なる切り口にする
 - 履歴 (orchestrator_history) を確認し、過去と同じ判断を繰り返さない
@@ -57,11 +60,11 @@ ORCHESTRATOR_PROMPT = """\
 統合に進む場合:
 {
   "action": "finalize",
-  "rationale": "FW・Routing の結果から root cause が特定でき、追加調査の価値が低い"
+  "rationale": "DNS 解決失敗が App 502 の根本原因と裏付けられた。追加調査の価値が低い"
 }
 """
 
-VALID_MONITORS = {"fw", "routing", "app"}
+VALID_MONITORS = {"fw", "routing", "app", "dns", "sec"}
 
 
 def _build_user_input(state: Config4State, current_round: int, max_rounds: int) -> str:
@@ -132,11 +135,13 @@ def _force_invoke_decision(next_round: int, min_rounds: int) -> dict:
     """
     return {
         "action": "invoke",
-        "invoke": ["fw", "routing", "app"],
+        "invoke": ["fw", "routing", "app", "dns", "sec"],
         "focus_hints": {
             "fw": f"観点 round={next_round}: 既出と異なる切り口で policy / DENY を再点検",
             "routing": f"観点 round={next_round}: 既出と異なる切り口で経路 / 再送 / 帯域を再点検",
             "app": f"観点 round={next_round}: 既出と異なる切り口で 5xx / プロセス / OOM を再点検",
+            "dns": f"観点 round={next_round}: 既出と異なる切り口で SERVFAIL / ゾーン転送を再点検",
+            "sec": f"観点 round={next_round}: 既出と異なる切り口で 認証失敗 / 特権昇格 / C2 を再点検",
         },
         "rationale": (
             f"rally_force_min_rounds={min_rounds} 未到達のため、"
