@@ -15,6 +15,7 @@ import type {
   BuiltinStructureResponse,
   SlotInfo,
 } from './types'
+import { layoutWithDagre } from './dagreLayout'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -43,86 +44,17 @@ const KIND_STYLES: Record<BuiltinStructureNode['type'], { bg: string; border: st
   slot_instance: { bg: '#e0e7ff', border: '#6366f1' },
 }
 
-/** DFS でバックエッジ（祖先方向のエッジ）を検出して除外する。
- * config4 の orchestrator ループのように本来サイクル構造でも、
- * レイヤー化レイアウトのために前方向 DAG として扱う必要がある。
- */
-function removeBackEdges(
-  nodes: BuiltinStructureNode[],
-  edges: { source: string; target: string }[],
-): { source: string; target: string }[] {
-  const adj = new Map<string, string[]>()
-  edges.forEach(e => {
-    if (!adj.has(e.source)) adj.set(e.source, [])
-    adj.get(e.source)!.push(e.target)
-  })
-  const visited = new Set<string>()
-  const inStack = new Set<string>()
-  const back = new Set<string>()  // "source->target"
-  function dfs(u: string) {
-    visited.add(u)
-    inStack.add(u)
-    for (const v of adj.get(u) ?? []) {
-      if (inStack.has(v)) {
-        back.add(`${u}->${v}`)
-      } else if (!visited.has(v)) {
-        dfs(v)
-      }
-    }
-    inStack.delete(u)
-  }
-  nodes.forEach(n => { if (!visited.has(n.id)) dfs(n.id) })
-  return edges.filter(e => !back.has(`${e.source}->${e.target}`))
-}
-
 function autoLayout(
   nodes: BuiltinStructureNode[],
   edges: { source: string; target: string }[],
 ): Record<string, { x: number; y: number }> {
-  // サイクルを含む構造（config4 の orchestrator ループ）では back-edge を
-  // 除いた DAG で深さを計算しないと、longest-path ループが終わらない
-  const dagEdges = removeBackEdges(nodes, edges)
-  const indeg: Record<string, number> = {}
-  nodes.forEach(n => (indeg[n.id] = 0))
-  dagEdges.forEach(e => (indeg[e.target] = (indeg[e.target] ?? 0) + 1))
-  const depth: Record<string, number> = {}
-  const queue: string[] = []
-  nodes.forEach(n => {
-    if ((indeg[n.id] ?? 0) === 0) {
-      depth[n.id] = 0
-      queue.push(n.id)
-    }
+  return layoutWithDagre(nodes, edges, {
+    nodeWidth: 200,
+    nodeHeight: 80,
+    rankdir: 'LR',
+    nodesep: 60,
+    ranksep: 110,
   })
-  // 念のため反復回数を上限化（万が一 back-edge 検出を擦り抜けても固まらない）
-  let safety = nodes.length * nodes.length + 16
-  while (queue.length > 0 && safety-- > 0) {
-    const cur = queue.shift() as string
-    const cd = depth[cur] ?? 0
-    dagEdges
-      .filter(e => e.source === cur)
-      .forEach(e => {
-        if ((depth[e.target] ?? -1) < cd + 1) {
-          depth[e.target] = cd + 1
-          queue.push(e.target)
-        }
-      })
-  }
-  const byDepth: Record<number, string[]> = {}
-  nodes.forEach(n => {
-    const d = depth[n.id] ?? 0
-    ;(byDepth[d] ??= []).push(n.id)
-  })
-  const X_STEP = 240
-  const Y_STEP = 130
-  const out: Record<string, { x: number; y: number }> = {}
-  Object.entries(byDepth).forEach(([dStr, ids]) => {
-    const d = Number(dStr)
-    const offset = (ids.length - 1) / 2
-    ids.forEach((id, idx) => {
-      out[id] = { x: 30 + d * X_STEP, y: 60 + (idx - offset) * Y_STEP + 200 }
-    })
-  })
-  return out
 }
 
 function CanvasInner({
@@ -166,7 +98,10 @@ function CanvasInner({
   // structure / modified の変化で React Flow ノードを再構築
   useEffect(() => {
     if (!structure) return
-    const positions = autoLayout(structure.nodes, structure.edges)
+    // dagre レイアウトは forward edge のみで計算する。feedback は描画専用で
+    // レイヤー化の邪魔をしてはいけない（cycle 検出で除外されるが、明示する方が安全）
+    const forwardEdges = structure.edges.filter(e => e.kind !== 'feedback')
+    const positions = autoLayout(structure.nodes, forwardEdges)
     const rfNodes: Node<RFData>[] = structure.nodes.map(n => {
       const style = KIND_STYLES[n.type]
       const modified = !!(n.slot_id && modifiedSlotIds.has(n.slot_id))
@@ -203,12 +138,28 @@ function CanvasInner({
       } as Node<RFData>
     })
 
-    const rfEdges: Edge[] = structure.edges.map((e, i) => ({
-      id: `e_${e.source}_${e.target}_${i}`,
-      source: e.source,
-      target: e.target,
-      style: { stroke: '#94a3b8', strokeWidth: 1.5 },
-    }))
+    const rfEdges: Edge[] = structure.edges.map((e, i) => {
+      const isFeedback = e.kind === 'feedback'
+      return {
+        id: `e_${e.source}_${e.target}_${i}`,
+        source: e.source,
+        target: e.target,
+        type: 'smoothstep',
+        animated: isFeedback,
+        label: e.label,
+        labelStyle: isFeedback
+          ? { fill: '#b45309', fontSize: 10, fontWeight: 700 }
+          : undefined,
+        labelBgStyle: isFeedback
+          ? { fill: '#fef3c7', fillOpacity: 0.9 }
+          : undefined,
+        labelBgPadding: isFeedback ? ([4, 2] as [number, number]) : undefined,
+        labelBgBorderRadius: isFeedback ? 3 : undefined,
+        style: isFeedback
+          ? { stroke: '#f59e0b', strokeWidth: 1.5, strokeDasharray: '6 4' }
+          : { stroke: '#94a3b8', strokeWidth: 1.5 },
+      }
+    })
 
     setNodes(rfNodes)
     setEdges(rfEdges)

@@ -25,6 +25,7 @@ import type {
   PipelineNodeType,
   SavedConfigDTO,
 } from './types'
+import { layoutWithDagre } from './dagreLayout'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -111,6 +112,7 @@ function pipelineToFlow(
     id: `e_${e.source}_${e.target}_${i}`,
     source: e.source,
     target: e.target,
+    type: 'smoothstep',
     style: { stroke: '#94a3b8', strokeWidth: 1.5 },
   }))
   return { nodes, edges }
@@ -139,46 +141,13 @@ function labelFor(node: PipelineNode, fixed: boolean): string {
 }
 
 function autoLayout(pd: PipelineDef): Record<string, { x: number; y: number }> {
-  // 入次数 0 を root として BFS で深度を決め、深度ごとに縦に並べる
-  const indeg: Record<string, number> = {}
-  pd.nodes.forEach(n => (indeg[n.id] = 0))
-  pd.edges.forEach(e => (indeg[e.target] = (indeg[e.target] ?? 0) + 1))
-  const depth: Record<string, number> = {}
-  const queue: string[] = []
-  pd.nodes.forEach(n => {
-    if ((indeg[n.id] ?? 0) === 0) {
-      depth[n.id] = 0
-      queue.push(n.id)
-    }
+  return layoutWithDagre(pd.nodes, pd.edges, {
+    nodeWidth: 220,
+    nodeHeight: 90,
+    rankdir: 'LR',
+    nodesep: 60,
+    ranksep: 120,
   })
-  while (queue.length > 0) {
-    const cur = queue.shift() as string
-    const cd = depth[cur] ?? 0
-    pd.edges
-      .filter(e => e.source === cur)
-      .forEach(e => {
-        if ((depth[e.target] ?? -1) < cd + 1) {
-          depth[e.target] = cd + 1
-          queue.push(e.target)
-        }
-      })
-  }
-  const byDepth: Record<number, string[]> = {}
-  pd.nodes.forEach(n => {
-    const d = depth[n.id] ?? 0
-    ;(byDepth[d] ??= []).push(n.id)
-  })
-  const X_STEP = 260
-  const Y_STEP = 130
-  const out: Record<string, { x: number; y: number }> = {}
-  Object.entries(byDepth).forEach(([dStr, ids]) => {
-    const d = Number(dStr)
-    const offset = (ids.length - 1) / 2
-    ids.forEach((id, idx) => {
-      out[id] = { x: 50 + d * X_STEP, y: 50 + (idx - offset) * Y_STEP + 200 }
-    })
-  })
-  return out
 }
 
 // ─── ID 生成 ──────────────────────────────────────────────────────────
@@ -399,7 +368,7 @@ function PipelineBuilderInner(props: Props) {
       if (edges.some(e => e.source === params.source && e.target === params.target)) return
       setEdges(prev =>
         addEdge(
-          { ...params, style: { stroke: '#94a3b8', strokeWidth: 1.5 } },
+          { ...params, type: 'smoothstep', style: { stroke: '#94a3b8', strokeWidth: 1.5 } },
           prev,
         ),
       )

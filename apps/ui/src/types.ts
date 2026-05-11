@@ -79,6 +79,8 @@ export interface BuiltinStructureNode {
 export interface BuiltinStructureEdge {
   source: string
   target: string
+  kind?: 'forward' | 'feedback'  // feedback はレイアウト除外 + 破線描画
+  label?: string
 }
 
 export interface BuiltinStructureResponse {
@@ -130,6 +132,8 @@ export interface GraphNodeData {
 export interface GraphEdgeData {
   source: string
   target: string
+  kind?: string | null  // "forward" / "feedback" / null
+  label?: string | null
 }
 
 export interface OrchestratorDecision {

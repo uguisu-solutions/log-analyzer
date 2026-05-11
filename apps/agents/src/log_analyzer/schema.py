@@ -87,6 +87,8 @@ class GraphEdge(BaseModel):
 
     source: str
     target: str
+    kind: str | None = None  # "forward" (既定) または "feedback"（再評価ループ）
+    label: str | None = None
 
 
 class OrchestratorDecisionDTO(BaseModel):

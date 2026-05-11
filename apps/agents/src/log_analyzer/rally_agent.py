@@ -138,16 +138,37 @@ def _aggregate_graph_nodes(token_log: list[dict]) -> tuple[list[GraphNode], list
             )
         )
 
-    # エッジ: orchestrator ↔ 各 invoked monitor、orchestrator → integrator（呼ばれていれば）
+    # エッジ:
+    # - 正方向（実線）: orchestrator → 各 invoked monitor → integrator
+    # - フィードバック（破線、kind=feedback）: monitor が複数ラウンド呼ばれた場合のみ
+    #   monitor → orchestrator を追加。dagre は kind=feedback を除外してレイアウトする
     edges: list[GraphEdge] = []
     has_orchestrator = any(n.id == "orchestrator" for n in nodes)
     has_integrator = any(n.id == "integrator" for n in nodes)
+    # 各 monitor の呼出回数（複数 → 再評価が発生 → feedback エッジを描く根拠）
+    monitor_invocations: dict[str, int] = {}
+    for n in nodes:
+        if n.role == "monitor":
+            monitor_invocations[n.id] = int(n.metadata.get("invocations", 1))
+
     for m in invoked_monitors:
         monitor_id = f"{m}_monitor"
         if has_orchestrator:
             edges.append(GraphEdge(source="orchestrator", target=monitor_id))
-            edges.append(GraphEdge(source=monitor_id, target="orchestrator"))
-    if has_orchestrator and has_integrator:
+        if has_integrator:
+            edges.append(GraphEdge(source=monitor_id, target="integrator"))
+        # 再評価で複数回呼ばれた監視のみフィードバックエッジを描く
+        if has_orchestrator and monitor_invocations.get(monitor_id, 1) > 1:
+            edges.append(
+                GraphEdge(
+                    source=monitor_id,
+                    target="orchestrator",
+                    kind="feedback",
+                    label="再評価",
+                )
+            )
+    # orchestrator が呼ばれたが監視を 1 件も起動しなかった稀ケース → 直接 integrator へ
+    if has_orchestrator and has_integrator and not invoked_monitors:
         edges.append(GraphEdge(source="orchestrator", target="integrator"))
 
     return nodes, edges

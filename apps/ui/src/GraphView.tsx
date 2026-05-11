@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import ReactFlow, { Background, Controls, type Node, type Edge } from 'reactflow'
 import 'reactflow/dist/style.css'
+import { layoutWithDagre } from './dagreLayout'
 
 interface GraphNodeData {
   id: string
@@ -70,78 +71,21 @@ export function GraphView({ nodes, edges }: Props) {
   )
 }
 
-/** DFS でバックエッジを除いた DAG を返す（サイクル構造の longest-path 無限ループ回避）。 */
-function dagEdges(nodes: GraphNodeData[], edges: GraphEdgeData[]): GraphEdgeData[] {
-  const adj = new Map<string, string[]>()
-  edges.forEach(e => {
-    if (!adj.has(e.source)) adj.set(e.source, [])
-    adj.get(e.source)!.push(e.target)
-  })
-  const visited = new Set<string>()
-  const inStack = new Set<string>()
-  const back = new Set<string>()
-  function dfs(u: string) {
-    visited.add(u)
-    inStack.add(u)
-    for (const v of adj.get(u) ?? []) {
-      if (inStack.has(v)) back.add(`${u}->${v}`)
-      else if (!visited.has(v)) dfs(v)
-    }
-    inStack.delete(u)
-  }
-  nodes.forEach(n => { if (!visited.has(n.id)) dfs(n.id) })
-  return edges.filter(e => !back.has(`${e.source}->${e.target}`))
-}
-
 function layoutGraph(
   nodes: GraphNodeData[],
   edges: GraphEdgeData[],
 ): { rfNodes: Node[]; rfEdges: Edge[] } {
-  // 深さ計算は back-edge を除いた DAG で行う（rfEdges 描画は元の cyclic edges のまま）
-  const layoutEdges = dagEdges(nodes, edges)
-  const incoming = new Map<string, number>()
-  nodes.forEach(n => incoming.set(n.id, 0))
-  layoutEdges.forEach(e => incoming.set(e.target, (incoming.get(e.target) ?? 0) + 1))
-
-  const depth = new Map<string, number>()
-  const queue: string[] = []
-  nodes.forEach(n => {
-    if ((incoming.get(n.id) ?? 0) === 0) {
-      depth.set(n.id, 0)
-      queue.push(n.id)
-    }
+  // dagre で階層レイアウト。feedback エッジは描画専用なのでレイアウト対象から除外
+  const forwardEdges = edges.filter(e => e.kind !== 'feedback')
+  const positions = layoutWithDagre(nodes, forwardEdges, {
+    nodeWidth: 200,
+    nodeHeight: 80,
+    rankdir: 'LR',
+    nodesep: 50,
+    ranksep: 90,
   })
-  let safety = nodes.length * nodes.length + 16
-  while (queue.length > 0 && safety-- > 0) {
-    const cur = queue.shift() as string
-    const curDepth = depth.get(cur) ?? 0
-    layoutEdges
-      .filter(e => e.source === cur)
-      .forEach(e => {
-        const newDepth = curDepth + 1
-        if ((depth.get(e.target) ?? -1) < newDepth) {
-          depth.set(e.target, newDepth)
-          queue.push(e.target)
-        }
-      })
-  }
-
-  // 深度ごとのバケット（順序保持）
-  const byDepth = new Map<number, string[]>()
-  nodes.forEach(n => {
-    const d = depth.get(n.id) ?? 0
-    if (!byDepth.has(d)) byDepth.set(d, [])
-    byDepth.get(d)?.push(n.id)
-  })
-
-  const X_STEP = 240
-  const Y_STEP = 110
 
   const rfNodes: Node[] = nodes.map(n => {
-    const d = depth.get(n.id) ?? 0
-    const peers = byDepth.get(d) ?? [n.id]
-    const idx = peers.indexOf(n.id)
-    const offset = (peers.length - 1) / 2
     const colors = ROLE_COLORS[n.role] ?? { bg: '#f3f4f6', border: '#9ca3af' }
     return {
       id: n.id,
@@ -154,7 +98,7 @@ function layoutGraph(
           </div>
         ),
       },
-      position: { x: d * X_STEP, y: (idx - offset) * Y_STEP },
+      position: positions[n.id] ?? { x: 0, y: 0 },
       style: {
         background: colors.bg,
         border: `2px solid ${colors.border}`,
@@ -166,13 +110,24 @@ function layoutGraph(
     }
   })
 
-  const rfEdges: Edge[] = edges.map((e, i) => ({
-    id: `e${i}`,
-    source: e.source,
-    target: e.target,
-    animated: false,
-    style: { stroke: '#94a3b8', strokeWidth: 1.5 },
-  }))
+  const rfEdges: Edge[] = edges.map((e, i) => {
+    const isFeedback = e.kind === 'feedback'
+    return {
+      id: `e${i}`,
+      source: e.source,
+      target: e.target,
+      type: 'smoothstep',
+      animated: isFeedback,
+      label: e.label ?? undefined,
+      labelStyle: isFeedback ? { fill: '#b45309', fontSize: 10, fontWeight: 700 } : undefined,
+      labelBgStyle: isFeedback ? { fill: '#fef3c7', fillOpacity: 0.9 } : undefined,
+      labelBgPadding: isFeedback ? ([4, 2] as [number, number]) : undefined,
+      labelBgBorderRadius: isFeedback ? 3 : undefined,
+      style: isFeedback
+        ? { stroke: '#f59e0b', strokeWidth: 1.5, strokeDasharray: '6 4' }
+        : { stroke: '#94a3b8', strokeWidth: 1.5 },
+    }
+  })
 
   return { rfNodes, rfEdges }
 }
