@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from log_analyzer.baseline_agent import run_baseline
 from log_analyzer.filtered_agent import run_filtered
 from log_analyzer.multi_model_agent import run_multi_model
+from log_analyzer.pipeline_runner import run_user_pipeline
 from log_analyzer.rally_agent import run_rally
 
 CONFIG_RUNNERS = {
@@ -17,6 +18,7 @@ CONFIG_RUNNERS = {
     "config2": run_filtered,
     "config3": run_multi_model,
     "config4": run_rally,
+    "config5": run_user_pipeline,  # ユーザー定義パイプライン（pipeline_def 必須）
 }
 
 

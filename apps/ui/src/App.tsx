@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
+import { BuiltinConfigCanvas } from './BuiltinConfigCanvas'
 import { GraphView } from './GraphView'
-import { PromptSlotsEditor } from './PromptSlotsEditor'
+import { PipelineBuilder } from './PipelineBuilder'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -12,7 +13,7 @@ import './App.css'
 
 const API_BASE = 'http://localhost:8000'
 
-type Mode = 'single' | 'compare'
+type Mode = 'single' | 'compare' | 'builder'
 
 function ResultDetails({ result }: { result: AnalysisResult }) {
   return (
@@ -125,6 +126,9 @@ function App() {
   const [compareRunningSet, setCompareRunningSet] = useState<Set<string>>(new Set())
   const [compareElapsed, setCompareElapsed] = useState<Record<string, number>>({})
   const [compareSelected, setCompareSelected] = useState<Set<string>>(new Set())
+
+  // Builder mode（構成設計）
+  const [builderEditingId, setBuilderEditingId] = useState<string | null>('__new__')
 
   const selectedConfigEntry = configList.find(c => c.id === selectedConfig)
   const selectedBaseConfig = selectedConfigEntry?.base_config ?? ''
@@ -456,7 +460,26 @@ function App() {
         >
           構成比較
         </button>
+        <button
+          onClick={() => setMode('builder')}
+          className={mode === 'builder' ? 'tab active' : 'tab'}
+          disabled={singleRunning || isCompareRunning}
+        >
+          構成設計（pipeline）
+        </button>
       </div>
+
+      {mode === 'builder' && (
+        <PipelineBuilder
+          configList={configList}
+          logs={logs}
+          selectedLog={selectedLog}
+          onSelectedLogChange={setSelectedLog}
+          onConfigsRefresh={loadConfigs}
+          editingConfigId={builderEditingId}
+          onEditingConfigIdChange={setBuilderEditingId}
+        />
+      )}
 
       {mode === 'single' && (
         <>
@@ -497,75 +520,84 @@ function App() {
             </button>
           </section>
 
-          {selectedConfigEntry && (
-            <details
-              className="prompt-editor"
-              open={editorOpen}
-              onToggle={e => setEditorOpen((e.target as HTMLDetailsElement).open)}
-            >
-              <summary>
-                プロンプト編集（{selectedBaseConfig} の {slots.length} slot）
-                {hasUnsavedChanges && <span className="modified-badge">変更あり</span>}
-                {isUserConfig && <span className="hint">編集中: {saveName}</span>}
-              </summary>
-              <div className="editor-body">
-                <PromptSlotsEditor
-                  key={selectedConfig}
-                  slots={slots}
-                  promptOverrides={editorOverrides}
-                  modelOverrides={editorModelOverrides}
-                  onPromptChange={handlePromptSlotChange}
-                  onModelChange={handleModelSlotChange}
+          {selectedConfigEntry && selectedBaseConfig === 'config5' && (
+            <div className="config5-hint">
+              この構成は <strong>config5（user_pipeline）</strong> ベースです。プロンプトとモデルの編集は
+              <strong>「構成設計（pipeline）」</strong>タブで行ってください。
+            </div>
+          )}
+
+          {selectedConfigEntry && selectedBaseConfig !== 'config5' && (
+            <section className="builtin-editor">
+              <div className="builtin-editor-header">
+                <span className="builtin-editor-title">
+                  ワークフロー（{selectedBaseConfig}）
+                  {hasUnsavedChanges && <span className="modified-badge">変更あり</span>}
+                  {isUserConfig && <span className="hint">編集中: {saveName}</span>}
+                </span>
+                <span className="builtin-editor-hint">
+                  ノードをクリックしてプロンプト/モデルを編集
+                </span>
+              </div>
+
+              <BuiltinConfigCanvas
+                key={selectedConfig}
+                baseConfig={selectedBaseConfig}
+                slots={slots}
+                promptOverrides={editorOverrides}
+                modelOverrides={editorModelOverrides}
+                onPromptChange={handlePromptSlotChange}
+                onModelChange={handleModelSlotChange}
+                disabled={singleRunning || savingConfig}
+              />
+
+              <div className="editor-actions">
+                <input
+                  type="text"
+                  placeholder={isUserConfig ? '保存名（変更で別名保存）' : '保存名（例: my-strict-fw）'}
+                  value={saveName}
+                  onChange={e => setSaveName(e.target.value)}
                   disabled={singleRunning || savingConfig}
+                  className="save-name"
                 />
-                <div className="editor-actions">
-                  <input
-                    type="text"
-                    placeholder={isUserConfig ? '保存名（変更で別名保存）' : '保存名（例: my-strict-fw）'}
-                    value={saveName}
-                    onChange={e => setSaveName(e.target.value)}
-                    disabled={singleRunning || savingConfig}
-                    className="save-name"
-                  />
+                <button
+                  onClick={handleSaveAsNew}
+                  disabled={singleRunning || savingConfig || !saveName.trim()}
+                >
+                  {savingConfig ? '保存中…' : '新規保存'}
+                </button>
+                {isUserConfig && (
                   <button
-                    onClick={handleSaveAsNew}
-                    disabled={singleRunning || savingConfig || !saveName.trim()}
-                  >
-                    {savingConfig ? '保存中…' : '新規保存'}
-                  </button>
-                  {isUserConfig && (
-                    <button
-                      onClick={handleOverwrite}
-                      disabled={singleRunning || savingConfig || !hasUnsavedChanges}
-                      className="btn-secondary"
-                    >
-                      上書き保存
-                    </button>
-                  )}
-                  {isUserConfig && (
-                    <button
-                      onClick={handleDelete}
-                      disabled={singleRunning || savingConfig}
-                      className="btn-delete"
-                    >
-                      削除
-                    </button>
-                  )}
-                  <button
-                    onClick={handleResetEditor}
+                    onClick={handleOverwrite}
                     disabled={singleRunning || savingConfig || !hasUnsavedChanges}
                     className="btn-secondary"
                   >
-                    復元
+                    上書き保存
                   </button>
-                </div>
-                {isUserConfig && hasUnsavedChanges && (
-                  <p className="editor-warning">
-                    ⚠ 編集中のローカル変更は実行に反映されません。実行前に「上書き保存」または「新規保存」してください。
-                  </p>
                 )}
+                {isUserConfig && (
+                  <button
+                    onClick={handleDelete}
+                    disabled={singleRunning || savingConfig}
+                    className="btn-delete"
+                  >
+                    削除
+                  </button>
+                )}
+                <button
+                  onClick={handleResetEditor}
+                  disabled={singleRunning || savingConfig || !hasUnsavedChanges}
+                  className="btn-secondary"
+                >
+                  復元
+                </button>
               </div>
-            </details>
+              {isUserConfig && hasUnsavedChanges && (
+                <p className="editor-warning">
+                  ⚠ 編集中のローカル変更は実行に反映されません。実行前に「上書き保存」または「新規保存」してください。
+                </p>
+              )}
+            </section>
           )}
 
           {error && (

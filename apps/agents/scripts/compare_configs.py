@@ -38,6 +38,7 @@ from log_analyzer import storage
 from log_analyzer.baseline_agent import run_baseline
 from log_analyzer.filtered_agent import run_filtered
 from log_analyzer.multi_model_agent import run_multi_model
+from log_analyzer.pipeline_runner import run_user_pipeline
 from log_analyzer.rally_agent import run_rally
 from log_analyzer.schema import AnalysisResult
 
@@ -46,6 +47,7 @@ CONFIG_RUNNERS: dict[str, Callable] = {
     "config2": run_filtered,
     "config3": run_multi_model,
     "config4": run_rally,
+    "config5": run_user_pipeline,
 }
 
 COLUMNS = (
@@ -74,12 +76,13 @@ class ResolvedConfig:
     runner: Callable
     prompt_overrides: dict[str, str]
     model_overrides: dict[str, str]
+    pipeline: dict | None = None  # config5 で使用
 
 
 def resolve_config(spec: str) -> ResolvedConfig:
     """``spec`` を ResolvedConfig に解決する。
 
-    builtin: ``"config1"``..``"config4"``
+    builtin: ``"config1"``..``"config5"``（config5 は pipeline_def が無いと実行不可）
     user (id): ``"user:5"``
     user (name): ``"user:my-strict"``
     """
@@ -91,11 +94,11 @@ def resolve_config(spec: str) -> ResolvedConfig:
             runner=CONFIG_RUNNERS[spec],
             prompt_overrides={},
             model_overrides={},
+            pipeline=None,
         )
     if spec.startswith("user:"):
         ref = spec.split(":", 1)[1]
         saved = None
-        # 数値なら ID として、それ以外は name として lookup
         try:
             saved = storage.get_saved_config(int(ref))
         except ValueError:
@@ -115,6 +118,7 @@ def resolve_config(spec: str) -> ResolvedConfig:
             runner=CONFIG_RUNNERS[base],
             prompt_overrides=dict(saved.get("overrides", {})),
             model_overrides=dict(saved.get("model_overrides", {})),
+            pipeline=saved.get("pipeline"),
         )
     raise ValueError(f"unknown config spec: {spec}")
 
@@ -215,12 +219,22 @@ def main() -> int:
         log_text = log_path.read_text(encoding="utf-8", errors="replace")
         for rc in targets:
             sys.stderr.write(f"running {rc.display_name} on {log_path.name}...\n")
-            result = rc.runner(
-                log_text,
-                log_ref=str(log_path),
-                prompt_overrides=rc.prompt_overrides,
-                model_overrides=rc.model_overrides,
-            )
+            if rc.base_config == "config5":
+                if not rc.pipeline:
+                    sys.stderr.write(
+                        f"skip {rc.display_name}: config5 needs a saved pipeline\n"
+                    )
+                    continue
+                result = rc.runner(
+                    log_text, log_ref=str(log_path), pipeline_def=rc.pipeline,
+                )
+            else:
+                result = rc.runner(
+                    log_text,
+                    log_ref=str(log_path),
+                    prompt_overrides=rc.prompt_overrides,
+                    model_overrides=rc.model_overrides,
+                )
             rows.append(_row(log_path, rc, result))
 
     _print_markdown(rows)
