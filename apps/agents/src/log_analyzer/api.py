@@ -127,6 +127,10 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"source": "openai", "target": "integrate"},
         ],
     },
+    # 編集画面のワークフロー図:
+    # 正方向のデータフロー（実線）と、orchestrator 再入のフィードバック（破線）を区別。
+    # フロント側で kind=feedback のエッジは dagre レイアウト計算から除外し
+    # 破線オレンジ + ラベル「再評価」で描画する。
     "config4": {
         "nodes": [
             {"id": "input", "type": "input", "label": "入力ログ"},
@@ -137,14 +141,18 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"id": "integrator", "type": "slot", "slot_id": "integrator", "label": "統合（最終出力）"},
         ],
         "edges": [
+            # 正方向のフロー
             {"source": "input", "target": "orchestrator"},
             {"source": "orchestrator", "target": "fw_monitor"},
             {"source": "orchestrator", "target": "routing_monitor"},
             {"source": "orchestrator", "target": "app_monitor"},
-            {"source": "fw_monitor", "target": "orchestrator"},
-            {"source": "routing_monitor", "target": "orchestrator"},
-            {"source": "app_monitor", "target": "orchestrator"},
-            {"source": "orchestrator", "target": "integrator"},
+            {"source": "fw_monitor", "target": "integrator"},
+            {"source": "routing_monitor", "target": "integrator"},
+            {"source": "app_monitor", "target": "integrator"},
+            # 再評価フィードバック（破線で描画、レイアウト計算では無視）
+            {"source": "fw_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
+            {"source": "routing_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
+            {"source": "app_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
         ],
     },
 }
