@@ -105,6 +105,28 @@ export interface LogContent {
   content: string
 }
 
+export interface RunHistoryEntry {
+  id: number
+  started_at: string  // ISO8601 UTC
+  log_name: string
+  config_id: string
+  base_config: string
+  confidence: number | null
+  tokens_in: number | null
+  tokens_out: number | null
+  latency_ms: number | null
+  trace_id: string | null
+  top_category: string | null
+  top_summary: string | null
+}
+
+export interface RunHistoryListResponse {
+  entries: RunHistoryEntry[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface RootCauseCandidate {
   rank: number
   category: string

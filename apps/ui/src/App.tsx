@@ -3,6 +3,7 @@ import { BuiltinConfigCanvas } from './BuiltinConfigCanvas'
 import { GraphView } from './GraphView'
 import { LogManager } from './LogManager'
 import { PipelineBuilder } from './PipelineBuilder'
+import { RunHistoryView } from './RunHistoryView'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -14,7 +15,7 @@ import './App.css'
 
 const API_BASE = 'http://localhost:8000'
 
-type Mode = 'single' | 'compare' | 'builder' | 'logs'
+type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history'
 
 function OrchestratorHistoryView({ result }: { result: AnalysisResult }) {
   // 構成4 のみ意味のあるデータ。古い API レスポンスや他構成ではフィールドが
@@ -584,6 +585,13 @@ function App() {
         >
           ログ管理
         </button>
+        <button
+          onClick={() => setMode('history')}
+          className={mode === 'history' ? 'tab active' : 'tab'}
+          disabled={singleRunning || isCompareRunning}
+        >
+          実行履歴
+        </button>
       </div>
 
       {mode === 'builder' && (
@@ -600,6 +608,14 @@ function App() {
 
       {mode === 'logs' && (
         <LogManager logs={logs} onLogsChange={loadLogs} />
+      )}
+
+      {mode === 'history' && (
+        <RunHistoryView
+          configList={configList}
+          logs={logs}
+          langfuseHost={langfuseHost}
+        />
       )}
 
       {mode === 'single' && (

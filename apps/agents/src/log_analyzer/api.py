@@ -319,6 +319,73 @@ class RuntimeConfigResponse(BaseModel):
     langfuse_host: str | None = None
 
 
+class RunHistoryEntry(BaseModel):
+    id: int
+    started_at: str  # ISO8601 (UTC)
+    log_name: str
+    config_id: str
+    base_config: str
+    confidence: float | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    latency_ms: int | None = None
+    trace_id: str | None = None
+    top_category: str | None = None
+    top_summary: str | None = None
+
+
+class RunHistoryListResponse(BaseModel):
+    entries: list[RunHistoryEntry]
+    total: int
+    limit: int
+    offset: int
+
+
+@app.get("/api/runs/history", response_model=RunHistoryListResponse)
+def list_run_history_endpoint(
+    log_name: str | None = None,
+    config_id: str | None = None,
+    base_config: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> RunHistoryListResponse:
+    """実行履歴をフィルタ付きで返す。新しい順。"""
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit は 1〜1000")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset は 0 以上")
+    rows, total = storage.list_run_history(
+        log_name=log_name or None,
+        config_id=config_id or None,
+        base_config=base_config or None,
+        q=q or None,
+        limit=limit,
+        offset=offset,
+    )
+    return RunHistoryListResponse(
+        entries=[RunHistoryEntry(**r) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/runs/history/{run_id}", response_model=RunHistoryEntry)
+def get_run_history_endpoint(run_id: int) -> RunHistoryEntry:
+    row = storage.get_run_history(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"run id={run_id} not found")
+    return RunHistoryEntry(**row)
+
+
+@app.delete("/api/runs/history/{run_id}")
+def delete_run_history_endpoint(run_id: int) -> dict:
+    if not storage.delete_run_history(run_id):
+        raise HTTPException(status_code=404, detail=f"run id={run_id} not found")
+    return {"deleted": run_id}
+
+
 @app.get("/api/runtime-config", response_model=RuntimeConfigResponse)
 def get_runtime_config() -> RuntimeConfigResponse:
     """ブラウザ UI が trace_id から Langfuse UI 直リンクを生成するのに使う。
@@ -707,4 +774,24 @@ async def run_config(req: RunRequest) -> AnalysisResult:
                 model_overrides=m_overrides,
             ),
         )
+
+    # 実行履歴を記録（失敗してもユーザーへの応答は妨げない）
+    try:
+        top = result.root_cause_candidates[0] if result.root_cause_candidates else None
+        storage.insert_run_history(
+            log_name=req.log_name,
+            config_id=req.config,
+            base_config=base_config,
+            confidence=float(result.confidence),
+            tokens_in=int(result.metrics.tokens_in),
+            tokens_out=int(result.metrics.tokens_out),
+            latency_ms=int(result.metrics.latency_ms_total),
+            trace_id=str(result.trace_id),
+            top_category=top.category.value if top else None,
+            top_summary=top.summary if top else None,
+        )
+    except Exception:
+        # 履歴記録は best-effort
+        pass
+
     return result
