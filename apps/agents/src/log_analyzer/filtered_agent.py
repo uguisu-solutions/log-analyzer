@@ -121,6 +121,7 @@ def run_filtered(
     total_latency = haiku_latency + sonnet_latency
 
     result = AnalysisResult(
+        trace_id=str(trace.id),
         config_id=ConfigId.CONFIG2,
         input_log_ref=log_ref,
         root_cause_candidates=[

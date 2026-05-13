@@ -384,6 +384,7 @@ async def _run_pipeline_async(
         graph_edges_out.append(GraphEdge(source=e["source"], target=e["target"]))
 
     result = AnalysisResult(
+        trace_id=str(trace.id),
         config_id=ConfigId.CONFIG5,
         input_log_ref=log_ref,
         root_cause_candidates=[

@@ -259,6 +259,7 @@ async def _run_multi_model_async(
     )
 
     result = AnalysisResult(
+        trace_id=str(trace.id),
         config_id=ConfigId.CONFIG3,
         input_log_ref=log_ref,
         root_cause_candidates=[

@@ -274,6 +274,7 @@ def run_rally(
     ]
 
     result = AnalysisResult(
+        trace_id=str(trace.id),
         config_id=ConfigId.CONFIG4,
         input_log_ref=log_ref,
         root_cause_candidates=[

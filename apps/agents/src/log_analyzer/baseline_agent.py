@@ -88,6 +88,7 @@ def run_baseline(
     parsed = _extract_json(raw_text)
 
     result = AnalysisResult(
+        trace_id=str(trace.id),
         config_id=ConfigId.CONFIG1,
         input_log_ref=log_ref,
         root_cause_candidates=[

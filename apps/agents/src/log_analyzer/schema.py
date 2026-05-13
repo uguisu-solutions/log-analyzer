@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -102,9 +102,20 @@ class OrchestratorDecisionDTO(BaseModel):
     forced: bool = False  # rally_max_rounds 到達による強制 finalize の場合 True
 
 
+def _default_trace_id() -> str:
+    """trace_id の既定値: UUID4 を文字列で返す。
+
+    通常は runner 側で Langfuse SDK が発行する trace.id を入れて上書きする。
+    Langfuse なしで動作する単体テスト・CLI ローカル実行のためのフォールバック。
+    """
+    return str(uuid4())
+
+
 class AnalysisResult(BaseModel):
     schema_version: str = "v0.1"
-    trace_id: UUID = Field(default_factory=uuid4)
+    # Langfuse が発行する trace ID（文字列）。UI のリンク生成と Langfuse UI 上の
+    # 該当トレースを開く URL に直接使う。
+    trace_id: str = Field(default_factory=_default_trace_id)
     config_id: ConfigId
     input_log_ref: str
     root_cause_candidates: list[RootCauseCandidate]
