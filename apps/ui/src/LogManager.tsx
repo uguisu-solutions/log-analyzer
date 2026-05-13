@@ -170,8 +170,8 @@ export function LogManager({ logs, onLogsChange }: Props) {
 
       <div className="log-list-header">
         <h3>ログ一覧（{logs.length} 件）</h3>
-        <button className="btn-secondary" onClick={onLogsChange}>
-          再読み込み
+        <button onClick={onLogsChange}>
+          ⟳ 再読み込み
         </button>
       </div>
 

@@ -35,9 +35,9 @@ def init_db() -> None:
     """テーブルが無ければ作成（idempotent）。条件付きマイグレーション付き。
 
     Phase 2 W6 で ``model_overrides_json`` を追加、`feature/visual-pipeline-builder`
-    で ``pipeline_json`` を追加。既存テーブルにカラムが無ければ ALTER TABLE で増やす
-    （保存データは保持）。``model_overrides_json`` が無いさらに古いスキーマだけは
-    DROP して再作成する。
+    で ``pipeline_json`` を追加、`feature/run-history` で ``run_history`` テーブル追加。
+    既存テーブルにカラムが無ければ ALTER TABLE で増やす（保存データは保持）。
+    ``model_overrides_json`` が無いさらに古いスキーマだけは DROP して再作成する。
     """
     _ensure_dir()
     with _connect() as conn:
@@ -69,6 +69,38 @@ def init_db() -> None:
             )
         # 旧 A-2 の saved_prompts テーブルは現スキーマでは不要
         conn.execute("DROP TABLE IF EXISTS saved_prompts")
+
+        # run_history テーブル（実行 1 件 1 行のメタデータのみ。詳細は Langfuse へ）
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                log_name TEXT NOT NULL,
+                config_id TEXT NOT NULL,
+                base_config TEXT NOT NULL,
+                confidence REAL,
+                tokens_in INTEGER,
+                tokens_out INTEGER,
+                latency_ms INTEGER,
+                trace_id TEXT,
+                top_category TEXT,
+                top_summary TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_run_history_started_at "
+            "ON run_history(started_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_run_history_config "
+            "ON run_history(config_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_run_history_log "
+            "ON run_history(log_name)"
+        )
         conn.commit()
 
 
@@ -171,5 +203,102 @@ def update_saved_config(
 def delete_saved_config(config_id: int) -> bool:
     with _connect() as conn:
         cursor = conn.execute("DELETE FROM saved_configs WHERE id = ?", (config_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+# ─── run_history ─────────────────────────────────────────────────────
+
+
+_RUN_COLS = (
+    "id, started_at, log_name, config_id, base_config, confidence, "
+    "tokens_in, tokens_out, latency_ms, trace_id, top_category, top_summary"
+)
+
+
+def insert_run_history(
+    *,
+    log_name: str,
+    config_id: str,
+    base_config: str,
+    confidence: float | None,
+    tokens_in: int | None,
+    tokens_out: int | None,
+    latency_ms: int | None,
+    trace_id: str | None,
+    top_category: str | None,
+    top_summary: str | None,
+    started_at: str | None = None,
+) -> int:
+    """実行 1 件分のメタデータを記録し、行 ID を返す。"""
+    when = started_at or _now_iso()
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO run_history (started_at, log_name, config_id, base_config, "
+            "confidence, tokens_in, tokens_out, latency_ms, trace_id, top_category, top_summary) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                when, log_name, config_id, base_config, confidence,
+                tokens_in, tokens_out, latency_ms, trace_id, top_category, top_summary,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid or 0
+
+
+def list_run_history(
+    *,
+    log_name: str | None = None,
+    config_id: str | None = None,
+    base_config: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """フィルタ付きで一覧を返す。``(rows, total_count)`` のタプル。
+
+    - ``log_name`` / ``config_id`` / ``base_config``: 完全一致
+    - ``q``: top_summary に部分一致
+    """
+    where: list[str] = []
+    args: list = []
+    if log_name:
+        where.append("log_name = ?")
+        args.append(log_name)
+    if config_id:
+        where.append("config_id = ?")
+        args.append(config_id)
+    if base_config:
+        where.append("base_config = ?")
+        args.append(base_config)
+    if q:
+        where.append("(top_summary LIKE ? OR log_name LIKE ?)")
+        like = f"%{q}%"
+        args.extend([like, like])
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    with _connect() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM run_history{where_sql}", args
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT {_RUN_COLS} FROM run_history{where_sql} "
+            f"ORDER BY started_at DESC LIMIT ? OFFSET ?",
+            (*args, limit, offset),
+        ).fetchall()
+    return [dict(r) for r in rows], int(total)
+
+
+def get_run_history(run_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_RUN_COLS} FROM run_history WHERE id = ?", (run_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_run_history(run_id: int) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute("DELETE FROM run_history WHERE id = ?", (run_id,))
         conn.commit()
         return cursor.rowcount > 0
