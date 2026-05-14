@@ -13,7 +13,7 @@
 | **config1** | ベースライン | ログ → Claude Sonnet 1 回 → 共通 JSON |
 | **config2** | フィルタ + 圧縮 | ルールベース前処理 → Haiku triage → Sonnet analyze |
 | **config3** | マルチモデル並列 | Sonnet / Haiku / GPT-4o の 3 モデル並列 → integrate |
-| **config4** | オーケストレータ駆動ラリー | LangGraph の orchestrator が監視結果を見て **再評価ループ**。focus_hints で観点を変えながら最大 3 ラウンド回し integrate |
+| **config4** | 委譲チェーン型ラリー | orchestrator が初手の監視 1 つを選ぶ→各監視が分析後に次ノード（別監視 or integrator）を JSON で指名する **シングルアクティブな委譲チェーン**。SSE でリアルタイム可視化、上限到達時はユーザー確認モーダルで延長 / 停止を選択 |
 | **config5** | ユーザー定義パイプライン | UI で input → ... → output の DAG をドラッグ＆ドロップ構築 |
 
 すべての構成が **同一の出力スキーマ `AnalysisResult` (schema_version v0.1)** を返すため、機械突合・比較表化が可能です。
@@ -23,9 +23,13 @@
 - 5 構成の単独実行 / 同時比較（Web UI + CLI 両対応）
 - ノード単位のプロンプト・モデル上書き編集 + ユーザー定義構成として SQLite に保存
 - React Flow ベースの **ワークフロー可視化**（builtin 構造 + 構成5 の D&D 編集）
-- **config4 の判断履歴可視化**（各ラウンドの action / focus_hints / rationale をタイムライン表示）
+- **config4 のリアルタイム委譲チェーン可視化** — SSE で「初手選択 → 監視 A → 監視 B → integrator」を 1 ラウンドずつ UI に流す
+- **ラウンド数上限到達時の確認モーダル** — 続行 (+N 延長) / 停止 (即 integrator) をユーザーが選択
+- **遷移制約**: 自己遷移と直前ノードへの即時 ping-pong を禁止（違反時は自動 integrator フォールバック）
 - **ログ管理タブ**: アップロード / プレビュー / 削除
-- Langfuse による全 LLM 呼び出しのトレース・トークン消費記録
+- **実行履歴タブ**: SQLite に各実行のメタデータ（confidence / tokens / Langfuse trace_id）を残し、フィルタ表示
+- Langfuse による全 LLM 呼び出しのトレース・トークン消費記録 + UI 直リンク
+- **Prompt caching**: orchestrator / 監視 / integrator の system プロンプトと安定 user ブロックに `cache_control: ephemeral` を設定し、連続実行で 2 回目以降の入力 token を最大 90% 削減
 
 ---
 
@@ -36,13 +40,13 @@
 | 領域 | 採用 |
 |---|---|
 | 言語 | Python 3.11+ |
-| エージェント orchestration | [LangGraph](https://github.com/langchain-ai/langgraph)（StateGraph）|
-| LLM | Anthropic Claude (Sonnet 4.5 / Haiku 4.5 / Opus 4.7) + OpenAI (GPT-4o) |
-| Web フレームワーク | FastAPI + Uvicorn |
+| エージェント orchestration | 構成3 は `asyncio.gather` で並列。構成4 は **手動 async ループ** + SSE ストリーミング (LangGraph は旧 fan-out 型で使用していたが委譲チェーン型では不要に)。構成5 は依存深度ごとに `asyncio.gather` で並列実行する DAG ランナー |
+| LLM | Anthropic Claude (デフォルト: orchestrator/監視 = Haiku 4.5、integrator = Sonnet 4.5、Opus 4.7 へ slot 別上書き可) + OpenAI (GPT-4o-mini、構成3 のみ) |
+| Web フレームワーク | FastAPI + Uvicorn（SSE 用に `StreamingResponse`） |
 | スキーマ | Pydantic v2 |
-| 永続化 | SQLite（ユーザー定義構成）+ ローカル FS（ログ・トポロジ） |
+| 永続化 | SQLite（ユーザー定義構成 / 実行履歴）+ ローカル FS（ログ・トポロジ） |
 | 観測性 | [Langfuse](https://langfuse.com/) v2（OSS LLMOps、Docker Compose で同梱） |
-| テスト | pytest |
+| テスト | pytest（47 件） |
 
 > **AWS 不採用方針**: Step Functions / Bedrock / DynamoDB / S3 は使用しません。Python asyncio + LangGraph + Anthropic/OpenAI 直叩き + SQLite + ローカル FS で代替しています。
 
@@ -68,22 +72,29 @@ prottype1/
 │   │   │   ├── baseline_agent.py      # config1
 │   │   │   ├── filtered_agent.py      # config2
 │   │   │   ├── multi_model_agent.py   # config3
-│   │   │   ├── rally_agent.py         # config4（orchestrator 駆動）
-│   │   │   ├── rally/                 # config4 のサブモジュール
+│   │   │   ├── rally_agent.py         # config4（委譲チェーン型・SSE ストリーミング対応）
+│   │   │   ├── rally/                 # config4 サブモジュール
+│   │   │   │   ├── orchestrator.py      #   初回 1 回のみ初手監視を選択
+│   │   │   │   ├── monitors.py          #   各監視 (fw/routing/app/dns/sec) は分析 + 次ノード指名
+│   │   │   │   ├── integrator.py        #   最終統合 (Sonnet)
+│   │   │   │   ├── tools.py             #   read_topology / get_config モック
+│   │   │   │   └── state.py             #   委譲制御 TypedDict
 │   │   │   ├── pipeline_runner.py     # config5（DAG 実行エンジン）
 │   │   │   ├── prompt_slots.py        # 編集可能 slot 定義
-│   │   │   ├── storage.py             # SQLite 永続化
-│   │   │   ├── api.py                 # FastAPI エンドポイント
+│   │   │   ├── storage.py             # SQLite 永続化（saved_configs / run_history）
+│   │   │   ├── api.py                 # FastAPI エンドポイント（SSE 含む）
 │   │   │   └── cli.py                 # `log-analyze` CLI
 │   │   ├── scripts/compare_configs.py # 複数構成 × 複数ログ一括比較
-│   │   └── tests/                     # pytest（36 件）
+│   │   └── tests/                     # pytest（47 件）
 │   └── ui/                     # React フロントエンド
 │       └── src/
-│           ├── App.tsx                # タブ管理 / 単一実行 / 比較 / 構成設計 / ログ管理
+│           ├── App.tsx                # タブ管理 / 単一実行 / 比較 / 構成設計 / ログ管理 / 実行履歴
+│           │                          #   + RealtimeStreamView / ConfirmationModal / DelegationHistoryView
 │           ├── BuiltinConfigCanvas.tsx
 │           ├── PipelineBuilder.tsx    # 構成5 D&D エディタ
 │           ├── GraphView.tsx          # 実行後のエージェント組織図
-│           └── LogManager.tsx         # ログアップロード / プレビュー / 削除
+│           ├── LogManager.tsx         # ログアップロード / プレビュー / 削除
+│           └── RunHistoryView.tsx     # 実行履歴の一覧 + フィルタ
 ├── infra/langfuse/             # Langfuse v2 docker-compose
 ├── samples/
 │   ├── logs/                   # サンプル合成ログ（FW / Routing / TCP 異常等）
@@ -181,14 +192,15 @@ npm run dev
 
 ### Web UI（推奨）
 
-`http://localhost:5173` を開くと 4 タブが表示されます。
+`http://localhost:5173` を開くと 5 タブが表示されます。
 
 | タブ | 用途 |
 |---|---|
-| **単一実行** | ログを 1 つ選び、構成を指定して分析実行 → 結果を表示。config4 専用のラリー制御パネル（max_rounds / 強制最小ラウンド）あり |
+| **単一実行** | ログを 1 つ選び、構成を指定して分析実行 → 結果を表示。config4 では SSE で各ラウンドをリアルタイム表示 + ラリー制御パネル（最大ラウンド数）+ 上限到達時の確認モーダル（+N 延長 / 停止選択） |
 | **構成比較** | 複数構成を同じログに同時実行 → 確信度・トークン・レイテンシを並べて比較 |
 | **構成設計（pipeline）** | 構成5 を D&D で設計 → ユーザー定義構成として保存 |
 | **ログ管理** | `samples/logs/` 配下のログを一覧 / アップロード（10 MB 上限）/ 先頭 200 行プレビュー / 削除 |
+| **実行履歴** | SQLite に蓄積した過去実行を構成 / ログ / 部分文字列でフィルタ表示 + Langfuse 直リンク |
 
 ノードをクリックすると **プロンプト・モデルをその場で編集** でき、実行前に試したり、ユーザー定義構成として別名保存できます。
 
@@ -201,12 +213,11 @@ cd apps\agents
 # 構成1（既定）
 log-analyze ..\..\samples\logs\sample_firewall.log
 
-# 構成4 をラリー上限 2 ラウンドで実行
+# 構成4 を委譲チェーン上限 2 ラウンドで実行
 log-analyze --config config4 --rally-max-rounds 2 ..\..\samples\logs\sample_firewall.log
-
-# 強制最小ラウンドで再入を確実に観測（PoC デモ用）
-log-analyze --config config4 --rally-force-min-rounds 2 ..\..\samples\logs\sample_firewall.log
 ```
+
+CLI からは確認モーダルは出ず、上限到達で強制 finalize されます（対話的に延長したい場合は Web UI を使ってください）。
 
 ### 一括比較
 
@@ -235,7 +246,27 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 | GET | `/api/configs/{base}/structure` | builtin 構成のグラフ構造（React Flow 描画用） |
 | GET | `/api/prompt-slots/{base_config}` | 編集可能 slot 定義 |
 | GET / POST / PUT / DELETE | `/api/configs/saved[/{id}]` | ユーザー定義構成の CRUD |
-| POST | `/api/runs` | 指定構成で実行 → `AnalysisResult` を返す |
+| POST | `/api/runs` | 指定構成で実行 → `AnalysisResult` を返す（同期） |
+| **POST** | **`/api/runs/stream`** | **構成4 を SSE で実行（`text/event-stream`）。各ステップを 1 イベントずつ push** |
+| **POST** | **`/api/runs/{run_id}/decision`** | **SSE 中の `await_confirmation` への応答。`{"action": "continue", "extend_by": N}` か `{"action": "stop"}`** |
+| GET | `/api/runs/history` | 実行履歴一覧（フィルタ・ページング対応） |
+| GET / DELETE | `/api/runs/history/{run_id}` | 個別実行の取得・削除 |
+| GET | `/api/runtime-config` | UI 初期化用（Langfuse host 等） |
+
+### SSE イベント kind（構成4 のみ）
+
+| kind | 意味 |
+|---|---|
+| `run_id_assigned` | 確認モーダル応答に使う `run_id` を返す |
+| `run_started` | trace_id と rally_max_rounds を通知 |
+| `orchestrator_start` / `orchestrator_decision` | 初手の監視を選択中 / 選択結果 |
+| `monitor_start` / `monitor_decision` | 監視ノードの実行開始 / findings + 次ノード指名 |
+| `await_confirmation` | 上限到達。UI が確認モーダルを表示 |
+| `user_decision` | ユーザー応答（`continue` + `extend_by` / `stop`） |
+| `max_rounds_finalize` | 強制 finalize（非対話モードのみ） |
+| `integrator_start` / `integrator_done` | 統合中 / 統合完了 |
+| `final` | `AnalysisResult` 全体を payload に含む |
+| `error` | エラー発生（stage を含む） |
 
 ---
 
@@ -245,7 +276,7 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 36 passed
+# 期待: 47 passed
 ```
 
 ---
@@ -256,6 +287,7 @@ pytest -q
 - **`human_judgment_required` は外せない**。ロールバック・再起動・設定変更を伴うアクションは必ず `true` を立てる（議事録 L3 由来）。
 - **トレース名は `<config_id>-<role>` に揃える**（例: `config4-orchestrator`、`config4-fw-monitor`）。Langfuse でフィルタしやすくするため。
 - **言語は日本語が既定**。プロンプト・出力 `summary` / `action` の自然文は日本語、フィールド名・enum 値は英語。
+- **構成4 はシングルアクティブな委譲チェーン**。複数監視を同時に走らせない（自己遷移と直前ノードへの即時 ping-pong は禁止）。並列ファンアウト案は 2026-05-14 に廃止。
 
 ---
 
