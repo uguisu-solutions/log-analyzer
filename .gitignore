@@ -56,9 +56,9 @@ ehthumbs.db
 
 # --- 開発者個人の作業ファイル（公開リポジトリには含めない） ---
 # RESUME.md: セッション再開ガイド（個人メモ用途、内部の作業状態を含む）
-# app_overview.html: 説明資料の作業コピー（必要なら別途配布）
+# meeting/: ミーティング資料の作業フォルダ（app_overview.html / Q&A 集 等）
 RESUME.md
-app_overview.html
+meeting/
 
 # --- 内部資料（社内のみで共有、公開リポジトリには含めない） ---
 # preset/ の .pptx は社員向け / 構築提案資料
