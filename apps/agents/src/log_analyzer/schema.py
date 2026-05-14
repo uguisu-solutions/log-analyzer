@@ -91,15 +91,26 @@ class GraphEdge(BaseModel):
     label: str | None = None
 
 
-class OrchestratorDecisionDTO(BaseModel):
-    """構成4 オーケストレータの 1 ラウンドの判断を UI に渡すための DTO。"""
+class DelegationEventDTO(BaseModel):
+    """構成4 委譲チェーンの 1 ステップを UI に渡すための DTO。
+
+    kind の意味:
+        - "orchestrator_initial": オーケストレータが初手の監視を指名
+        - "monitor_delegation":   監視が次の監視に委譲
+        - "monitor_finalize":     監視が integrator を指名（自然終了）
+        - "routing_violation_fallback": 自己遷移 / ping-pong 違反で integrator に強制
+        - "max_rounds_finalize":  rally_max_rounds 到達による強制 finalize
+        - "user_finalize":        ユーザーが確認モーダルで停止を選択
+        - "user_extend":          ユーザーが確認モーダルで延長を選択（履歴記録用）
+    """
 
     round: int
-    action: str  # "invoke" | "finalize"
-    invoke: list[str] = Field(default_factory=list)
-    focus_hints: dict[str, str] = Field(default_factory=dict)
+    kind: str
+    from_node: str | None = None  # "orchestrator" / "fw" / "routing" / ...
+    to_node: str | None = None    # "fw" / "integrator" / ...
+    focus_hint: str = ""
     rationale: str = ""
-    forced: bool = False  # rally_max_rounds 到達による強制 finalize の場合 True
+    confidence: float | None = None  # 監視の confidence（kind="monitor_*" のみ）
 
 
 def _default_trace_id() -> str:
@@ -128,6 +139,6 @@ class AnalysisResult(BaseModel):
     execution_graph_nodes: list[GraphNode] = Field(default_factory=list)
     execution_graph_edges: list[GraphEdge] = Field(default_factory=list)
     # 構成4（rally）専用。他構成では 0 / 空配列のまま
-    orchestrator_rounds: int = 0
-    orchestrator_max_rounds: int = 0
-    orchestrator_history: list[OrchestratorDecisionDTO] = Field(default_factory=list)
+    delegation_rounds: int = 0
+    delegation_max_rounds: int = 0
+    delegation_history: list[DelegationEventDTO] = Field(default_factory=list)

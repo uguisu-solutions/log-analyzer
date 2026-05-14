@@ -13,23 +13,30 @@
     PUT    /api/configs/saved/{id}            上書き更新
     DELETE /api/configs/saved/{id}            削除
     POST   /api/runs                          指定構成を指定ログに当て、AnalysisResult を返す
+    POST   /api/runs/stream                   構成4 (rally) を SSE でストリーミング実行
+    POST   /api/runs/{run_id}/decision        確認モーダルからの継続 / 停止指示を送る
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import AsyncIterator
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from log_analyzer import pipeline_runner, prompt_slots, storage
 from log_analyzer.cli import CONFIG_RUNNERS
+from log_analyzer.rally_agent import StreamEvent, run_rally_stream
 from log_analyzer.schema import AnalysisResult
 
 load_dotenv()
@@ -128,40 +135,43 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"source": "openai", "target": "integrate"},
         ],
     },
-    # 編集画面のワークフロー図 (5 監視構成):
-    # 正方向のデータフロー（実線）と、orchestrator 再入のフィードバック（破線）を区別。
-    # フロント側で kind=feedback のエッジは dagre レイアウト計算から除外し
-    # 破線オレンジ + ラベル「再評価」で描画する。
+    # 編集画面のワークフロー図 (委譲チェーン型 5 監視構成):
+    # - orchestrator は初回 1 つの監視を選ぶ（5 本の実線）
+    # - 各監視は次の監視 or integrator を 1 つ指名する（破線 kind=delegation で表現）
+    # - 監視同士の委譲は完全グラフ（5 監視 × 4 = 20 エッジ）になり煩雑なので、
+    #   代表的な遷移として隣接リング (fw↔routing↔app↔dns↔sec) を破線で示す
+    # - 実際に通った経路は実行結果カードの execution_graph で確認できる
     "config4": {
         "nodes": [
             {"id": "input", "type": "input", "label": "入力ログ"},
-            {"id": "orchestrator", "type": "slot", "slot_id": "orchestrator", "label": "オーケストレータ\n(再入・最大3ラウンド)"},
-            {"id": "fw_monitor", "type": "slot", "slot_id": "fw_monitor", "label": "FW 監視"},
-            {"id": "routing_monitor", "type": "slot", "slot_id": "routing_monitor", "label": "Routing 監視"},
-            {"id": "app_monitor", "type": "slot", "slot_id": "app_monitor", "label": "App 監視"},
-            {"id": "dns_monitor", "type": "slot", "slot_id": "dns_monitor", "label": "DNS 監視"},
-            {"id": "sec_monitor", "type": "slot", "slot_id": "sec_monitor", "label": "Security 監視"},
+            {"id": "orchestrator", "type": "slot", "slot_id": "orchestrator", "label": "オーケストレータ\n(初回 1 回のみ・最初の監視を 1 つ選ぶ)"},
+            {"id": "fw_monitor", "type": "slot", "slot_id": "fw_monitor", "label": "FW 監視\n(次ノードを指名)"},
+            {"id": "routing_monitor", "type": "slot", "slot_id": "routing_monitor", "label": "Routing 監視\n(次ノードを指名)"},
+            {"id": "app_monitor", "type": "slot", "slot_id": "app_monitor", "label": "App 監視\n(次ノードを指名)"},
+            {"id": "dns_monitor", "type": "slot", "slot_id": "dns_monitor", "label": "DNS 監視\n(次ノードを指名)"},
+            {"id": "sec_monitor", "type": "slot", "slot_id": "sec_monitor", "label": "Security 監視\n(次ノードを指名)"},
             {"id": "integrator", "type": "slot", "slot_id": "integrator", "label": "統合（最終出力）"},
         ],
         "edges": [
-            # 正方向のフロー
+            # 正方向のフロー（orchestrator → 5 監視のうち 1 つを選ぶ）
             {"source": "input", "target": "orchestrator"},
-            {"source": "orchestrator", "target": "fw_monitor"},
-            {"source": "orchestrator", "target": "routing_monitor"},
-            {"source": "orchestrator", "target": "app_monitor"},
-            {"source": "orchestrator", "target": "dns_monitor"},
-            {"source": "orchestrator", "target": "sec_monitor"},
-            {"source": "fw_monitor", "target": "integrator"},
-            {"source": "routing_monitor", "target": "integrator"},
-            {"source": "app_monitor", "target": "integrator"},
-            {"source": "dns_monitor", "target": "integrator"},
-            {"source": "sec_monitor", "target": "integrator"},
-            # 再評価フィードバック（破線で描画、レイアウト計算では無視）
-            {"source": "fw_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
-            {"source": "routing_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
-            {"source": "app_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
-            {"source": "dns_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
-            {"source": "sec_monitor", "target": "orchestrator", "kind": "feedback", "label": "再評価"},
+            {"source": "orchestrator", "target": "fw_monitor", "label": "初手選択"},
+            {"source": "orchestrator", "target": "routing_monitor", "label": "初手選択"},
+            {"source": "orchestrator", "target": "app_monitor", "label": "初手選択"},
+            {"source": "orchestrator", "target": "dns_monitor", "label": "初手選択"},
+            {"source": "orchestrator", "target": "sec_monitor", "label": "初手選択"},
+            # 各監視 → integrator (監視自身が finalize を選んだ場合)
+            {"source": "fw_monitor", "target": "integrator", "label": "finalize"},
+            {"source": "routing_monitor", "target": "integrator", "label": "finalize"},
+            {"source": "app_monitor", "target": "integrator", "label": "finalize"},
+            {"source": "dns_monitor", "target": "integrator", "label": "finalize"},
+            {"source": "sec_monitor", "target": "integrator", "label": "finalize"},
+            # 監視 → 監視 の委譲（代表的なリング、破線で描画）
+            {"source": "fw_monitor", "target": "routing_monitor", "kind": "feedback", "label": "委譲"},
+            {"source": "routing_monitor", "target": "app_monitor", "kind": "feedback", "label": "委譲"},
+            {"source": "app_monitor", "target": "dns_monitor", "kind": "feedback", "label": "委譲"},
+            {"source": "dns_monitor", "target": "sec_monitor", "kind": "feedback", "label": "委譲"},
+            {"source": "sec_monitor", "target": "fw_monitor", "kind": "feedback", "label": "委譲"},
         ],
     },
 }
@@ -246,9 +256,15 @@ class RunRequest(BaseModel):
     model_overrides: dict[str, str] | None = None
     # config5（user_pipeline）でのみ使用。ad-hoc プレビュー実行時にここで pipeline_def を渡す。
     pipeline: dict | None = None
-    # config4（rally）専用ランタイムパラメータ。base_config が config4 のときのみ有効。
+    # config4（rally）専用ランタイムパラメータ。
     rally_max_rounds: int | None = None
-    rally_force_min_rounds: int | None = None
+
+
+class DecisionRequest(BaseModel):
+    """確認モーダルからの応答。"""
+
+    action: str  # "continue" | "stop"
+    extend_by: int | None = None  # action="continue" のみ。既定 3
 
 
 class SlotInfo(BaseModel):
@@ -761,7 +777,6 @@ async def run_config(req: RunRequest) -> AnalysisResult:
                 prompt_overrides=p_overrides,
                 model_overrides=m_overrides,
                 rally_max_rounds=req.rally_max_rounds,
-                rally_force_min_rounds=req.rally_force_min_rounds,
             ),
         )
     else:
@@ -795,3 +810,125 @@ async def run_config(req: RunRequest) -> AnalysisResult:
         pass
 
     return result
+
+
+# ─── SSE ストリーミング (config4 専用) ─────────────────────────────────
+
+
+# {run_id: 確認モーダル応答待ち Future} を一時保持する。
+# /api/runs/{run_id}/decision がここに値を set する。
+_PENDING_DECISIONS: dict[str, asyncio.Future[dict]] = {}
+
+
+def _sse_bytes(kind: str, data: dict) -> bytes:
+    """1 イベントを SSE フォーマットでエンコード。"""
+    return (
+        f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    ).encode("utf-8")
+
+
+@app.post("/api/runs/stream")
+async def runs_stream(req: RunRequest) -> StreamingResponse:
+    """構成4 (rally) を SSE で 1 ステップずつ実行する。
+
+    各ラウンドの ``monitor_decision`` イベントをリアルタイムで送る。
+    ``rally_max_rounds`` を超えると ``await_confirmation`` を emit して停止し、
+    ``POST /api/runs/{run_id}/decision`` が来るまで待機する。
+    """
+    log_path = _LOGS_DIR / req.log_name
+    if not log_path.exists() or log_path.suffix != ".log":
+        raise HTTPException(status_code=404, detail=f"log not found: {req.log_name}")
+
+    base_config, p_overrides, m_overrides, _pipeline = _resolve_run_target(
+        req.config, req.overrides, req.model_overrides, req.pipeline
+    )
+    if base_config != "config4":
+        raise HTTPException(
+            status_code=400,
+            detail="ストリーミング実行は現在 config4 (rally) のみ対応",
+        )
+    if p_overrides or m_overrides:
+        _validate_overrides(base_config, p_overrides, m_overrides)
+
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    run_id = uuid4().hex
+
+    async def _wait_for_decision() -> dict:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict] = loop.create_future()
+        _PENDING_DECISIONS[run_id] = fut
+        try:
+            return await fut
+        finally:
+            _PENDING_DECISIONS.pop(run_id, None)
+
+    async def gen() -> AsyncIterator[bytes]:
+        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
+        final_data: dict | None = None
+        try:
+            async for ev in run_rally_stream(
+                log_text,
+                str(log_path),
+                prompt_overrides=p_overrides,
+                model_overrides=m_overrides,
+                rally_max_rounds=req.rally_max_rounds or 3,
+                decision_waiter=_wait_for_decision,
+            ):
+                yield _sse_bytes(ev.kind, ev.data)
+                if ev.kind == "final":
+                    final_data = ev.data.get("result")
+        except Exception as e:
+            yield _sse_bytes("error", {"message": str(e), "stage": "stream"})
+            return
+
+        # 履歴記録 (best-effort)
+        if final_data is not None:
+            try:
+                cands = final_data.get("root_cause_candidates") or []
+                top = cands[0] if cands else None
+                metrics = final_data.get("metrics") or {}
+                storage.insert_run_history(
+                    log_name=req.log_name,
+                    config_id=req.config,
+                    base_config=base_config,
+                    confidence=float(final_data.get("confidence", 0.0)),
+                    tokens_in=int(metrics.get("tokens_in", 0)),
+                    tokens_out=int(metrics.get("tokens_out", 0)),
+                    latency_ms=int(metrics.get("latency_ms_total", 0)),
+                    trace_id=str(final_data.get("trace_id") or ""),
+                    top_category=(top or {}).get("category"),
+                    top_summary=(top or {}).get("summary"),
+                )
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/runs/{run_id}/decision")
+async def runs_decision(run_id: str, req: DecisionRequest) -> dict:
+    """確認モーダルからの継続 / 停止指示。
+
+    action="continue" なら ``rally_max_rounds`` を +extend_by 延長して再開。
+    action="stop" なら次ラウンドに進まず integrator にフォールバック。
+    """
+    fut = _PENDING_DECISIONS.get(run_id)
+    if fut is None or fut.done():
+        raise HTTPException(
+            status_code=404,
+            detail=f"no pending decision for run {run_id}",
+        )
+    if req.action not in {"continue", "stop"}:
+        raise HTTPException(
+            status_code=400, detail="action は 'continue' または 'stop'"
+        )
+    payload: dict = {"action": req.action}
+    if req.action == "continue":
+        extend_by = req.extend_by if (req.extend_by and req.extend_by > 0) else 3
+        payload["extend_by"] = extend_by
+    fut.set_result(payload)
+    return {"ok": True, "run_id": run_id}

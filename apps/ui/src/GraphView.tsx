@@ -17,6 +17,8 @@ interface GraphNodeData {
 interface GraphEdgeData {
   source: string
   target: string
+  kind?: string | null
+  label?: string | null
 }
 
 const ROLE_COLORS: Record<string, { bg: string; border: string }> = {

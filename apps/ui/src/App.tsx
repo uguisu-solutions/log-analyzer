@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { BuiltinConfigCanvas } from './BuiltinConfigCanvas'
 import { GraphView } from './GraphView'
 import { LogManager } from './LogManager'
@@ -7,9 +7,11 @@ import { RunHistoryView } from './RunHistoryView'
 import type {
   AnalysisResult,
   ConfigEntry,
+  DelegationEvent,
   LogEntry,
   SavedConfigDTO,
   SlotInfo,
+  SSEEvent,
 } from './types'
 import './App.css'
 
@@ -17,68 +19,79 @@ const API_BASE = 'http://localhost:8000'
 
 type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history'
 
-function OrchestratorHistoryView({ result }: { result: AnalysisResult }) {
-  // 構成4 のみ意味のあるデータ。古い API レスポンスや他構成ではフィールドが
-  // undefined / 0 / 空のことがあるので防御的に読む
-  const rounds = result.orchestrator_rounds ?? 0
-  const maxRounds = result.orchestrator_max_rounds ?? 0
-  const history = result.orchestrator_history ?? []
-  if (rounds === 0 || history.length === 0) {
-    return null
-  }
-  const totalLLMRounds = history.filter(d => !d.forced || d.action === 'invoke').length
-  const forcedFinalize = history.some(d => d.forced && d.action === 'finalize')
-  const invokeRounds = history.filter(d => d.action === 'invoke').length
+// kind の表示ラベル
+const DELEGATION_KIND_LABEL: Record<string, string> = {
+  orchestrator_initial: 'orchestrator が初手を選択',
+  monitor_delegation: '監視 → 監視 委譲',
+  monitor_finalize: '監視 → integrator (自然終了)',
+  routing_violation_fallback: '遷移制約違反 → integrator',
+  max_rounds_finalize: 'rally_max_rounds 到達で強制 finalize',
+  user_finalize: 'ユーザーが停止を選択',
+  user_extend: 'ユーザーが延長を選択',
+}
+
+function nodeLabel(name: string | null | undefined): string {
+  if (!name) return '?'
+  if (name === 'orchestrator') return 'orchestrator'
+  if (name === 'integrator') return 'integrator'
+  return `${name}_monitor`
+}
+
+function DelegationHistoryView({ result }: { result: AnalysisResult }) {
+  const rounds = result.delegation_rounds ?? 0
+  const maxRounds = result.delegation_max_rounds ?? 0
+  const history = result.delegation_history ?? []
+  if (history.length === 0) return null
+  const violations = history.filter(d => d.kind === 'routing_violation_fallback').length
+  const extended = history.filter(d => d.kind === 'user_extend').length
   return (
     <section className="orchestrator-history">
-      <h3>オーケストレータ判断履歴（{rounds} ラウンド / 上限 {maxRounds}）</h3>
+      <h3>委譲チェーン履歴（{rounds} ラウンド / 上限 {maxRounds}）</h3>
       <div className="orchestrator-summary">
         <span className="kv">
-          <span className="k">LLM 判断回数</span>
-          <span className="v">{totalLLMRounds}</span>
+          <span className="k">委譲ステップ</span>
+          <span className="v">{history.length}</span>
         </span>
-        <span className="kv">
-          <span className="k">監視再呼出</span>
-          <span className="v">{invokeRounds} 回</span>
-        </span>
-        {forcedFinalize && (
+        {violations > 0 && (
           <span className="kv warn">
-            <span className="k">⚠</span>
-            <span className="v">上限到達で強制 finalize</span>
+            <span className="k">⚠ 制約違反</span>
+            <span className="v">{violations} 回 (integrator にフォールバック)</span>
+          </span>
+        )}
+        {extended > 0 && (
+          <span className="kv">
+            <span className="k">ユーザー延長</span>
+            <span className="v">{extended} 回</span>
           </span>
         )}
       </div>
       <ol className="orchestrator-rounds">
-        {history.map((d, i) => {
-          const invoke = d.invoke ?? []
-          const focusHints = d.focus_hints ?? {}
-          const focusKeys = Object.keys(focusHints)
-          return (
-            <li key={i} className={`orch-round action-${d.action}${d.forced ? ' forced' : ''}`}>
-              <div className="orch-round-header">
-                <span className="round-num">round {d.round}</span>
-                <span className={`action-badge action-${d.action}`}>{d.action}</span>
-                {d.forced && <span className="forced-badge">forced</span>}
-                {d.action === 'invoke' && invoke.length > 0 && (
-                  <span className="invoke-list">→ {invoke.join(', ')}</span>
-                )}
-              </div>
-              {d.rationale && <div className="orch-rationale">{d.rationale}</div>}
-              {focusKeys.length > 0 && (
-                <details className="focus-hints">
-                  <summary>focus_hints ({focusKeys.length})</summary>
-                  <ul>
-                    {focusKeys.map(k => (
-                      <li key={k}>
-                        <code>{k}</code>: {focusHints[k]}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
+        {history.map((d, i) => (
+          <li key={i} className={`orch-round action-${d.kind}`}>
+            <div className="orch-round-header">
+              <span className="round-num">round {d.round}</span>
+              <span className={`action-badge action-${d.kind}`}>{d.kind}</span>
+              {d.from_node && d.to_node && (
+                <span className="invoke-list">
+                  {nodeLabel(d.from_node)} → {nodeLabel(d.to_node)}
+                </span>
               )}
-            </li>
-          )
-        })}
+              {d.confidence != null && (
+                <span className="conf-pill">conf {d.confidence.toFixed(2)}</span>
+              )}
+            </div>
+            <div className="orch-rationale">
+              <strong>{DELEGATION_KIND_LABEL[d.kind] ?? d.kind}</strong>
+              {d.rationale && <>: {d.rationale}</>}
+            </div>
+            {d.focus_hint && (
+              <details className="focus-hints">
+                <summary>focus_hint</summary>
+                <p>{d.focus_hint}</p>
+              </details>
+            )}
+          </li>
+        ))}
       </ol>
     </section>
   )
@@ -87,7 +100,7 @@ function OrchestratorHistoryView({ result }: { result: AnalysisResult }) {
 function ResultDetails({ result }: { result: AnalysisResult }) {
   return (
     <>
-      <OrchestratorHistoryView result={result} />
+      <DelegationHistoryView result={result} />
       <h3>根本原因候補（{result.root_cause_candidates.length}）</h3>
       <ol className="candidates">
         {result.root_cause_candidates.map((c, i) => (
@@ -125,6 +138,179 @@ function ResultDetails({ result }: { result: AnalysisResult }) {
         </details>
       )}
     </>
+  )
+}
+
+// ─── SSE パーサ ──────────────────────────────────────────────────
+// fetch streaming で受け取った Response.body を SSE 形式でパースして
+// イベントを 1 件ずつ yield する。
+async function* parseSSE(response: Response): AsyncGenerator<SSEEvent> {
+  if (!response.body) return
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const chunks = buf.split('\n\n')
+    buf = chunks.pop() ?? ''
+    for (const chunk of chunks) {
+      let kind = 'message'
+      let dataText = ''
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('event:')) kind = line.slice(6).trim()
+        else if (line.startsWith('data:')) dataText += line.slice(5).trim()
+      }
+      if (!dataText) continue
+      try {
+        const data = JSON.parse(dataText) as Record<string, unknown>
+        yield { kind, data }
+      } catch {
+        // malformed — skip
+      }
+    }
+  }
+}
+
+// ─── リアルタイム実行ログ パネル ─────────────────────────────────
+function RealtimeStreamView({ events }: { events: SSEEvent[] }) {
+  const tailRef = useRef<HTMLOListElement | null>(null)
+  useEffect(() => {
+    if (tailRef.current) {
+      tailRef.current.scrollTop = tailRef.current.scrollHeight
+    }
+  }, [events.length])
+  if (events.length === 0) return null
+
+  return (
+    <section className="realtime-stream">
+      <div className="realtime-header">
+        <h3>リアルタイム実行ログ</h3>
+        <span className="realtime-count">{events.length} イベント</span>
+      </div>
+      <ol className="stream-events" ref={tailRef}>
+        {events.map((ev, i) => (
+          <li key={i} className={`stream-event kind-${ev.kind}`}>
+            <span className="stream-kind">{ev.kind}</span>
+            <span className="stream-body">{renderEventSummary(ev)}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+function renderEventSummary(ev: SSEEvent): React.ReactNode {
+  const d = ev.data
+  switch (ev.kind) {
+    case 'run_started':
+      return <code>trace={String(d.trace_id ?? '?').slice(0, 8)}… max_rounds={String(d.rally_max_rounds)}</code>
+    case 'run_id_assigned':
+      return <code>run_id={String(d.run_id ?? '').slice(0, 8)}…</code>
+    case 'orchestrator_start':
+      return <em>初手の監視を選択中...</em>
+    case 'orchestrator_decision':
+      return (
+        <>
+          初手 = <strong>{nodeLabel(d.to_node as string)}</strong>
+          {d.focus_hint ? <> （観点: {String(d.focus_hint)}）</> : null}
+        </>
+      )
+    case 'monitor_start':
+      return (
+        <>
+          <strong>{nodeLabel(d.node as string)}</strong> 実行開始 (round {String(d.round)})
+          {d.focus_hint ? <> ← 観点: {String(d.focus_hint)}</> : null}
+        </>
+      )
+    case 'monitor_decision': {
+      const findings = (d.findings as Array<{ category: string; summary: string }>) ?? []
+      const top = findings[0]
+      return (
+        <>
+          <strong>{nodeLabel(d.from_node as string)}</strong> →
+          {' '}
+          <strong>{nodeLabel(d.to_node as string)}</strong>
+          {' '}<small>(conf {Number(d.confidence ?? 0).toFixed(2)}, {String(d.tokens_in)}/{String(d.tokens_out)} tok)</small>
+          {top && <div className="stream-finding">{top.category}: {top.summary}</div>}
+          {d.rationale ? <div className="stream-rationale">理由: {String(d.rationale)}</div> : null}
+        </>
+      )
+    }
+    case 'await_confirmation':
+      return <strong>⚠ rally_max_rounds={String(d.rally_max_rounds)} 到達。継続判断を求めています</strong>
+    case 'user_decision':
+      return <em>ユーザー応答: action={String(d.action)}{d.extend_by ? ` (+${String(d.extend_by)})` : ''}</em>
+    case 'max_rounds_finalize':
+      return <em>強制 finalize (max_rounds 到達)</em>
+    case 'integrator_start':
+      return <em>integrator で統合中...</em>
+    case 'integrator_done':
+      return <>統合完了 (conf {Number(d.confidence ?? 0).toFixed(2)}, 候補 {String(d.candidates)})</>
+    case 'final':
+      return <em>完了</em>
+    case 'error':
+      return <span className="stream-error">エラー: {String(d.message ?? d)}</span>
+    default:
+      return <code>{JSON.stringify(d).slice(0, 200)}</code>
+  }
+}
+
+// ─── 確認モーダル ────────────────────────────────────────────────
+interface ConfirmationModalProps {
+  round: number
+  maxRounds: number
+  history: DelegationEvent[]
+  onContinue: (extendBy: number) => void
+  onStop: () => void
+  busy: boolean
+}
+
+function ConfirmationModal({ round, maxRounds, history, onContinue, onStop, busy }: ConfirmationModalProps) {
+  const [extendBy, setExtendBy] = useState<number>(3)
+  return (
+    <div className="modal-overlay">
+      <div className="modal confirmation-modal">
+        <h3>ラリーが上限に到達しました</h3>
+        <p className="modal-summary">
+          現在 <strong>{round}</strong> ラウンド完了、上限 <strong>{maxRounds}</strong>。委譲チェーンを継続するか、ここで integrator に進むかを選んでください。
+        </p>
+        <details className="modal-history" open>
+          <summary>これまでの委譲履歴 ({history.length})</summary>
+          <ol>
+            {history.map((h, i) => (
+              <li key={i} className={`mini-step kind-${h.kind}`}>
+                <span className="mini-round">r{h.round}</span>
+                <span className="mini-arrow">
+                  {nodeLabel(h.from_node)} → {nodeLabel(h.to_node)}
+                </span>
+                {h.rationale && <span className="mini-rationale">{h.rationale}</span>}
+              </li>
+            ))}
+          </ol>
+        </details>
+        <div className="modal-actions">
+          <label className="extend-label">
+            延長ラウンド数:
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={extendBy}
+              onChange={e => setExtendBy(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+              disabled={busy}
+            />
+          </label>
+          <button onClick={() => onContinue(extendBy)} disabled={busy}>
+            +{extendBy} 延長して継続
+          </button>
+          <button onClick={onStop} disabled={busy} className="btn-secondary">
+            停止して integrator へ
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -199,7 +385,6 @@ function App() {
   // 「現在の保存状態」: 編集前のスナップショット（復元ボタンの戻り先）
   const [loadedOverrides, setLoadedOverrides] = useState<Record<string, string>>({})
   const [loadedModelOverrides, setLoadedModelOverrides] = useState<Record<string, string>>({})
-  const [editorOpen, setEditorOpen] = useState<boolean>(false)
   const [saveName, setSaveName] = useState<string>('')
   const [savingConfig, setSavingConfig] = useState<boolean>(false)
 
@@ -215,20 +400,21 @@ function App() {
 
   // 構成4 専用ランタイムパラメータ
   const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
-  const [rallyForceMinRounds, setRallyForceMinRounds] = useState<number>(0)
+
+  // 構成4 SSE ストリーミング状態
+  const [streamEvents, setStreamEvents] = useState<SSEEvent[]>([])
+  const [streamRunId, setStreamRunId] = useState<string | null>(null)
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    round: number
+    rally_max_rounds: number
+    delegation_history: DelegationEvent[]
+  } | null>(null)
+  const [decisionBusy, setDecisionBusy] = useState<boolean>(false)
 
   const selectedConfigEntry = configList.find(c => c.id === selectedConfig)
   const selectedBaseConfig = selectedConfigEntry?.base_config ?? ''
   const isUserConfig = selectedConfigEntry?.type === 'user'
   const userConfigId = isUserConfig ? Number(selectedConfig.split(':')[1]) : null
-
-  function getDefaultPrompt(slotId: string): string {
-    return slots.find(s => s.slot_id === slotId)?.default_prompt ?? ''
-  }
-
-  function getDefaultModel(slotId: string): string {
-    return slots.find(s => s.slot_id === slotId)?.default_model ?? ''
-  }
 
   // 保存・送信用の overrides: デフォルトと異なる slot だけに絞る
   function effectivePromptOverrides(): Record<string, string> {
@@ -475,6 +661,9 @@ function App() {
     setSingleRunning(true)
     setError(null)
     setSingleResult(null)
+    setStreamEvents([])
+    setStreamRunId(null)
+    setPendingConfirmation(null)
     try {
       const body: Record<string, unknown> = { log_name: selectedLog, config: selectedConfig }
       // builtin で編集中なら ad-hoc overrides を送る
@@ -487,9 +676,39 @@ function App() {
       // 構成4（rally）はランタイムパラメータも送る
       if (selectedBaseConfig === 'config4') {
         body.rally_max_rounds = rallyMaxRounds
-        if (rallyForceMinRounds > 0) body.rally_force_min_rounds = rallyForceMinRounds
       }
-      // user の場合は overrides は無視される（保存値が使われる）
+
+      // 構成4 のみ SSE ストリーミング経路を使う
+      if (selectedBaseConfig === 'config4') {
+        const r = await fetch(`${API_BASE}/api/runs/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+        for await (const ev of parseSSE(r)) {
+          setStreamEvents(prev => [...prev, ev])
+          if (ev.kind === 'run_id_assigned') {
+            setStreamRunId(String(ev.data.run_id ?? ''))
+          } else if (ev.kind === 'await_confirmation') {
+            setPendingConfirmation({
+              round: Number(ev.data.round ?? 0),
+              rally_max_rounds: Number(ev.data.rally_max_rounds ?? 0),
+              delegation_history: (ev.data.delegation_history as DelegationEvent[]) ?? [],
+            })
+          } else if (ev.kind === 'user_decision') {
+            setPendingConfirmation(null)
+          } else if (ev.kind === 'final') {
+            setSingleResult(ev.data.result as AnalysisResult)
+          } else if (ev.kind === 'error') {
+            const msg = (ev.data as Record<string, unknown>).message ?? JSON.stringify(ev.data)
+            setError(`stream error: ${String(msg)}`)
+          }
+        }
+        return
+      }
+
+      // それ以外は従来通り同期 /api/runs
       const r = await fetch(`${API_BASE}/api/runs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -502,6 +721,27 @@ function App() {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSingleRunning(false)
+      setStreamRunId(null)
+    }
+  }
+
+  const handleDecision = async (action: 'continue' | 'stop', extendBy?: number) => {
+    if (!streamRunId) return
+    setDecisionBusy(true)
+    try {
+      const body: Record<string, unknown> = { action }
+      if (action === 'continue' && extendBy && extendBy > 0) body.extend_by = extendBy
+      const r = await fetch(`${API_BASE}/api/runs/${streamRunId}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+      // pendingConfirmation は user_decision SSE イベント側でクリアされる
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDecisionBusy(false)
     }
   }
 
@@ -675,27 +915,13 @@ function App() {
                   <input
                     type="number"
                     min={1}
-                    max={6}
+                    max={10}
                     value={rallyMaxRounds}
-                    onChange={e => setRallyMaxRounds(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
-                    disabled={singleRunning}
-                  />
-                  <span className="rally-hint">orchestrator が回せる上限（1〜6）</span>
-                </label>
-                <label className="rally-control">
-                  <span className="rally-label">強制最小ラウンド（PoC デモ用）</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={rallyMaxRounds}
-                    value={rallyForceMinRounds}
-                    onChange={e => setRallyForceMinRounds(Math.max(0, Math.min(rallyMaxRounds, Number(e.target.value) || 0)))}
+                    onChange={e => setRallyMaxRounds(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
                     disabled={singleRunning}
                   />
                   <span className="rally-hint">
-                    {rallyForceMinRounds > 0
-                      ? `${rallyForceMinRounds} 未満で finalize を選んでも override で再呼出を強制`
-                      : '0=本番挙動（LLM 判断のまま）'}
+                    委譲チェーンの上限（1〜10）。到達すると確認モーダルが表示されます
                   </span>
                 </label>
               </div>
@@ -781,6 +1007,11 @@ function App() {
             </div>
           )}
 
+          {/* 構成4 SSE ストリーミング中はリアルタイムログを表示 */}
+          {streamEvents.length > 0 && (
+            <RealtimeStreamView events={streamEvents} />
+          )}
+
           {singleResult && (
             <section className="result">
               <h2>結果</h2>
@@ -796,6 +1027,18 @@ function App() {
             </section>
           )}
         </>
+      )}
+
+      {/* 上限到達時の確認モーダル（全モード共通の overlay） */}
+      {pendingConfirmation && (
+        <ConfirmationModal
+          round={pendingConfirmation.round}
+          maxRounds={pendingConfirmation.rally_max_rounds}
+          history={pendingConfirmation.delegation_history}
+          busy={decisionBusy}
+          onContinue={extendBy => handleDecision('continue', extendBy)}
+          onStop={() => handleDecision('stop')}
+        />
       )}
 
       {mode === 'compare' && (

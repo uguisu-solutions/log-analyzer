@@ -158,13 +158,23 @@ export interface GraphEdgeData {
   label?: string | null
 }
 
-export interface OrchestratorDecision {
+export interface DelegationEvent {
   round: number
-  action: string  // "invoke" | "finalize"
-  invoke: string[]
-  focus_hints: Record<string, string>
+  // "orchestrator_initial" | "monitor_delegation" | "monitor_finalize"
+  //  | "routing_violation_fallback" | "max_rounds_finalize"
+  //  | "user_finalize" | "user_extend"
+  kind: string
+  from_node: string | null
+  to_node: string | null
+  focus_hint: string
   rationale: string
-  forced: boolean
+  confidence: number | null
+}
+
+// SSE ストリームで届くイベント。kind ごとに data が異なる。
+export interface SSEEvent {
+  kind: string
+  data: Record<string, unknown>
 }
 
 export interface AnalysisResult {
@@ -187,7 +197,7 @@ export interface AnalysisResult {
   execution_graph_nodes: GraphNodeData[]
   execution_graph_edges: GraphEdgeData[]
   // 構成4 専用（他構成では 0 / 空）
-  orchestrator_rounds: number
-  orchestrator_max_rounds: number
-  orchestrator_history: OrchestratorDecision[]
+  delegation_rounds: number
+  delegation_max_rounds: number
+  delegation_history: DelegationEvent[]
 }

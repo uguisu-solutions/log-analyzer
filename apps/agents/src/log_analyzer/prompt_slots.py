@@ -46,12 +46,14 @@ SLOT_DEFS: dict[str, dict[str, dict]] = {
         "integrate": {"label": "統合プロンプト", "default_model": "claude-sonnet-4-5", "model_overridable": True},
     },
     "config4": {
-        "orchestrator": {"label": "オーケストレータ", "default_model": "claude-sonnet-4-5", "model_overridable": True},
-        "fw_monitor": {"label": "FW 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
-        "routing_monitor": {"label": "Routing 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
-        "app_monitor": {"label": "App 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
-        "dns_monitor": {"label": "DNS 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
-        "sec_monitor": {"label": "Security 監視", "default_model": "claude-sonnet-4-5", "model_overridable": True},
+        # 委譲チェーン型では orchestrator/監視は分類・パターンマッチ寄りタスクなので Haiku を既定に。
+        # 最終統合は品質重視で Sonnet を維持。slot 別に UI から上書き可能。
+        "orchestrator": {"label": "オーケストレータ", "default_model": "claude-haiku-4-5", "model_overridable": True},
+        "fw_monitor": {"label": "FW 監視", "default_model": "claude-haiku-4-5", "model_overridable": True},
+        "routing_monitor": {"label": "Routing 監視", "default_model": "claude-haiku-4-5", "model_overridable": True},
+        "app_monitor": {"label": "App 監視", "default_model": "claude-haiku-4-5", "model_overridable": True},
+        "dns_monitor": {"label": "DNS 監視", "default_model": "claude-haiku-4-5", "model_overridable": True},
+        "sec_monitor": {"label": "Security 監視", "default_model": "claude-haiku-4-5", "model_overridable": True},
         "integrator": {"label": "統合", "default_model": "claude-sonnet-4-5", "model_overridable": True},
     },
     # config5（user_pipeline）は slot ベースの上書きを持たない。

@@ -16,9 +16,9 @@ from log_analyzer.rally.state import Config4State
 
 INTEGRATOR_PROMPT = """\
 あなたは構成4 ラリー型システムの最終統合エージェントです。
-オーケストレータの判断と、各監視エージェント (FW / Routing / App) の findings を
-受け取り、共通スキーマ AnalysisResult の中身（root_cause_candidates, recommended_actions, confidence）
-を構築してください。
+委譲チェーンを通過した各監視エージェント (FW / Routing / App / DNS / Sec) の findings と
+委譲履歴を受け取り、共通スキーマ AnalysisResult の中身
+（root_cause_candidates, recommended_actions, confidence）を構築してください。
 
 統合ルール:
 - 複数監視で支持された原因を rank 1 に。1 監視のみが言うものは rank を下げる
@@ -52,15 +52,30 @@ INTEGRATOR_PROMPT = """\
 def integrator_node(state: Config4State) -> dict:
     p_overrides = state.get("prompt_overrides", {}) or {}
     m_overrides = state.get("model_overrides", {}) or {}
-    model = m_overrides.get("integrator") or os.environ.get("BASELINE_MODEL", "claude-sonnet-4-5")
+    # integrator は最終統合で高品質な推論が要るため Sonnet をデフォルト維持。
+    # 必要に応じ RALLY_INTEGRATOR_MODEL で Opus 4.7 等に切替可能。
+    model = m_overrides.get("integrator") or os.environ.get(
+        "RALLY_INTEGRATOR_MODEL", "claude-sonnet-4-5"
+    )
     system_prompt = p_overrides.get("integrator", INTEGRATOR_PROMPT)
-    payload = {
-        "log_text": state["log_text"],
-        "orchestrator_decision": state.get("orchestrator_decision", {}),
+
+    # user を 2 ブロックに分割: ログ（安定）+ 動的部分（monitor_results / 履歴）。
+    # ログブロックには ephemeral キャッシュを設定する。
+    log_block = f"## ログ\n{state['log_text']}\n"
+    dynamic_payload = {
         "monitor_results": state.get("monitor_results", {}),
+        "delegation_history": state.get("delegation_history", []),
         "rally_round_completed": state.get("rally_round", 1),
     }
-    user_input = json.dumps(payload, ensure_ascii=False, indent=2)
+    dynamic_block = (
+        "## 委譲チェーン結果\n"
+        + json.dumps(dynamic_payload, ensure_ascii=False, indent=2)
+    )
+    user_blocks = [
+        {"type": "text", "text": log_block, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": dynamic_block},
+    ]
+    user_input = log_block + "\n\n" + dynamic_block  # token_log 保存用
 
     client = anthropic.Anthropic()
     started = time.perf_counter()
@@ -69,8 +84,14 @@ def integrator_node(state: Config4State) -> dict:
     response = client.messages.create(
         model=model,
         max_tokens=4000,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_input}],
+        system=[
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[{"role": "user", "content": user_blocks}],
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
     raw = response.content[0].text
@@ -88,16 +109,14 @@ def integrator_node(state: Config4State) -> dict:
         parsed["_raw_truncated"] = raw[-500:]
 
     return {
-        "integrator_result": parsed,
-        "token_log": [
-            {
-                "role": "integrator",
-                "model": model,
-                "tokens_in": response.usage.input_tokens,
-                "tokens_out": response.usage.output_tokens,
-                "latency_ms": latency_ms,
-                "input": user_input[:2000],
-                "raw_output": raw,
-            }
-        ],
+        "result": parsed,
+        "token_log_entry": {
+            "role": "integrator",
+            "model": model,
+            "tokens_in": response.usage.input_tokens,
+            "tokens_out": response.usage.output_tokens,
+            "latency_ms": latency_ms,
+            "input": user_input[:2000],
+            "raw_output": raw,
+        },
     }

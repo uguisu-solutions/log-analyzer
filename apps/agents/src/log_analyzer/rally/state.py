@@ -1,58 +1,55 @@
-"""構成4 stategraph 用の State スキーマ（LangGraph TypedDict）。
+"""構成4 (委譲型ラリー) 用の State スキーマ。
 
-各フィールドの reducer:
-- ``monitor_results``: 監視名（fw / routing / app）をキーとする dict マージ
-  （同じ監視が再呼出された場合は最新で上書き）
-- ``orchestrator_history``: list の concat（毎ラウンドの判断を蓄積）
-- ``token_log``: list の concat（全 LLM 呼び出しのトレース材料を蓄積）
-- それ以外: 上書き（後勝ち）
+旧版は LangGraph TypedDict + reducer による fan-out 型だったが、
+新版は「シングルアクティブな委譲チェーン」に置き換えた:
 
-設計メモ:
-- 旧 ``escalations`` / ``rally_targets_pending`` は廃止。判断は
-  すべて ``orchestrator_node`` に集約され、監視は escalate_to を返さない。
-- ``focus_hints`` はオーケストレータが次ラウンドの監視に渡す自然文の観点指示。
-  ``{slot_id: "観点"}`` 形式で、上書き reducer。
+    orchestrator (初回 1 回のみ、最初の監視を選ぶ)
+        → monitor_A (分析し、次ノードを 1 つ指名)
+        → monitor_B (同様)
+        → ...
+        → integrator (どこかの監視が指名)
+
+監視 → 監視 の連続遷移制約:
+    - 自己遷移禁止 (A → A)
+    - 直前と同じノード禁止 (A → B → A の即時 ping-pong)
+    違反時は integrator に自動フォールバック。
+
+ラウンド数 ≥ ``rally_confirmation_threshold`` の時点で、UI 側に
+``await_confirmation`` イベントを送って一時停止する。ユーザー応答で
+``rally_max_rounds`` を延長して再開するか、整理して integrator に移る。
 """
 from __future__ import annotations
 
-from operator import add
-from typing import Annotated, Any, TypedDict
-
-
-def _merge_dicts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
-    return {**left, **right}
+from typing import Any, TypedDict
 
 
 class Config4State(TypedDict, total=False):
     log_text: str
     log_ref: str
 
-    # オーケストレータの最新判断（action / invoke / focus_hints / rationale / round / forced）
-    orchestrator_decision: dict[str, Any]
+    # 委譲制御
+    current_node: str
+    # "orchestrator" / "fw" / "routing" / "app" / "dns" / "sec" / "integrator"
+    previous_node: str | None
+    pending_focus_hint: str  # current_node に渡す観点指示（前ノードからの引き継ぎ）
 
-    # 過去のオーケストレータ判断履歴（再入時にコンテキストとして渡す）
-    orchestrator_history: Annotated[list[dict[str, Any]], add]
+    # 各監視の最新結果（同じ監視が再呼出された場合は最新で上書き）
+    monitor_results: dict[str, Any]
 
-    # 各監視エージェントの最新結果（同じ監視が再呼出された場合は最新で上書き）
-    monitor_results: Annotated[dict[str, Any], _merge_dicts]
-
-    # 次ラウンドで監視に注入する観点指示（slot_id → 自然文ヒント、上書き）
-    focus_hints: dict[str, str]
+    # 委譲履歴（毎ステップ 1 件追記）
+    delegation_history: list[dict[str, Any]]
 
     # ラリー制御
-    rally_round: int  # オーケストレータが下したラウンド番号（初回呼出後 1 になる）
-    rally_max_rounds: int  # 既定 3。env RALLY_MAX_ROUNDS で上書き可
-    # 0 より大きいとき、min_rounds 未達で finalize を選ぶ LLM 出力を invoke に override する
-    # PoC のデモ目的（再入を確実に観測したい）。本番では 0 のままが正しい挙動
-    rally_force_min_rounds: int
+    rally_round: int
+    rally_max_rounds: int
+    rally_confirmation_threshold: int  # このラウンドに達したら UI 確認
 
     # 統合エージェントの出力
     integrator_result: dict[str, Any]
 
     # Langfuse 反映用に各 LLM 呼び出しの足跡を蓄積
-    token_log: Annotated[list[dict[str, Any]], add]
+    token_log: list[dict[str, Any]]
 
-    # ユーザー定義構成からのプロンプト/モデル上書き（slot_id → 上書き値）
-    # 上書きが無い slot はデフォルトを使う
+    # ユーザー定義構成からのプロンプト/モデル上書き
     prompt_overrides: dict[str, str]
     model_overrides: dict[str, str]

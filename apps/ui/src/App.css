@@ -1973,3 +1973,209 @@ code {
   font-size: 0.85em;
   margin-left: 0.5rem;
 }
+
+/* ─── リアルタイム実行ログ パネル ───────────────────────────── */
+.realtime-stream {
+  margin: 1.5rem 0;
+  border: 1px solid var(--border, #d0d4dc);
+  border-radius: 8px;
+  background: var(--bg-subtle, #f7f8fa);
+  padding: 0.75rem 1rem 1rem;
+}
+.realtime-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.realtime-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.realtime-count {
+  color: var(--text-muted, #777);
+  font-size: 0.85em;
+}
+.stream-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border, #e3e6ec);
+  border-radius: 6px;
+  background: #fff;
+}
+.stream-event {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border, #eef0f3);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+.stream-event:last-child {
+  border-bottom: none;
+}
+.stream-kind {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #444;
+  letter-spacing: 0.04em;
+}
+.stream-event.kind-orchestrator_decision .stream-kind,
+.stream-event.kind-orchestrator_start .stream-kind { color: #b15a00; }
+.stream-event.kind-monitor_decision .stream-kind,
+.stream-event.kind-monitor_start .stream-kind { color: #0a5fb7; }
+.stream-event.kind-await_confirmation { background: #fff8e1; }
+.stream-event.kind-await_confirmation .stream-kind { color: #b8860b; }
+.stream-event.kind-integrator_done .stream-kind,
+.stream-event.kind-integrator_start .stream-kind { color: #1a7f3e; }
+.stream-event.kind-error { background: #fdecea; }
+.stream-event.kind-error .stream-kind { color: #b3261e; }
+.stream-event.kind-final .stream-kind { color: #1a7f3e; font-weight: 700; }
+.stream-body { color: #222; }
+.stream-finding {
+  margin-top: 0.2rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid #cbd5e1;
+  color: #333;
+  font-size: 0.85em;
+}
+.stream-rationale {
+  margin-top: 0.15rem;
+  color: var(--text-muted, #555);
+  font-size: 0.82em;
+}
+.stream-error { color: #b3261e; }
+
+/* ─── 確認モーダル ─────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 24, 32, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+.modal {
+  background: #fff;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  max-width: 640px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.25);
+}
+.confirmation-modal h3 {
+  margin: 0 0 0.5rem;
+  color: #b8860b;
+}
+.modal-summary {
+  margin: 0 0 0.75rem;
+  color: #333;
+}
+.modal-history {
+  margin: 0.75rem 0;
+  border: 1px solid var(--border, #e3e6ec);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: #fafbfc;
+}
+.modal-history summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9em;
+}
+.modal-history ol {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+.mini-step {
+  margin: 0.2rem 0;
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+.mini-round {
+  display: inline-block;
+  min-width: 2em;
+  font-family: ui-monospace, "SF Mono", monospace;
+  color: #555;
+}
+.mini-arrow {
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+.mini-rationale {
+  color: var(--text-muted, #666);
+  font-style: italic;
+}
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+/* editor-actions / builder-toolbar 等と同じプライマリボタンスタイル。
+   外見統一のため共通の `<container> button` パターンに揃える。 */
+.modal-actions button {
+  padding: 0.4rem 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.modal-actions button:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+.modal-actions button:disabled {
+  background: var(--primary-disabled);
+  cursor: not-allowed;
+}
+.extend-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9em;
+  color: var(--text);
+}
+.extend-label input {
+  width: 4rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* ─── DelegationHistoryView 用の追加 ─────────────────────── */
+.conf-pill {
+  display: inline-block;
+  padding: 0.05em 0.5em;
+  background: #eaf3fb;
+  color: #0a5fb7;
+  border-radius: 999px;
+  font-size: 0.75em;
+  font-family: ui-monospace, "SF Mono", monospace;
+  margin-left: 0.25rem;
+}
+.orch-round.action-routing_violation_fallback { background: #fdecea; }
+.orch-round.action-max_rounds_finalize { background: #fff8e1; }
+.orch-round.action-user_finalize { background: #f1f3f5; }
+.orch-round.action-user_extend { background: #e8f5e9; }
+.action-badge.action-routing_violation_fallback { background: #b3261e; color: #fff; }
+.action-badge.action-max_rounds_finalize { background: #b8860b; color: #fff; }
+.action-badge.action-monitor_finalize { background: #1a7f3e; color: #fff; }
+.action-badge.action-monitor_delegation { background: #0a5fb7; color: #fff; }
+.action-badge.action-orchestrator_initial { background: #b15a00; color: #fff; }
+.action-badge.action-user_finalize { background: #555; color: #fff; }
+.action-badge.action-user_extend { background: #1a7f3e; color: #fff; }

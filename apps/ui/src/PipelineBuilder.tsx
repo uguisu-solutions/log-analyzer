@@ -57,17 +57,6 @@ const ROLE_STYLES: Record<PipelineNodeType, { bg: string; border: string }> = {
   output: { bg: '#fce7f3', border: '#db2777' },
 }
 
-function nodeBody(d: RFNodeData): string {
-  const parts: string[] = []
-  if (d.model) parts.push(d.model)
-  if (d.input_template) {
-    const tpl = d.input_template.replace(/\s+/g, ' ').trim()
-    if (tpl.length > 30) parts.push(tpl.slice(0, 28) + '…')
-    else parts.push(tpl)
-  }
-  return parts.join(' · ')
-}
-
 function makeRFNode(node: PipelineNode, fixed: boolean): Node<RFNodeData> {
   const style = ROLE_STYLES[node.type]
   return {
@@ -210,10 +199,6 @@ function PipelineBuilderInner(props: Props) {
 
   const editingUserId = editingConfigId?.startsWith('user:') ? Number(editingConfigId.split(':')[1]) : null
 
-  const fixedTypes = useMemo(
-    () => new Set(nodeTypeDefs.filter(t => t.fixed).map(t => t.type)),
-    [nodeTypeDefs],
-  )
   const editableTypes = useMemo(
     () => nodeTypeDefs.filter(t => !t.fixed),
     [nodeTypeDefs],
