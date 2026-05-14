@@ -59,16 +59,27 @@ def integrator_node(state: Config4State) -> dict:
     )
     system_prompt = p_overrides.get("integrator", INTEGRATOR_PROMPT)
 
-    # user を 2 ブロックに分割: ログ（安定）+ 動的部分（monitor_results / 履歴）。
-    # ログブロックには ephemeral キャッシュを設定する。
-    log_block = f"## ログ\n{state['log_text']}\n"
+    # user を 2 ブロックに分割: 元ログ（安定）+ 動的部分（monitor_results / 履歴 / 追加ログ）。
+    # 元ログブロックには ephemeral キャッシュを設定する（実行中に変化しないため）。
+    # ユーザーが解析中に投入した追加ログは動的ブロック側に入れることで
+    # キャッシュ無効化を避けつつ最終統合に確実に反映する。
+    log_block = f"## 元ログ\n{state['log_text']}\n"
+    appended_logs = state.get("appended_logs") or []
+    appended_text = ""
+    if appended_logs:
+        appended_text = "## 解析中に追加投入されたログ\n" + "\n\n".join(
+            f"### 追加ログ #{i + 1} (round {a.get('round_added', '?')} で投入、source={a.get('source', '?')})\n"
+            f"{a.get('content', '')}"
+            for i, a in enumerate(appended_logs)
+        ) + "\n\n"
     dynamic_payload = {
         "monitor_results": state.get("monitor_results", {}),
         "delegation_history": state.get("delegation_history", []),
         "rally_round_completed": state.get("rally_round", 1),
     }
     dynamic_block = (
-        "## 委譲チェーン結果\n"
+        appended_text
+        + "## 委譲チェーン結果\n"
         + json.dumps(dynamic_payload, ensure_ascii=False, indent=2)
     )
     user_blocks = [

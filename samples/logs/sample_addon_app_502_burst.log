@@ -1,0 +1,12 @@
+2026-05-06T14:22:43.512Z app-server-1 nginx: [error] 1234#0: *4012 upstream timed out (110: Connection timed out) while connecting to upstream, client: 10.0.40.21, server: app.example.internal, request: "GET /healthz HTTP/1.1", upstream: "http://10.0.20.5:80/healthz"
+2026-05-06T14:22:44.221Z app-server-1 nginx: [error] 1234#0: *4015 upstream timed out (110: Connection timed out) while connecting to upstream, client: 10.0.40.30, server: app.example.internal, request: "GET /api/orders HTTP/1.1"
+2026-05-06T14:22:44.987Z app-server-1 nginx: [warn] 1234#0: *4019 upstream server temporarily disabled while connecting to upstream, client: 10.0.40.30
+2026-05-06T14:22:45.118Z app-server-1 app[5512]: [WARN] downstream backend pool size dropped from 4 to 0 (all health checks failing for 10.0.20.5:80)
+2026-05-06T14:22:50.221Z app-server-1 nginx: 10.0.40.55 - - [06/May/2026:14:22:50 +0000] "POST /api/orders HTTP/1.1" 502 174 "-" "checkout-client/2.4"
+2026-05-06T14:22:51.118Z app-server-1 nginx: 10.0.40.71 - - [06/May/2026:14:22:51 +0000] "GET /api/customers/me HTTP/1.1" 502 174 "-" "Mozilla/5.0"
+2026-05-06T14:22:53.402Z app-server-1 nginx: 10.0.40.88 - - [06/May/2026:14:22:53 +0000] "GET /static/site.js HTTP/1.1" 502 174 "-" "Mozilla/5.0"
+2026-05-06T14:22:58.114Z app-server-1 app[5512]: [ERROR] circuit breaker OPEN for backend=10.0.20.5:80 failures=18/20 window=10s
+2026-05-06T14:23:05.221Z app-server-1 app[5512]: [WARN] queued request count exceeded soft limit q=842 client_subnet=10.0.40.0/24
+2026-05-06T14:23:18.014Z app-server-1 ops-bot: [INFO] auto-page sent owner=app-team severity=high summary="502 burst affecting 10.0.40.0/24, breaker open for 10.0.20.5:80"
+2026-05-06T14:23:30.221Z app-server-1 nginx: 10.0.40.55 - - [06/May/2026:14:23:30 +0000] "POST /api/orders HTTP/1.1" 502 174 "-" "checkout-client/2.4"
+2026-05-06T14:23:45.118Z app-server-1 app[5512]: [INFO] backend pool health: 0/4 (last successful probe was 63s ago)

@@ -174,7 +174,15 @@ async function* parseSSE(response: Response): AsyncGenerator<SSEEvent> {
 }
 
 // ─── リアルタイム実行ログ パネル ─────────────────────────────────
-function RealtimeStreamView({ events }: { events: SSEEvent[] }) {
+function RealtimeStreamView({
+  events,
+  canAppend,
+  onAppendClick,
+}: {
+  events: SSEEvent[]
+  canAppend: boolean
+  onAppendClick: () => void
+}) {
   const tailRef = useRef<HTMLOListElement | null>(null)
   useEffect(() => {
     if (tailRef.current) {
@@ -188,6 +196,11 @@ function RealtimeStreamView({ events }: { events: SSEEvent[] }) {
       <div className="realtime-header">
         <h3>リアルタイム実行ログ</h3>
         <span className="realtime-count">{events.length} イベント</span>
+        {canAppend && (
+          <button className="btn-append-log" onClick={onAppendClick}>
+            ＋ ログ追加
+          </button>
+        )}
       </div>
       <ol className="stream-events" ref={tailRef}>
         {events.map((ev, i) => (
@@ -235,6 +248,16 @@ function renderEventSummary(ev: SSEEvent): React.ReactNode {
           {' '}<small>(conf {Number(d.confidence ?? 0).toFixed(2)}, {String(d.tokens_in)}/{String(d.tokens_out)} tok)</small>
           {top && <div className="stream-finding">{top.category}: {top.summary}</div>}
           {d.rationale ? <div className="stream-rationale">理由: {String(d.rationale)}</div> : null}
+        </>
+      )
+    }
+    case 'log_appended': {
+      const content = String(d.content ?? '')
+      const preview = content.length > 200 ? content.slice(0, 200) + '…' : content
+      return (
+        <>
+          ＋ 追加ログ投入 <small>(source={String(d.source ?? '?')}, round_added={String(d.round_added ?? 0)}, {content.length} chars)</small>
+          <div className="stream-finding">{preview}</div>
         </>
       )
     }
@@ -307,6 +330,118 @@ function ConfirmationModal({ round, maxRounds, history, onContinue, onStop, busy
           </button>
           <button onClick={onStop} disabled={busy} className="btn-secondary">
             停止して integrator へ
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── 追加ログ投入モーダル ─────────────────────────────────────
+interface AddLogModalProps {
+  logs: LogEntry[]
+  busy: boolean
+  onSubmit: (content: string, source: string) => void
+  onClose: () => void
+}
+
+function AddLogModal({ logs, busy, onSubmit, onClose }: AddLogModalProps) {
+  const [mode, setMode] = useState<'paste' | 'sample'>('paste')
+  const [content, setContent] = useState<string>('')
+  const [source, setSource] = useState<string>('inline')
+  const [selectedSample, setSelectedSample] = useState<string>(logs[0]?.name ?? '')
+
+  const handleSubmit = () => {
+    if (mode === 'paste') {
+      if (!content.trim()) return
+      onSubmit(content, source.trim() || 'inline')
+    } else {
+      if (!selectedSample) return
+      // content 空 + source=ファイル名 でサーバ側読み込み
+      onSubmit('', selectedSample)
+    }
+  }
+
+  const canSubmit =
+    !busy &&
+    ((mode === 'paste' && content.trim().length > 0) ||
+      (mode === 'sample' && !!selectedSample))
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal append-log-modal">
+        <h3>解析中に追加のログを投入</h3>
+        <p className="modal-summary">
+          次の監視ノード / integrator の入力に含まれます。元ログは変更されません（caching 維持）。
+        </p>
+
+        <div className="append-mode-tabs">
+          <button
+            type="button"
+            className={mode === 'paste' ? 'tab active' : 'tab'}
+            onClick={() => setMode('paste')}
+            disabled={busy}
+          >
+            テキスト貼り付け
+          </button>
+          <button
+            type="button"
+            className={mode === 'sample' ? 'tab active' : 'tab'}
+            onClick={() => setMode('sample')}
+            disabled={busy || logs.length === 0}
+          >
+            samples/logs から選択
+          </button>
+        </div>
+
+        {mode === 'paste' && (
+          <>
+            <label className="append-field">
+              <span>source ラベル (任意)</span>
+              <input
+                type="text"
+                value={source}
+                onChange={e => setSource(e.target.value)}
+                placeholder="inline / 任意の識別子"
+                disabled={busy}
+              />
+            </label>
+            <label className="append-field">
+              <span>ログ本文</span>
+              <textarea
+                value={content}
+                onChange={e => setContent(e.target.value)}
+                rows={10}
+                disabled={busy}
+                placeholder="ここにログを貼り付けてください..."
+              />
+            </label>
+          </>
+        )}
+
+        {mode === 'sample' && (
+          <label className="append-field">
+            <span>samples/logs/ から選択</span>
+            <select
+              value={selectedSample}
+              onChange={e => setSelectedSample(e.target.value)}
+              disabled={busy}
+            >
+              {logs.map(l => (
+                <option key={l.name} value={l.name}>
+                  {l.name}（{l.lines} 行 / {l.bytes.toLocaleString()} bytes）
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        <div className="modal-actions">
+          <button onClick={handleSubmit} disabled={!canSubmit}>
+            投入する
+          </button>
+          <button onClick={onClose} disabled={busy} className="btn-secondary">
+            キャンセル
           </button>
         </div>
       </div>
@@ -410,6 +545,9 @@ function App() {
     delegation_history: DelegationEvent[]
   } | null>(null)
   const [decisionBusy, setDecisionBusy] = useState<boolean>(false)
+  // 追加ログ投入モーダル
+  const [addLogOpen, setAddLogOpen] = useState<boolean>(false)
+  const [appendBusy, setAppendBusy] = useState<boolean>(false)
 
   const selectedConfigEntry = configList.find(c => c.id === selectedConfig)
   const selectedBaseConfig = selectedConfigEntry?.base_config ?? ''
@@ -725,6 +863,25 @@ function App() {
     }
   }
 
+  const handleAppendLog = async (content: string, source: string) => {
+    if (!streamRunId) return
+    setAppendBusy(true)
+    setError(null)
+    try {
+      const r = await fetch(`${API_BASE}/api/runs/${streamRunId}/append-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, source }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+      setAddLogOpen(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAppendBusy(false)
+    }
+  }
+
   const handleDecision = async (action: 'continue' | 'stop', extendBy?: number) => {
     if (!streamRunId) return
     setDecisionBusy(true)
@@ -1009,7 +1166,11 @@ function App() {
 
           {/* 構成4 SSE ストリーミング中はリアルタイムログを表示 */}
           {streamEvents.length > 0 && (
-            <RealtimeStreamView events={streamEvents} />
+            <RealtimeStreamView
+              events={streamEvents}
+              canAppend={singleRunning && !!streamRunId}
+              onAppendClick={() => setAddLogOpen(true)}
+            />
           )}
 
           {singleResult && (
@@ -1038,6 +1199,16 @@ function App() {
           busy={decisionBusy}
           onContinue={extendBy => handleDecision('continue', extendBy)}
           onStop={() => handleDecision('stop')}
+        />
+      )}
+
+      {/* 追加ログ投入モーダル（構成4 ストリーム中のみ表示可能） */}
+      {addLogOpen && (
+        <AddLogModal
+          logs={logs}
+          busy={appendBusy}
+          onSubmit={handleAppendLog}
+          onClose={() => setAddLogOpen(false)}
         />
       )}
 

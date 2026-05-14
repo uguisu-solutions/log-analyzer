@@ -1996,6 +1996,26 @@ code {
   color: var(--text-muted, #777);
   font-size: 0.85em;
 }
+.btn-append-log {
+  margin-left: auto;
+  padding: 0.4rem 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-append-log:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+.btn-append-log:disabled {
+  background: var(--primary-disabled);
+  cursor: not-allowed;
+}
+.stream-event.kind-log_appended { background: #ecfdf5; }
+.stream-event.kind-log_appended .stream-kind { color: #047857; }
 .stream-events {
   list-style: none;
   margin: 0;
@@ -2155,6 +2175,64 @@ code {
   font-size: 0.875rem;
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+
+/* ─── 追加ログ投入モーダル ────────────────────────────────── */
+.append-log-modal h3 {
+  margin: 0 0 0.5rem;
+  color: #047857;
+}
+.append-mode-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.75rem 0 1rem;
+  border-bottom: 1px solid var(--border, #d0d4dc);
+}
+.append-mode-tabs .tab {
+  padding: 0.4rem 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: transparent;
+  color: var(--text-muted, #555);
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  border-radius: 0;
+}
+.append-mode-tabs .tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+.append-mode-tabs .tab:disabled {
+  color: var(--text-muted, #999);
+  cursor: not-allowed;
+}
+.append-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+}
+.append-field span {
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--text, #333);
+}
+.append-field input[type="text"],
+.append-field select,
+.append-field textarea {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.875rem;
+  border: 1px solid var(--border, #d0d4dc);
+  border-radius: 4px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.append-field textarea {
+  font-family: ui-monospace, "SF Mono", monospace;
+  resize: vertical;
+  min-height: 8rem;
 }
 
 /* ─── DelegationHistoryView 用の追加 ─────────────────────── */

@@ -267,6 +267,17 @@ class DecisionRequest(BaseModel):
     extend_by: int | None = None  # action="continue" のみ。既定 3
 
 
+class AppendLogRequest(BaseModel):
+    """実行中に追加投入するログ。
+
+    ``source`` は UI 上で由来を識別するためのラベル（ファイル名 / "inline" 等）、
+    ``content`` は追加するログ本文。
+    """
+
+    content: str
+    source: str = "inline"
+
+
 class SlotInfo(BaseModel):
     slot_id: str
     label: str
@@ -819,6 +830,11 @@ async def run_config(req: RunRequest) -> AnalysisResult:
 # /api/runs/{run_id}/decision がここに値を set する。
 _PENDING_DECISIONS: dict[str, asyncio.Future[dict]] = {}
 
+# {run_id: 追加ログキュー} — 実行中に投入されたログを次の監視 / integrator が
+# 取り込めるようにする。/api/runs/{run_id}/append-log が put、
+# run_rally_stream が drain する。
+_APPEND_QUEUES: dict[str, asyncio.Queue[dict]] = {}
+
 
 def _sse_bytes(kind: str, data: dict) -> bytes:
     """1 イベントを SSE フォーマットでエンコード。"""
@@ -852,6 +868,8 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
 
     log_text = log_path.read_text(encoding="utf-8", errors="replace")
     run_id = uuid4().hex
+    append_queue: asyncio.Queue[dict] = asyncio.Queue()
+    _APPEND_QUEUES[run_id] = append_queue
 
     async def _wait_for_decision() -> dict:
         loop = asyncio.get_running_loop()
@@ -873,6 +891,7 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
                 model_overrides=m_overrides,
                 rally_max_rounds=req.rally_max_rounds or 3,
                 decision_waiter=_wait_for_decision,
+                append_queue=append_queue,
             ):
                 yield _sse_bytes(ev.kind, ev.data)
                 if ev.kind == "final":
@@ -880,6 +899,8 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
         except Exception as e:
             yield _sse_bytes("error", {"message": str(e), "stage": "stream"})
             return
+        finally:
+            _APPEND_QUEUES.pop(run_id, None)
 
         # 履歴記録 (best-effort)
         if final_data is not None:
@@ -907,6 +928,49 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/runs/{run_id}/append-log")
+async def runs_append_log(run_id: str, req: AppendLogRequest) -> dict:
+    """実行中のストリームに追加ログを投入する。
+
+    キューに積まれたログは、次の監視 / integrator の実行開始時に rally_agent が
+    drain し、以降のノードの動的入力ブロックに含める。元の log_text は変更しない
+    （prompt caching を維持するため）。
+
+    ``source`` がサンプルログ名（``*.log``）であれば samples/logs/ から実体を読み込み、
+    ``content`` が空でもそのファイルの中身を投入する。両方指定された場合は
+    ``content`` を優先する。
+    """
+    queue = _APPEND_QUEUES.get(run_id)
+    if queue is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no active stream for run_id={run_id}",
+        )
+    content = (req.content or "").strip()
+    source = (req.source or "inline").strip() or "inline"
+    if not content and source.endswith(".log"):
+        # samples/logs/ から読み込みのフォールバック
+        try:
+            target = _safe_log_path(source)
+        except HTTPException as e:
+            raise e
+        if not target.exists():
+            raise HTTPException(
+                status_code=404, detail=f"log not found: {source}"
+            )
+        content = target.read_text(encoding="utf-8", errors="replace")
+    if not content:
+        raise HTTPException(status_code=400, detail="content または有効な source (.log) が必要")
+    await queue.put({"source": source, "content": content})
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "queued": queue.qsize(),
+        "source": source,
+        "bytes": len(content.encode("utf-8")),
+    }
 
 
 @app.post("/api/runs/{run_id}/decision")

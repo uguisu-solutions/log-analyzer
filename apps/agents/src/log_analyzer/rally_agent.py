@@ -41,6 +41,30 @@ from log_analyzer.tracing import flush, get_client
 DecisionWaiter = Callable[[], Awaitable[dict[str, Any]]]
 
 
+def _drain_appends(state: dict, append_queue) -> list[dict]:
+    """append_queue にキューされた追加ログを state に取り込み、追加されたエントリを返す。
+
+    各エントリには現時点の round を ``round_added`` として記録する。
+    UI 側がストリーム上でいつ・どのソースから追加されたかを表示できるようにするため。
+    """
+    if append_queue is None:
+        return []
+    added: list[dict] = []
+    while True:
+        try:
+            entry = append_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        record = {
+            "round_added": int(state.get("rally_round", 0)),
+            "source": str(entry.get("source", "inline")),
+            "content": str(entry.get("content", "")),
+        }
+        state.setdefault("appended_logs", []).append(record)
+        added.append(record)
+    return added
+
+
 @dataclass
 class StreamEvent:
     """SSE で UI に流す 1 イベント。"""
@@ -212,6 +236,7 @@ async def run_rally_stream(
     model_overrides: dict[str, str] | None = None,
     rally_max_rounds: int = 3,
     decision_waiter: DecisionWaiter | None = None,
+    append_queue: "asyncio.Queue[dict] | None" = None,
 ) -> AsyncIterator[StreamEvent]:
     """委譲チェーンを 1 ステップずつ実行しながら ``StreamEvent`` を yield する。
 
@@ -220,6 +245,9 @@ async def run_rally_stream(
             ``decision_waiter`` を呼んで継続可否をユーザーに問う。
             ``decision_waiter`` が None なら強制 finalize。
             ``continue`` 選択で ``rally_max_rounds`` が ``extend_by`` だけ延長される。
+        append_queue: ユーザーが実行中に追加投入したログを受け取るキュー。
+            各監視 / integrator の開始前にドレインし、以降の監視・integrator の
+            動的入力ブロックに含める。元の ``log_text`` は変更しない（caching 維持）。
     """
     state: dict[str, Any] = {
         "log_text": log_text,
@@ -234,6 +262,7 @@ async def run_rally_stream(
         "current_node": "orchestrator",
         "previous_node": None,
         "pending_focus_hint": "",
+        "appended_logs": [],
     }
 
     langfuse = get_client()
@@ -358,6 +387,11 @@ async def run_rally_stream(
             break
 
         # ─── 監視ノード実行 ──────────────────────────────────
+        # ユーザーが投入した追加ログをここで取り込み、以降の監視に反映させる。
+        # 元の log_text は変更しないので prompt caching の安定ブロックは維持される。
+        for record in _drain_appends(state, append_queue):
+            yield StreamEvent("log_appended", record)
+
         next_round = state["rally_round"] + 1
         state["rally_round"] = next_round
 
@@ -463,6 +497,10 @@ async def run_rally_stream(
             break
 
     # ─── 3. Integrator ───────────────────────────────────────────
+    # 統合直前にもう一度追加ログをドレインする（チェーン中の最終ノード後に
+    # 投入されたログを integrator が見られるようにするため）
+    for record in _drain_appends(state, append_queue):
+        yield StreamEvent("log_appended", record)
     yield StreamEvent("integrator_start", {})
     try:
         integ = await _run_sync(integrator_node, state)

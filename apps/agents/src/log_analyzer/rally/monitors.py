@@ -53,6 +53,7 @@ _NEXT_NODE_GUIDANCE = """\
 - 直前に処理したノードへの遷移も禁止（rally_agent が自動的に integrator にフォールバックする）
 - 既存の所見と矛盾しない、別観点で深掘りが必要な監視を選ぶ
 - 主要原因が裏付けられた・追加調査の価値が低い → "integrator" を選ぶ
+- 「解析中に追加投入されたログ」が user 入力にあれば、それも分析と次ノード判断に踏まえる
 - "focus_hint_for_next" は次ノードに渡す観点（next=integrator なら空文字）
 
 出力 (JSON のみ、コードフェンス不要):
@@ -140,12 +141,16 @@ def _build_user_blocks(
     focus_hint: str | None,
     previous_node: str | None,
     monitor_results: dict,
+    appended_logs: list[dict] | None = None,
 ) -> list[dict]:
     """user メッセージを安定部分 + 動的部分の 2 ブロックに分けて返す。
 
-    安定部分（ログ + tool 結果）に ``cache_control`` を立てると、同じ監視を
-    委譲チェーン内で複数回呼ぶ際 / 同じログに対する別構成での再実行で
-    キャッシュヒットが発生する。
+    安定部分（元 log + tool 結果）に ``cache_control`` を立てる。元 log と tool
+    結果は実行中変化しないので、同じ監視を委譲チェーン内で複数回呼ぶ場合 /
+    同じログに対する別構成での再実行でキャッシュヒットが発生する。
+
+    実行中にユーザーが投入した追加ログは **動的ブロック側** に入れることで
+    キャッシュ無効化を避けつつ、以降の監視へ確実に伝える。
     """
     stable = (
         f"## ログ\n{log}\n\n"
@@ -155,6 +160,18 @@ def _build_user_blocks(
         f"{json.dumps(service_config, ensure_ascii=False, indent=2)}\n"
     )
     dynamic_parts: list[str] = []
+    if appended_logs:
+        appended_text = "\n\n".join(
+            f"### 追加ログ #{i + 1} (round {a.get('round_added', '?')} で投入、source={a.get('source', '?')})\n"
+            f"{a.get('content', '')}"
+            for i, a in enumerate(appended_logs)
+        )
+        dynamic_parts.append(
+            "## 解析中に追加投入されたログ\n"
+            "以下は実行中にユーザーが追加で渡したログです。元ログと合わせて分析し、"
+            "次ノード判断にも反映してください。\n\n"
+            + appended_text
+        )
     if focus_hint:
         dynamic_parts.append(f"## 今ラウンドの観点指示\n{focus_hint}")
     if previous_node:
@@ -250,6 +267,7 @@ def _make_monitor(
             focus_hint,
             previous_for_prompt,
             state.get("monitor_results", {}) or {},
+            state.get("appended_logs") or [],
         )
         user_input = _blocks_to_text(user_blocks)
 

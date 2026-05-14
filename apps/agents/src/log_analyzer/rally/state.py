@@ -53,3 +53,9 @@ class Config4State(TypedDict, total=False):
     # ユーザー定義構成からのプロンプト/モデル上書き
     prompt_overrides: dict[str, str]
     model_overrides: dict[str, str]
+
+    # 解析実行中にユーザーが投入した追加ログ。
+    # 各エントリ: {"round_added": int, "source": str, "content": str}
+    # 安定ブロック (元 log_text) は変更せず、動的ブロックとして以降の監視 /
+    # integrator に渡すことで prompt caching を維持しつつ追加情報を反映する。
+    appended_logs: list[dict]
