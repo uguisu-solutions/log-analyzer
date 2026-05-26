@@ -27,11 +27,10 @@ function ResultDetails({ result }: { result: AnalysisResult }) {
     <>
       <DelegationHistoryView result={result} />
       <h3>根本原因候補（{result.root_cause_candidates.length}）</h3>
-      <ol className="candidates">
+      <ul className="candidates candidates-grid">
         {result.root_cause_candidates.map((c, i) => (
           <li key={i}>
             <span className={`badge cat-${c.category}`}>{c.category}</span>
-            <span className="rank">rank {c.rank}</span>
             <div className="summary-text">{c.summary}</div>
             <details>
               <summary>evidence ({c.evidence.length})</summary>
@@ -41,7 +40,7 @@ function ResultDetails({ result }: { result: AnalysisResult }) {
             </details>
           </li>
         ))}
-      </ol>
+      </ul>
 
       <h3>推奨アクション（{result.recommended_actions.length}）</h3>
       <ul className="actions">

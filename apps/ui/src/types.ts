@@ -128,10 +128,11 @@ export interface RunHistoryListResponse {
 }
 
 export interface RootCauseCandidate {
-  rank: number
   category: string
   summary: string
   evidence: string[]
+  // 旧 schema v0.1 互換: バックエンドが古いデータを返したときの保険。新規データには存在しない
+  rank?: number
 }
 
 export interface RecommendedAction {
@@ -265,3 +266,25 @@ export interface NodeAttachment {
 
 // nodeId → 添付ファイル群
 export type NodeAttachments = Record<string, NodeAttachment[]>
+
+// 問診票 (Phase B) ─────────────────────────────────────
+export interface QuestionnaireItem {
+  key: string
+  label: string
+  type: string  // "text" | "textarea" | "choice"
+  options: string[]
+  placeholder: string
+  required: boolean
+}
+
+export interface QuestionnaireTemplate {
+  id: number
+  name: string
+  description: string
+  items: QuestionnaireItem[]
+  created_at: string
+  updated_at: string
+}
+
+// {key: answer} の辞書
+export type QuestionnaireAnswers = Record<string, string>

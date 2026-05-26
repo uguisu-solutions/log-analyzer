@@ -61,8 +61,8 @@ def test_result_to_stage_output_extracts_summary_from_candidates():
         config_id=ConfigId.CONFIG4,
         input_log_ref="x",
         root_cause_candidates=[
-            RootCauseCandidate(rank=1, category=Category.FW, summary="lb-to-app-01 が欠落"),
-            RootCauseCandidate(rank=2, category=Category.NET, summary="下流のヘルスチェック失敗"),
+            RootCauseCandidate(category=Category.FW, summary="lb-to-app-01 が欠落"),
+            RootCauseCandidate(category=Category.NET, summary="下流のヘルスチェック失敗"),
         ],
         recommended_actions=[],
         confidence=0.8,
@@ -91,7 +91,7 @@ def test_build_final_result_aggregates_two_stages():
         delegation_rounds=2,
         suspected_node_ids=["fw-01"],
         suspected_node_findings=[SuspectedNodeFinding(node_id="fw-01", severity="primary")],
-        root_cause_candidates=[RootCauseCandidate(rank=1, category=Category.FW, summary="hypothesis")],
+        root_cause_candidates=[RootCauseCandidate(category=Category.FW, summary="hypothesis")],
         recommended_actions=[],
     )
     s2 = StageOutput(
@@ -103,7 +103,7 @@ def test_build_final_result_aggregates_two_stages():
             SuspectedNodeFinding(node_id="fw-01", severity="primary"),
             SuspectedNodeFinding(node_id="lb-01", severity="secondary"),
         ],
-        root_cause_candidates=[RootCauseCandidate(rank=1, category=Category.FW, summary="verified")],
+        root_cause_candidates=[RootCauseCandidate(category=Category.FW, summary="verified")],
         recommended_actions=[
             RecommendedAction(action="rollback", human_judgment_required=True, risk_level=RiskLevel.HIGH)
         ],
@@ -131,7 +131,7 @@ def test_build_final_result_abort_only_stage_one():
     s1 = StageOutput(
         stage="config", confidence=0.55, tokens_in=400, tokens_out=120,
         suspected_node_ids=["fw-01"],
-        root_cause_candidates=[RootCauseCandidate(rank=1, category=Category.FW, summary="guess only")],
+        root_cause_candidates=[RootCauseCandidate(category=Category.FW, summary="guess only")],
     )
     result = _build_final_result(
         stage_outputs=[s1], trace_id="trace-y", log_ref="aborted"
@@ -266,7 +266,6 @@ def _make_fake_rally(call_count: dict, distinguish_stage_two: bool = False):
             input_log_ref="x",
             root_cause_candidates=[
                 RootCauseCandidate(
-                    rank=1,
                     category=Category.FW,
                     summary="verified by logs" if is_stage_two else "cfg-only guess",
                 )

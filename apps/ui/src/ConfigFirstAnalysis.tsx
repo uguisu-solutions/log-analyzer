@@ -13,12 +13,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { DelegationHistoryView } from './DelegationHistoryView'
+import { QuestionnairePanel } from './QuestionnairePanel'
 import type {
   AnalysisResult,
   ConfigEntry,
   LogEntry,
   NodeAttachment,
   NodeAttachments,
+  QuestionnaireAnswers,
   SSEEvent,
   StageOutput,
   SuspectedNodeFinding,
@@ -112,6 +114,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   // 議事録「Configs 利用 ON/OFF」: true なら Stage 1 と人間承認をスキップして
   // Logs のみで 1 段階 rally する。同タブ内で「Configs あり vs なし」の比較評価を可能にする。
   const [skipConfigStage, setSkipConfigStage] = useState<boolean>(false)
+  // 問診票回答 (Phase B、揮発)
+  const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
 
   // ─── 2 段階実行状態 ──────────────────────────────────────────
   const [stageStatus, setStageStatus] = useState<StageStatus>('idle')
@@ -324,6 +328,7 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         node_logs: filteredAttachments(nodeLogs),
         node_configs: filteredAttachments(nodeConfigs),
         skip_config_stage: skipConfigStage,
+        questionnaire_answers: questionnaireAnswers,
       }
       const r = await fetch(`${API_BASE}/api/runs/config-first-stream`, {
         method: 'POST',
@@ -491,6 +496,12 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           )}
         </aside>
       </div>
+
+      <QuestionnairePanel
+        answers={questionnaireAnswers}
+        onAnswersChange={setQuestionnaireAnswers}
+        disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'}
+      />
 
       <div className="topology-mode-bar">
         <div className="mode-toggle">
@@ -774,15 +785,14 @@ function CombinedResultView({ result, stageOneOutput, stageTwoOutput, topology, 
       </ul>
 
       <h4>根本原因候補（{result.root_cause_candidates.length}）</h4>
-      <ol className="candidates">
+      <ul className="candidates candidates-grid">
         {result.root_cause_candidates.map((c, i) => (
           <li key={i}>
             <span className={`badge cat-${c.category}`}>{c.category}</span>
-            <span className="rank">rank {c.rank}</span>
             <div className="summary-text">{c.summary}</div>
           </li>
         ))}
-      </ol>
+      </ul>
 
       <h4>推奨アクション（{result.recommended_actions.length}）</h4>
       <ul className="actions">

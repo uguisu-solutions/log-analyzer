@@ -15,12 +15,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { GraphView } from './GraphView'
+import { QuestionnairePanel } from './QuestionnairePanel'
 import type {
   AnalysisResult,
   ConfigEntry,
   LogEntry,
   NodeAttachment,
   NodeAttachments,
+  QuestionnaireAnswers,
   SSEEvent,
   SuspectedNodeFinding,
   TopologyDef,
@@ -116,6 +118,8 @@ export function TopologyAnalysis({
   // 1 ノードに複数のログ / 設定ファイルを {name, content} として持てる
   const [nodeLogs, setNodeLogs] = useState<NodeAttachments>({})
   const [nodeConfigs, setNodeConfigs] = useState<NodeAttachments>({})
+  // 問診票回答 (Phase B、揮発)
+  const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
 
   // ─── 編集状態 ─────────────────────────────────────────────
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -396,6 +400,7 @@ export function TopologyAnalysis({
         },
         node_logs: filteredAttachments(nodeLogs),
         node_configs: filteredAttachments(nodeConfigs),
+        questionnaire_answers: questionnaireAnswers,
       }
       const r = await fetch(`${API_BASE}/api/runs/topology-stream`, {
         method: 'POST',
@@ -576,6 +581,12 @@ export function TopologyAnalysis({
           )}
         </aside>
       </div>
+
+      <QuestionnairePanel
+        answers={questionnaireAnswers}
+        onAnswersChange={setQuestionnaireAnswers}
+        disabled={running}
+      />
 
       <div className="topology-run-bar">
         <label>
@@ -915,11 +926,10 @@ function TopologyResultView({ result, langfuseHost, suspected, topology }: Topol
       )}
 
       <h4>根本原因候補（{result.root_cause_candidates.length}）</h4>
-      <ol className="candidates">
+      <ul className="candidates candidates-grid">
         {result.root_cause_candidates.map((c, i) => (
           <li key={i}>
             <span className={`badge cat-${c.category}`}>{c.category}</span>
-            <span className="rank">rank {c.rank}</span>
             <div className="summary-text">{c.summary}</div>
             {c.evidence.length > 0 && (
               <details>
@@ -931,7 +941,7 @@ function TopologyResultView({ result, langfuseHost, suspected, topology }: Topol
             )}
           </li>
         ))}
-      </ol>
+      </ul>
 
       <h4>推奨アクション（{result.recommended_actions.length}）</h4>
       <ul className="actions">

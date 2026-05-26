@@ -17,6 +17,11 @@
     POST   /api/runs/topology-stream          トポロジー + ノード別ログを構成4 で SSE 実行
     POST   /api/runs/config-first-stream      Config-First 2 段階 (Configs → 人間承認 → Logs) で SSE 実行
     POST   /api/runs/{run_id}/decision        確認モーダルからの継続 / 停止 / 進む / 中止指示を送る
+    GET    /api/questionnaires                問診票テンプレート一覧 (Phase B)
+    POST   /api/questionnaires                問診票テンプレート新規作成
+    GET    /api/questionnaires/{id}           問診票テンプレート取得
+    PUT    /api/questionnaires/{id}           問診票テンプレート更新
+    DELETE /api/questionnaires/{id}           問診票テンプレート削除 (default は不可)
 """
 from __future__ import annotations
 
@@ -40,7 +45,7 @@ from log_analyzer import pipeline_runner, prompt_slots, storage
 from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.rally_agent import StreamEvent, run_rally_stream
 from log_analyzer.rally_two_stage import run_two_stage_stream
-from log_analyzer.schema import AnalysisResult, StageOutput
+from log_analyzer.schema import AnalysisResult, QuestionnaireItem, QuestionnaireTemplate, StageOutput
 
 load_dotenv()
 storage.init_db()
@@ -316,6 +321,8 @@ class TopologyRunRequest(BaseModel):
     node_logs: dict[str, list[NodeAttachmentDTO]] = {}
     # 1 ノードに複数の設定ファイルを添付できる。同上の形式
     node_configs: dict[str, list[NodeAttachmentDTO]] = {}
+    # 問診票回答 {key: value} (Phase B)。空でも OK
+    questionnaire_answers: dict[str, str] = {}
     rally_max_rounds: int | None = None
     overrides: dict[str, str] | None = None
     model_overrides: dict[str, str] | None = None
@@ -356,10 +363,32 @@ def _normalize_attachments(
     return out
 
 
+def _build_questionnaire_block(answers: dict | None) -> str:
+    """問診票回答ブロック (Phase B)。
+
+    answers は {key: value} の辞書。空 / None なら "" を返す。
+    UI 側で人間が記入した「症状・影響範囲・直前の変更」等を LLM の最初の
+    user メッセージ冒頭に届ける。
+    """
+    if not answers:
+        return ""
+    lines: list[str] = ["## 問診票回答 (人間オペレータからの一次申告)"]
+    for k, v in answers.items():
+        s = str(v).strip()
+        if not s:
+            continue
+        lines.append(f"- **{k}**: {s}")
+    if len(lines) == 1:
+        return ""
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def _build_topology_log_text(
     topology: dict,
     node_logs: dict | None,
     node_configs: dict | None = None,
+    questionnaire_answers: dict | None = None,
 ) -> tuple[str, list[dict]]:
     """topology + ノード別添付 (logs / configs) から rally に渡す単一 log_text を構築。
 
@@ -466,7 +495,10 @@ def _build_topology_log_text(
     if orphan_ids:
         parts.append("(注: 未定義の node_id に添付が指定されました: " + ", ".join(orphan_ids) + ")")
 
-    return ("\n".join(parts) + "\n", nodes)
+    body = "\n".join(parts) + "\n"
+    # 問診票回答は最先頭に置く (LLM が最初に「人間が言ったこと」を読む構造)
+    questionnaire_block = _build_questionnaire_block(questionnaire_answers)
+    return (questionnaire_block + body, nodes)
 
 
 class AppendLogRequest(BaseModel):
@@ -1152,7 +1184,8 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
         _validate_overrides(base_config, p_overrides, m_overrides)
 
     log_text, normalized_nodes = _build_topology_log_text(
-        req.topology, req.node_logs, req.node_configs
+        req.topology, req.node_logs, req.node_configs,
+        questionnaire_answers=req.questionnaire_answers,
     )
     if not normalized_nodes:
         raise HTTPException(status_code=400, detail="topology.nodes が空")
@@ -1264,6 +1297,7 @@ class ConfigFirstRunRequest(BaseModel):
     topology: dict
     node_logs: dict[str, list[NodeAttachmentDTO]] = {}
     node_configs: dict[str, list[NodeAttachmentDTO]] = {}
+    questionnaire_answers: dict[str, str] = {}
     rally_max_rounds: int | None = None
     overrides: dict[str, str] | None = None
     model_overrides: dict[str, str] | None = None
@@ -1321,8 +1355,10 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
             )
 
     # 合成: Stage 1 (configs のみ) — skip 時は不要だが両モードで topology_context は共通
+    # 問診票回答は Stage 1 にも入れる (configs だけでなく人間の一次申告も読ませる)
     stage_one_log_text, _ = _build_topology_log_text(
-        req.topology, {}, req.node_configs
+        req.topology, {}, req.node_configs,
+        questionnaire_answers=req.questionnaire_answers,
     )
 
     # topology_context 共通
@@ -1356,7 +1392,8 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
         from log_analyzer.rally_two_stage import _build_stage_one_hypothesis_block
         hypothesis_block = _build_stage_one_hypothesis_block(stage_one_output)
         stage_two_body, _ = _build_topology_log_text(
-            req.topology, req.node_logs, req.node_configs
+            req.topology, req.node_logs, req.node_configs,
+            questionnaire_answers=req.questionnaire_answers,
         )
         return hypothesis_block + stage_two_body
 
@@ -1373,7 +1410,10 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
             },
         )
         # log_text は logs のみ (configs を含めない — Configs 利用 OFF の意図に合わせる)
-        skip_log_text, _ = _build_topology_log_text(req.topology, req.node_logs, {})
+        skip_log_text, _ = _build_topology_log_text(
+            req.topology, req.node_logs, {},
+            questionnaire_answers=req.questionnaire_answers,
+        )
         yield _sse_bytes(
             "stage_two_start",
             {"stage": "log", "stage_label": "Logs のみ単段解析 (skip mode)"},
@@ -1562,3 +1602,71 @@ async def runs_decision(run_id: str, req: DecisionRequest) -> dict:
         payload["extend_by"] = extend_by
     fut.set_result(payload)
     return {"ok": True, "run_id": run_id}
+
+
+# ─── 問診票テンプレート CRUD (Phase B) ──────────────────────────
+
+
+class QuestionnaireListResponse(BaseModel):
+    templates: list[QuestionnaireTemplate]
+
+
+class CreateQuestionnaireRequest(BaseModel):
+    name: str
+    description: str = ""
+    items: list[QuestionnaireItem] = []
+
+
+class UpdateQuestionnaireRequest(BaseModel):
+    description: str | None = None  # None なら据置
+    items: list[QuestionnaireItem] = []
+
+
+@app.get("/api/questionnaires", response_model=QuestionnaireListResponse)
+def list_questionnaires_endpoint() -> QuestionnaireListResponse:
+    rows = storage.list_questionnaires()
+    return QuestionnaireListResponse(
+        templates=[QuestionnaireTemplate(**r) for r in rows]
+    )
+
+
+@app.get("/api/questionnaires/{qid}", response_model=QuestionnaireTemplate)
+def get_questionnaire_endpoint(qid: int) -> QuestionnaireTemplate:
+    row = storage.get_questionnaire(qid)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"questionnaire id={qid} not found")
+    return QuestionnaireTemplate(**row)
+
+
+@app.post("/api/questionnaires", response_model=QuestionnaireTemplate)
+def create_questionnaire_endpoint(req: CreateQuestionnaireRequest) -> QuestionnaireTemplate:
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="name は必須")
+    try:
+        saved = storage.create_questionnaire(
+            req.name, req.description, [it.model_dump() for it in req.items]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"作成失敗: {e}")
+    return QuestionnaireTemplate(**saved)
+
+
+@app.put("/api/questionnaires/{qid}", response_model=QuestionnaireTemplate)
+def update_questionnaire_endpoint(qid: int, req: UpdateQuestionnaireRequest) -> QuestionnaireTemplate:
+    saved = storage.update_questionnaire(
+        qid, req.description, [it.model_dump() for it in req.items]
+    )
+    if saved is None:
+        raise HTTPException(status_code=404, detail=f"questionnaire id={qid} not found")
+    return QuestionnaireTemplate(**saved)
+
+
+@app.delete("/api/questionnaires/{qid}")
+def delete_questionnaire_endpoint(qid: int) -> dict:
+    try:
+        ok = storage.delete_questionnaire(qid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"questionnaire id={qid} not found")
+    return {"deleted": qid}

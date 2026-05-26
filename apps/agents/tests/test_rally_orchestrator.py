@@ -148,7 +148,7 @@ def _setup_three_step_chain(monkeypatch):
     }
     integrator_payload = {
         "root_cause_candidates": [
-            {"rank": 1, "category": "FW", "summary": "policy block", "evidence": ["..."]}
+            {"category": "FW", "summary": "policy block", "evidence": ["..."]}
         ],
         "recommended_actions": [
             {"action": "review policy", "human_judgment_required": True, "risk_level": "mid"}

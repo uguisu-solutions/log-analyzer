@@ -101,7 +101,65 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_run_history_log "
             "ON run_history(log_name)"
         )
+
+        # questionnaire_templates テーブル (Phase B)
+        # items_json は QuestionnaireItem の配列 JSON
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS questionnaire_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                items_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
+
+        # デフォルトテンプレを idempotent に投入 (初回起動時のみ)
+        _ensure_default_questionnaire(conn)
+        conn.commit()
+
+
+_DEFAULT_QUESTIONNAIRE_NAME = "default"
+_DEFAULT_QUESTIONNAIRE_ITEMS: list[dict] = [
+    {"key": "symptom_onset", "label": "症状はいつから発生していますか",
+     "type": "text", "options": [], "placeholder": "例: 2026-05-26 09:00 頃から", "required": False},
+    {"key": "scope", "label": "影響範囲",
+     "type": "choice", "options": ["全ユーザー", "特定ユーザー", "特定エリア / 拠点", "特定機能のみ", "不明"],
+     "placeholder": "", "required": False},
+    {"key": "reproducibility", "label": "再現性",
+     "type": "choice", "options": ["常に再現", "断続的", "1 回のみ", "不明"],
+     "placeholder": "", "required": False},
+    {"key": "recent_changes", "label": "直前の変更 (リリース / 設定変更 / 物理工事 等)",
+     "type": "textarea", "options": [], "placeholder": "例: 前日 18:30 に fw-01 のポリシ更新", "required": False},
+    {"key": "free_notes", "label": "その他の手掛かり",
+     "type": "textarea", "options": [], "placeholder": "ユーザーからの一次申告内容、tcpdump 結果 等を自由記述", "required": False},
+]
+
+
+def _ensure_default_questionnaire(conn: sqlite3.Connection) -> None:
+    """name='default' のテンプレが無ければ作成 (初回起動時のみ)。"""
+    row = conn.execute(
+        "SELECT id FROM questionnaire_templates WHERE name = ?",
+        (_DEFAULT_QUESTIONNAIRE_NAME,),
+    ).fetchone()
+    if row is not None:
+        return
+    now = _now_iso()
+    conn.execute(
+        "INSERT INTO questionnaire_templates "
+        "(name, description, items_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (
+            _DEFAULT_QUESTIONNAIRE_NAME,
+            "デフォルトの問診票 (議事録 2026-05-26 で合意した 5 項目)",
+            json.dumps(_DEFAULT_QUESTIONNAIRE_ITEMS, ensure_ascii=False),
+            now,
+            now,
+        ),
+    )
 
 
 @contextmanager
@@ -300,5 +358,87 @@ def get_run_history(run_id: int) -> dict | None:
 def delete_run_history(run_id: int) -> bool:
     with _connect() as conn:
         cursor = conn.execute("DELETE FROM run_history WHERE id = ?", (run_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+# ─── 問診票テンプレート CRUD (Phase B) ──────────────────────────
+
+_QUESTIONNAIRE_COLS = "id, name, description, items_json, created_at, updated_at"
+
+
+def _row_to_questionnaire(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    raw = d.pop("items_json", None)
+    d["items"] = json.loads(raw) if raw else []
+    return d
+
+
+def list_questionnaires() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_QUESTIONNAIRE_COLS} FROM questionnaire_templates ORDER BY updated_at DESC"
+        ).fetchall()
+    return [_row_to_questionnaire(r) for r in rows]
+
+
+def get_questionnaire(qid: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_QUESTIONNAIRE_COLS} FROM questionnaire_templates WHERE id = ?",
+            (qid,),
+        ).fetchone()
+    return _row_to_questionnaire(row) if row else None
+
+
+def create_questionnaire(name: str, description: str, items: list[dict]) -> dict:
+    if not name.strip():
+        raise ValueError("name は必須")
+    now = _now_iso()
+    payload = json.dumps(items, ensure_ascii=False)
+    with _connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO questionnaire_templates "
+            "(name, description, items_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (name.strip(), description or "", payload, now, now),
+        )
+        conn.commit()
+        qid = cursor.lastrowid
+    saved = get_questionnaire(qid) if qid else None
+    if saved is None:
+        raise RuntimeError("failed to retrieve questionnaire after insert")
+    return saved
+
+
+def update_questionnaire(qid: int, description: str | None, items: list[dict]) -> dict | None:
+    """description は None なら据置、items は常に上書き。name は不変 (rename 不可)。"""
+    now = _now_iso()
+    payload = json.dumps(items, ensure_ascii=False)
+    with _connect() as conn:
+        if description is None:
+            cursor = conn.execute(
+                "UPDATE questionnaire_templates SET items_json = ?, updated_at = ? WHERE id = ?",
+                (payload, now, qid),
+            )
+        else:
+            cursor = conn.execute(
+                "UPDATE questionnaire_templates SET description = ?, items_json = ?, updated_at = ? WHERE id = ?",
+                (description, payload, now, qid),
+            )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+    return get_questionnaire(qid)
+
+
+def delete_questionnaire(qid: int) -> bool:
+    """default テンプレ (name='default') は削除不可。"""
+    existing = get_questionnaire(qid)
+    if existing is None:
+        return False
+    if existing["name"] == _DEFAULT_QUESTIONNAIRE_NAME:
+        raise ValueError("default テンプレは削除できません")
+    with _connect() as conn:
+        cursor = conn.execute("DELETE FROM questionnaire_templates WHERE id = ?", (qid,))
         conn.commit()
         return cursor.rowcount > 0

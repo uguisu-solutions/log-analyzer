@@ -2907,3 +2907,135 @@ code {
   margin: 0.35rem 0 0 0;
   font-size: 0.8rem;
 }
+
+/* ─── Phase G: 根本原因候補を並列グリッド表示に (rank 撤去) ─── */
+.candidates.candidates-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.6rem;
+  list-style: none;
+  padding-left: 0;
+}
+.candidates.candidates-grid li {
+  background: var(--bg);
+  padding: 0.75rem;
+  border-radius: 4px;
+  border-left: 3px solid var(--border);
+  margin: 0;
+}
+/* rank バッジ自体は撤去済みだが、互換のため .rank class は残しておく (非表示) */
+.rank {
+  display: none;
+}
+
+/* ─── 問診票パネル (Phase B) ─────────────────────────── */
+.questionnaire-panel {
+  background: #fff;
+  border: 1px solid #e0e3e7;
+  border-radius: 6px;
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 0.6rem;
+}
+.questionnaire-panel > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.2rem 0;
+}
+.questionnaire-panel > summary::-webkit-details-marker { display: none; }
+.questionnaire-panel > summary::before {
+  content: '▶';
+  display: inline-block;
+  font-size: 0.7rem;
+  color: #888;
+  transition: transform 120ms;
+}
+.questionnaire-panel[open] > summary::before { transform: rotate(90deg); }
+.qp-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+.qp-meta {
+  font-size: 0.82rem;
+  color: #555;
+}
+.qp-count {
+  margin-left: 0.5rem;
+  background: #eaf3fb;
+  color: #084e96;
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  font-size: 0.78em;
+}
+.qp-hint {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: #888;
+}
+.qp-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px dashed #e0e3e7;
+  margin-bottom: 0.6rem;
+  flex-wrap: wrap;
+}
+.qp-template-select {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+.qp-template-select select {
+  min-width: 16rem;
+}
+.qp-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.6rem;
+}
+.qp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+.qp-item-label span {
+  font-weight: 600;
+}
+.qp-required {
+  font-style: normal;
+  margin-left: 0.4rem;
+  padding: 0.05em 0.4em;
+  background: #b3261e;
+  color: #fff;
+  border-radius: 3px;
+  font-size: 0.7em;
+}
+.qp-item input, .qp-item select, .qp-item textarea {
+  padding: 0.3rem 0.4rem;
+  border: 1px solid #d0d5db;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.qp-item textarea {
+  resize: vertical;
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+.qp-empty {
+  color: #aaa;
+  font-size: 0.85rem;
+}
+.qp-error {
+  background: #fdecea;
+  color: #7a0e08;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+}

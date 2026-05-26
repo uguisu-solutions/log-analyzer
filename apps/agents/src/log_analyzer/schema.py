@@ -38,7 +38,14 @@ class ConfigId(str, Enum):
 
 
 class RootCauseCandidate(BaseModel):
-    rank: int = Field(ge=1)
+    """根本原因候補 1 件。
+
+    schema v0.2 (2026-05-26) から ``rank`` フィールドを撤去。議事録
+    「解析結果は複数（ランキング形式ではなく）表示する」に対応し、
+    候補同士はフラットな並列として扱う。配列順は LLM 出力順を保持するが
+    UI は順位を強調せず、並列カードとして表示する。
+    """
+
     category: Category
     summary: str
     evidence: list[str] = Field(default_factory=list)
@@ -152,6 +159,38 @@ class DelegationEventDTO(BaseModel):
     confidence: float | None = None  # 監視の confidence（kind="monitor_*" のみ）
 
 
+class QuestionnaireItem(BaseModel):
+    """問診票の 1 設問 (Phase B)。
+
+    type:
+        - "text":   自由記述 1 行 (placeholder で例文を出せる)
+        - "textarea": 自由記述 複数行
+        - "choice": 選択式 (options 必須)
+    """
+
+    key: str
+    label: str
+    type: str = "text"  # "text" | "textarea" | "choice"
+    options: list[str] = Field(default_factory=list)
+    placeholder: str = ""
+    required: bool = False
+
+
+class QuestionnaireTemplate(BaseModel):
+    """問診票テンプレート (Phase B)。
+
+    SQLite ``questionnaire_templates`` テーブルに保存。デフォルトテンプレ
+    (id=1, name='default') は init_db 時に自動投入する。
+    """
+
+    id: int
+    name: str
+    description: str = ""
+    items: list[QuestionnaireItem] = Field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
+
+
 def _default_trace_id() -> str:
     """trace_id の既定値: UUID4 を文字列で返す。
 
@@ -162,7 +201,7 @@ def _default_trace_id() -> str:
 
 
 class AnalysisResult(BaseModel):
-    schema_version: str = "v0.1"
+    schema_version: str = "v0.2"
     # Langfuse が発行する trace ID（文字列）。UI のリンク生成と Langfuse UI 上の
     # 該当トレースを開く URL に直接使う。
     trace_id: str = Field(default_factory=_default_trace_id)

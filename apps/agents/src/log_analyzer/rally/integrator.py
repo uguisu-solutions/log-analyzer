@@ -21,7 +21,8 @@ INTEGRATOR_PROMPT = """\
 （root_cause_candidates, recommended_actions, confidence）を構築してください。
 
 統合ルール:
-- 複数監視で支持された原因を rank 1 に。1 監視のみが言うものは rank を下げる
+- 複数監視で支持された原因を配列先頭に。1 監視のみが言うものは後方に
+  ※候補同士は並列扱い (UI 上もランキングではなくフラット表示)。「rank 1」の概念は撤去
 - recommended_actions: ロールバック・再起動・設定変更・データ削除を伴うアクションは
   必ず `human_judgment_required: true`（議事録 L3、外せないフラグ）。
   各監視が立てた true は統合後も維持し、false に上書きしない
@@ -34,7 +35,7 @@ INTEGRATOR_PROMPT = """\
 出力 (JSON のみ):
 {
   "root_cause_candidates": [
-    {"rank": 1, "category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["..."]}
+    {"category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["..."]}
   ],
   "recommended_actions": [
     {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high"}
@@ -57,7 +58,7 @@ INTEGRATOR_PROMPT = """\
 トポロジー時の出力例（参考）:
 ```
 {
-  "root_cause_candidates": [{"rank": 1, "category": "FW", "summary": "...", "evidence": ["..."]}],
+  "root_cause_candidates": [{"category": "FW", "summary": "...", "evidence": ["..."]}],
   "recommended_actions": [{"action": "...", "human_judgment_required": true, "risk_level": "high"}],
   "confidence": 0.85,
   "suspected_nodes": [

@@ -1,7 +1,9 @@
-# Config-First 2 段階解析 — 設計ドキュメント (Phase A + A.5)
+# Config-First 2 段階解析 — 設計ドキュメント (Phase A + A.5 + G + B)
 
 **作成日**: 2026-05-26
-**更新日**: 2026-05-26 (A.5 Configs ON/OFF トグル追記)
+**更新日**:
+  - 2026-05-26 — A.5 Configs ON/OFF トグル追記
+  - 2026-05-26 — Phase G (rank 撤去 + schema v0.2) と Phase B (問診票) を追記
 **ブランチ**: `feature/config-first-stages`
 **前提**: 既存のトポロジー解析タブ ([feature/topology-analysis](../reports/poc_progress_2026-05-25.md)) が `main` 取り込み待ち。本機能はそこから派生する後続フェーズ。
 
@@ -326,6 +328,109 @@ final                          ← stage_outputs = [stage="log"] 1 件のみ
 議事録の **「精度・速度・コスト」3 軸評価** で `Configs あり vs なし` の比較が
 同タブ内で完結する。同じシナリオを `ON` と `OFF` で順に実行し、
 suspected_node_ids の一致率 / confidence / tokens / latency_ms_total を突き合わせる。
+
+---
+
+## 9.6. Phase G: rank 撤去 + schema v0.2
+
+議事録「解析結果は複数（ランキング形式ではなく）表示する」に対応。
+
+| 項目 | 変更 |
+|---|---|
+| `RootCauseCandidate.rank` | **削除** (Pydantic デフォルトで extra=ignore のため旧データ互換) |
+| `AnalysisResult.schema_version` | `v0.1` → `v0.2` (default) |
+| 各構成 (config1〜5) のプロンプト | `rank 1` 等の順位言及を削除、「並列扱い」と明記 |
+| UI | `<ol class="candidates">` → `<ul class="candidates candidates-grid">` のグリッド表示、rank バッジ撤去 |
+
+旧データを読む経路 (run_history 等) では `rank` フィールドが残っている可能性があるが、
+Pydantic のデフォルト挙動 (extra fields 無視) と UI 側の optional 型 (`rank?: number`)
+で互換維持。新規データには rank フィールド自体が含まれない。
+
+---
+
+## 9.7. Phase B: 問診票機能
+
+議事録「問診票を基にエージェントが実行でき、途中での要望差し込みも可能」に対応。
+
+### スキーマ
+
+```python
+class QuestionnaireItem:
+    key: str        # 答えの辞書 key (system prompt にも露出)
+    label: str      # 表示ラベル
+    type: str       # "text" | "textarea" | "choice"
+    options: list[str]    # type=="choice" の選択肢
+    placeholder: str
+    required: bool
+
+class QuestionnaireTemplate:
+    id: int
+    name: str            # ユニーク。"default" は削除不可
+    description: str
+    items: list[QuestionnaireItem]
+    created_at, updated_at
+```
+
+### SQLite テーブル
+
+```sql
+questionnaire_templates(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    items_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+```
+
+`init_db()` 時に `name='default'` のテンプレを idempotent に投入する。
+議事録合意の 5 項目 (`symptom_onset` / `scope` / `reproducibility` / `recent_changes` / `free_notes`) を含む。
+
+### CRUD エンドポイント
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| GET | `/api/questionnaires` | 一覧 |
+| GET | `/api/questionnaires/{id}` | 個別取得 |
+| POST | `/api/questionnaires` | 新規作成 |
+| PUT | `/api/questionnaires/{id}` | 更新 (items 差し替え) |
+| DELETE | `/api/questionnaires/{id}` | 削除 (`default` は 400) |
+
+### 実行リクエストへの注入
+
+`TopologyRunRequest` と `ConfigFirstRunRequest` に `questionnaire_answers: dict[str, str] = {}` を追加。
+`_build_topology_log_text` の最先頭に `## 問診票回答` ブロックを差し込む形で LLM に渡す:
+
+```
+## 問診票回答 (人間オペレータからの一次申告)
+- **symptom_onset**: 2026-05-26 09:00 頃から
+- **scope**: 特定ユーザー
+- **recent_changes**: 前日 18:30 に fw-01 のポリシ更新
+...
+
+## トポロジー要約
+...
+```
+
+Config-First では Stage 1 / Stage 2 双方の log_text に同じ問診票ブロックが入る。
+LLM は **最初に「人間が言ったこと」を読んでから** configs / logs に進む構造。
+
+### UI
+
+新コンポーネント `QuestionnairePanel.tsx` を作成し、トポロジー解析タブと
+Config-First 解析タブの両方で同じ部品を再利用:
+
+- 折りたたみ可能 (`<details>` 要素、既定: 折りたたみ)
+- テンプレ選択ドロップダウン (`default` を含む)
+- type 別レンダリング: `text` → input, `textarea` → textarea, `choice` → select
+- 回答件数バッジ ("3/5" 等)
+- 「回答をクリア」ボタン
+
+回答は **揮発状態** (実行のたびに毎回入力)。永続化は意図的に省略
+(機微情報が誤って残ることを避けるため)。テンプレ管理 UI (作成 / 編集モーダル) は
+本フェーズでは API のみ提供、UI 追加は将来 (Phase F の比較ベンチマーク作業中に
+「問診票あり vs なし」を切り替えやすくする際に必要になれば実装)。
 
 ---
 
