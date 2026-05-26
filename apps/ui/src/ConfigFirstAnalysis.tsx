@@ -13,9 +13,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { AuditReportView } from './AuditReportView'
+import { ChatHistoryView } from './ChatHistoryView'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { RoundMetricsView } from './RoundMetricsView'
+import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import type {
   AnalysisResult,
@@ -122,6 +124,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
   // 監査エージェント (Phase C): Stage 2 の integrator 後 (または abort 時は Stage 1) に GPT で独立検証
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
+  // 表示モード (Phase E)
+  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
 
   // ─── 2 段階実行状態 ──────────────────────────────────────────
   const [stageStatus, setStageStatus] = useState<StageStatus>('idle')
@@ -633,21 +637,28 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
       {(stageStatus === 'completed' || stageStatus === 'aborted') && finalResult && (
         <section className="topology-result">
           <h3>解析結果</h3>
-          <ResultTabs
-            current={resultTab}
-            onChange={setResultTab}
-            hasStage2={!!stageTwoOutput}
-            stageOneOutput={stageOneOutput}
-            stageTwoOutput={stageTwoOutput}
-          />
-          {resultTab === 'combined' && (
-            <CombinedResultView result={finalResult} stageOneOutput={stageOneOutput} stageTwoOutput={stageTwoOutput} topology={topology} langfuseHost={langfuseHost} />
-          )}
-          {resultTab === 'stage1' && stageOneOutput && (
-            <StageResultView stage={stageOneOutput} topology={topology} />
-          )}
-          {resultTab === 'stage2' && stageTwoOutput && (
-            <StageResultView stage={stageTwoOutput} topology={topology} />
+          <ViewModeToggle mode={viewMode} onChange={setViewMode} />
+          {viewMode === 'chat' ? (
+            <ChatHistoryView result={finalResult} questionnaireAnswers={questionnaireAnswers} />
+          ) : (
+            <>
+              <ResultTabs
+                current={resultTab}
+                onChange={setResultTab}
+                hasStage2={!!stageTwoOutput}
+                stageOneOutput={stageOneOutput}
+                stageTwoOutput={stageTwoOutput}
+              />
+              {resultTab === 'combined' && (
+                <CombinedResultView result={finalResult} stageOneOutput={stageOneOutput} stageTwoOutput={stageTwoOutput} topology={topology} langfuseHost={langfuseHost} />
+              )}
+              {resultTab === 'stage1' && stageOneOutput && (
+                <StageResultView stage={stageOneOutput} topology={topology} />
+              )}
+              {resultTab === 'stage2' && stageTwoOutput && (
+                <StageResultView stage={stageTwoOutput} topology={topology} />
+              )}
+            </>
           )}
         </section>
       )}

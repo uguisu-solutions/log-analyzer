@@ -14,9 +14,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { AuditReportView } from './AuditReportView'
+import { ChatHistoryView } from './ChatHistoryView'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { RoundMetricsView } from './RoundMetricsView'
+import { ViewModeToggle } from './ViewModeToggle'
 import { GraphView } from './GraphView'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import type {
@@ -146,6 +148,8 @@ export function TopologyAnalysis({
   const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
   // 監査エージェント (Phase C): integrator 後に GPT で独立検証するか
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
+  // 表示モード (Phase E): 標準 / チャット
+  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
 
   const [running, setRunning] = useState(false)
   const [streamEvents, setStreamEvents] = useState<SSEEvent[]>([])
@@ -694,7 +698,17 @@ export function TopologyAnalysis({
       )}
 
       {result && (
-        <TopologyResultView result={result} langfuseHost={langfuseHost} suspected={suspectedSet} topology={topology} />
+        <>
+          <ViewModeToggle mode={viewMode} onChange={setViewMode} />
+          {viewMode === 'standard' ? (
+            <TopologyResultView result={result} langfuseHost={langfuseHost} suspected={suspectedSet} topology={topology} />
+          ) : (
+            <section className="topology-result">
+              <h3>解析結果 (チャット表示)</h3>
+              <ChatHistoryView result={result} questionnaireAnswers={questionnaireAnswers} />
+            </section>
+          )}
+        </>
       )}
 
       {/* rally_max_rounds 到達時の継続/停止モーダル */}

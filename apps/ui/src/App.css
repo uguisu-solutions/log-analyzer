@@ -3176,3 +3176,122 @@ code {
   font-size: 0.78rem;
   color: #1a1a1a;
 }
+
+/* ─── 表示モード切替 + チャット形式 (Phase E) ─────────── */
+.view-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  background: #f6f7f9;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.6rem;
+}
+.view-mode-label {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #333;
+}
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.5rem 0;
+}
+.chat-message {
+  display: flex;
+  gap: 0.6rem;
+  max-width: 92%;
+}
+.chat-message.chat-human {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+.chat-avatar {
+  font-size: 1.4rem;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.chat-bubble {
+  flex: 1;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+}
+.chat-message.chat-human .chat-bubble {
+  background: #eaf3fb;
+  border-color: #b6d4f0;
+}
+.chat-message.chat-agent .chat-bubble {
+  background: #fffaef;
+  border-color: #f0e0b6;
+}
+.chat-message.chat-integrator .chat-bubble {
+  background: #fdf2f8;
+  border-color: #f0c0d8;
+}
+.chat-message.chat-audit .chat-bubble {
+  background: #e7f5ec;
+  border-color: #b0d4be;
+}
+.chat-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.3rem;
+}
+.chat-speaker {
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+.chat-tag {
+  background: #e0e3e7;
+  color: #555;
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  font-size: 0.72rem;
+}
+.chat-metric {
+  font-size: 0.74rem;
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+.chat-body {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.chat-body p { margin: 0.3rem 0; }
+.chat-arrow { color: #555; }
+.chat-rationale { color: #1a1a1a; }
+.chat-focus { color: #084e96; }
+.chat-confidence { color: #444; }
+.chat-section-title {
+  margin-top: 0.5rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #555;
+}
+.chat-causes, .chat-actions, .chat-concerns, .chat-alternatives, .chat-qa-list {
+  margin: 0.2rem 0 0 1.2rem;
+  padding: 0;
+}
+.chat-causes li, .chat-actions li, .chat-concerns li, .chat-alternatives li, .chat-qa-list li {
+  margin: 0.2rem 0;
+}
+.chat-qa-list li {
+  font-size: 0.88rem;
+}
+.chat-meta {
+  font-size: 0.74rem;
+  margin-top: 0.4rem;
+}
