@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
+import { AuditReportView } from './AuditReportView'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { GraphView } from './GraphView'
@@ -142,6 +143,8 @@ export function TopologyAnalysis({
     }
   }, [rallyConfigs, selectedConfig])
   const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
+  // 監査エージェント (Phase C): integrator 後に GPT で独立検証するか
+  const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
 
   const [running, setRunning] = useState(false)
   const [streamEvents, setStreamEvents] = useState<SSEEvent[]>([])
@@ -411,6 +414,7 @@ export function TopologyAnalysis({
         node_logs: filteredAttachments(nodeLogs),
         node_configs: filteredAttachments(nodeConfigs),
         questionnaire_answers: questionnaireAnswers,
+        audit_after_integrator: auditAfterIntegrator,
       }
       const r = await fetch(`${API_BASE}/api/runs/topology-stream`, {
         method: 'POST',
@@ -656,6 +660,15 @@ export function TopologyAnalysis({
             onChange={e => setRallyMaxRounds(Math.max(1, Math.min(20, Number(e.target.value) || 3)))}
             disabled={running}
           />
+        </label>
+        <label className="audit-toggle">
+          <input
+            type="checkbox"
+            checked={auditAfterIntegrator}
+            onChange={e => setAuditAfterIntegrator(e.target.checked)}
+            disabled={running}
+          />
+          <span>GPT 監査も実行</span>
         </label>
         <button onClick={run} disabled={!canRun}>
           {running ? '解析中...' : 'トポロジー解析を実行'}
@@ -1010,6 +1023,9 @@ function TopologyResultView({ result, langfuseHost, suspected, topology }: Topol
           </li>
         ))}
       </ul>
+
+      {/* 監査エージェント (Phase C) の所見 */}
+      {result.audit_report && <AuditReportView report={result.audit_report} />}
 
       {/* 実際に動いたワークフロー: 委譲チェーン履歴 + 実行グラフ */}
       <h4>解析ワークフロー</h4>

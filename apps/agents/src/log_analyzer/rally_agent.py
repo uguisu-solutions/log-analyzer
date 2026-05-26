@@ -298,6 +298,7 @@ async def run_rally_stream(
     decision_waiter: DecisionWaiter | None = None,
     append_queue: "asyncio.Queue[dict] | None" = None,
     topology_context: dict | None = None,
+    audit_after_integrator: bool = False,
 ) -> AsyncIterator[StreamEvent]:
     """委譲チェーンを 1 ステップずつ実行しながら ``StreamEvent`` を yield する。
 
@@ -616,6 +617,34 @@ async def run_rally_stream(
         wall_ms=wall_ms,
         topology_node_ids=topology_node_ids or None,
     )
+
+    # ─── 5. 監査エージェント (Phase C, オプション) ─────────────────
+    if audit_after_integrator:
+        from log_analyzer.audit_agent import run_audit  # 遅延 import (依存軽量化)
+        yield StreamEvent("audit_start", {"model_hint": "gpt-4o-mini"})
+        try:
+            audit = await _run_sync(
+                run_audit, log_text, topology_context, result
+            )
+        except Exception as e:
+            yield StreamEvent("error", {"stage": "audit", "message": str(e)})
+            audit = None
+        if audit is not None:
+            result.audit_report = audit
+            yield StreamEvent(
+                "audit_done",
+                {
+                    "verdict": audit.verdict,
+                    "confidence": audit.confidence,
+                    "concerns": len(audit.concerns),
+                    "alternatives": len(audit.alternative_hypotheses),
+                    "tokens_in": audit.tokens_in,
+                    "tokens_out": audit.tokens_out,
+                    "latency_ms": audit.latency_ms,
+                    "model": audit.model,
+                },
+            )
+
     trace.update(output=result.model_dump(mode="json"))
     flush()
     yield StreamEvent("final", {"result": result.model_dump(mode="json")})

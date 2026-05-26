@@ -197,6 +197,7 @@ async def run_two_stage_stream(
     model_overrides: dict[str, str] | None = None,
     rally_max_rounds: int = 3,
     decision_waiter: TwoStageDecisionWaiter | None = None,
+    audit_after_integrator: bool = False,
 ) -> AsyncIterator[StreamEvent]:
     """Config-First 2 段階解析の SSE ストリーミング実行。
 
@@ -279,6 +280,9 @@ async def run_two_stage_stream(
             trace_id=overall_trace_id,
             log_ref=log_ref,
         )
+        if audit_after_integrator:
+            async for ev in _attach_audit(final, stage_one_log_text, topology_context):
+                yield ev
         yield StreamEvent("final", {"result": final.model_dump(mode="json")})
         return
     if action != "advance":
@@ -336,4 +340,47 @@ async def run_two_stage_stream(
         trace_id=overall_trace_id or stage_two_output.trace_id,
         log_ref=log_ref,
     )
+    if audit_after_integrator:
+        # Stage 2 まで進んだ場合は Stage 2 のログテキストで監査
+        async for ev in _attach_audit(final, stage_two_log_text, topology_context):
+            yield ev
     yield StreamEvent("final", {"result": final.model_dump(mode="json")})
+
+
+async def _attach_audit(
+    final: AnalysisResult,
+    log_text_for_audit: str,
+    topology_context: dict,
+) -> AsyncIterator[StreamEvent]:
+    """最終 AnalysisResult に対して監査 (Phase C) を 1 回実行する補助関数。
+
+    GPT-4o-mini で独立検証し、結果を ``final.audit_report`` にセットする。
+    SSE イベントは audit_start / audit_done。失敗時は uncertain で続行
+    (本流の final emit を妨げない)。
+    """
+    import asyncio as _aio
+    from log_analyzer.audit_agent import run_audit
+
+    yield StreamEvent("audit_start", {"model_hint": "gpt-4o-mini"})
+    loop = _aio.get_running_loop()
+    try:
+        audit = await loop.run_in_executor(
+            None, lambda: run_audit(log_text_for_audit, topology_context, final)
+        )
+    except Exception as e:
+        yield StreamEvent("error", {"stage": "audit", "message": str(e)})
+        return
+    final.audit_report = audit
+    yield StreamEvent(
+        "audit_done",
+        {
+            "verdict": audit.verdict,
+            "confidence": audit.confidence,
+            "concerns": len(audit.concerns),
+            "alternatives": len(audit.alternative_hypotheses),
+            "tokens_in": audit.tokens_in,
+            "tokens_out": audit.tokens_out,
+            "latency_ms": audit.latency_ms,
+            "model": audit.model,
+        },
+    )

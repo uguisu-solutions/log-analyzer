@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
+import { AuditReportView } from './AuditReportView'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { QuestionnairePanel } from './QuestionnairePanel'
@@ -118,6 +119,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const [skipConfigStage, setSkipConfigStage] = useState<boolean>(false)
   // 問診票回答 (Phase B、揮発)
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
+  // 監査エージェント (Phase C): Stage 2 の integrator 後 (または abort 時は Stage 1) に GPT で独立検証
+  const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
 
   // ─── 2 段階実行状態 ──────────────────────────────────────────
   const [stageStatus, setStageStatus] = useState<StageStatus>('idle')
@@ -337,6 +340,7 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         node_configs: filteredAttachments(nodeConfigs),
         skip_config_stage: skipConfigStage,
         questionnaire_answers: questionnaireAnswers,
+        audit_after_integrator: auditAfterIntegrator,
       }
       const r = await fetch(`${API_BASE}/api/runs/config-first-stream`, {
         method: 'POST',
@@ -564,6 +568,12 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           <input type="number" min={1} max={20} value={rallyMaxRounds}
             onChange={e => setRallyMaxRounds(Math.max(1, Math.min(20, Number(e.target.value) || 3)))}
             disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running'} />
+        </label>
+        <label className="audit-toggle">
+          <input type="checkbox" checked={auditAfterIntegrator}
+            onChange={e => setAuditAfterIntegrator(e.target.checked)}
+            disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running'} />
+          <span>GPT 監査も実行</span>
         </label>
         <button onClick={run} disabled={!canRun}>
           {stageStatus === 'stage1_running' ? 'Stage 1 実行中…'
@@ -842,6 +852,9 @@ function CombinedResultView({ result, stageOneOutput, stageTwoOutput, topology, 
           </li>
         ))}
       </ul>
+
+      {/* 監査エージェント (Phase C) の所見 */}
+      {result.audit_report && <AuditReportView report={result.audit_report} />}
     </>
   )
 }
@@ -871,6 +884,7 @@ function StageResultView({ stage, topology }: StageResultViewProps) {
     suspected_node_ids: stage.suspected_node_ids,
     suspected_node_findings: stage.suspected_node_findings,
     stage_outputs: [],
+    audit_report: null,
   }
   return (
     <>

@@ -3039,3 +3039,60 @@ code {
   margin-bottom: 0.4rem;
   font-size: 0.85rem;
 }
+
+/* ─── 監査エージェント (Phase C) ───────────────────── */
+.audit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  color: #444;
+}
+.audit-report {
+  margin-top: 1rem;
+  padding: 0.8rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+.audit-report.audit-agree { border-left: 5px solid #1a7f3e; background: #e7f5ec; }
+.audit-report.audit-partial { border-left: 5px solid #b8860b; background: #fff8e1; }
+.audit-report.audit-disagree { border-left: 5px solid #b3261e; background: #fdecea; }
+.audit-report.audit-uncertain { border-left: 5px solid #888; background: #f3f4f6; }
+.audit-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.audit-header h4 { margin: 0; font-size: 1rem; }
+.audit-verdict-badge {
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #fff;
+}
+.audit-verdict-badge.audit-agree { background: #1a7f3e; }
+.audit-verdict-badge.audit-partial { background: #b8860b; }
+.audit-verdict-badge.audit-disagree { background: #b3261e; }
+.audit-verdict-badge.audit-uncertain { background: #888; }
+.audit-meta { font-size: 0.78rem; }
+.audit-summary {
+  margin: 0.5rem 0 0.3rem 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.audit-section-title {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #555;
+}
+.audit-concerns, .audit-alternatives {
+  margin: 0.2rem 0 0 1.2rem;
+  padding: 0;
+  font-size: 0.88rem;
+}
+.audit-concerns li { color: #444; }
+.audit-alternatives li { color: #084e96; }

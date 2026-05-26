@@ -323,6 +323,8 @@ class TopologyRunRequest(BaseModel):
     node_configs: dict[str, list[NodeAttachmentDTO]] = {}
     # 問診票回答 {key: value} (Phase B)。空でも OK
     questionnaire_answers: dict[str, str] = {}
+    # 監査エージェント (Phase C) を integrator 後に走らせるか
+    audit_after_integrator: bool = False
     rally_max_rounds: int | None = None
     overrides: dict[str, str] | None = None
     model_overrides: dict[str, str] | None = None
@@ -1243,6 +1245,7 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
                 decision_waiter=_wait_for_decision,
                 append_queue=append_queue,
                 topology_context=topology_context,
+                audit_after_integrator=req.audit_after_integrator,
             ):
                 yield _sse_bytes(ev.kind, ev.data)
                 if ev.kind == "final":
@@ -1298,6 +1301,7 @@ class ConfigFirstRunRequest(BaseModel):
     node_logs: dict[str, list[NodeAttachmentDTO]] = {}
     node_configs: dict[str, list[NodeAttachmentDTO]] = {}
     questionnaire_answers: dict[str, str] = {}
+    audit_after_integrator: bool = False
     rally_max_rounds: int | None = None
     overrides: dict[str, str] | None = None
     model_overrides: dict[str, str] | None = None
@@ -1428,6 +1432,7 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
                 rally_max_rounds=req.rally_max_rounds or 3,
                 decision_waiter=_wait_for_decision,
                 topology_context={**topology_context, "stage": "log"},
+                audit_after_integrator=req.audit_after_integrator,
             ):
                 # stage タグを注入して UI 側で識別可能にする (Stage 2 単独相当)
                 if "stage" not in ev.data:
@@ -1490,6 +1495,7 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
                 model_overrides=m_overrides,
                 rally_max_rounds=req.rally_max_rounds or 3,
                 decision_waiter=_wait_for_decision,
+                audit_after_integrator=req.audit_after_integrator,
             ):
                 yield _sse_bytes(ev.kind, ev.data)
                 if ev.kind == "final":

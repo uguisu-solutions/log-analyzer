@@ -159,6 +159,30 @@ class DelegationEventDTO(BaseModel):
     confidence: float | None = None  # 監視の confidence（kind="monitor_*" のみ）
 
 
+class AuditReport(BaseModel):
+    """GPT 監査エージェント (Phase C) の所見。
+
+    Claude 系で動いた構成4 (rally) の結果を GPT-4o 系で独立検証する。
+    議事録「監査エージェント (GPT想定)」に対応。
+
+    verdict:
+        - "agree":     Claude の結論に同意
+        - "partial":   一部同意 (主原因は OK だが副次の指摘 / 抜けあり)
+        - "disagree":  別の根本原因を主張
+        - "uncertain": 与えられた情報では判断不能
+    """
+
+    verdict: str = "uncertain"
+    confidence: float = 0.0
+    summary: str = ""
+    concerns: list[str] = Field(default_factory=list)
+    alternative_hypotheses: list[str] = Field(default_factory=list)
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    latency_ms: int = 0
+
+
 class QuestionnaireItem(BaseModel):
     """問診票の 1 設問 (Phase B)。
 
@@ -229,6 +253,8 @@ class AnalysisResult(BaseModel):
     suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)
     # Config-First 2 段階解析の各 Stage の中間結果。1 段階モードでは空配列。
     stage_outputs: list[StageOutput] = Field(default_factory=list)
+    # 監査エージェント (Phase C) の所見。実行されなかった場合は None。
+    audit_report: AuditReport | None = None
 
 
 # 前方参照の解決 (StageOutput が DelegationEventDTO を文字列参照しているため)

@@ -206,12 +206,27 @@ export interface AnalysisResult {
   suspected_node_findings: SuspectedNodeFinding[]
   // Config-First 2 段階解析専用（他経路では空配列）
   stage_outputs: StageOutput[]
+  // 監査エージェント (Phase C) の所見。実行しなければ null
+  audit_report: AuditReport | null
 }
 
 export interface SuspectedNodeFinding {
   node_id: string
   summary: string
   severity: string  // "primary" | "secondary" | "info" | ""
+}
+
+// 監査エージェント (Phase C) の所見 ─────────────────────
+export interface AuditReport {
+  verdict: string  // "agree" | "partial" | "disagree" | "uncertain"
+  confidence: number
+  summary: string
+  concerns: string[]
+  alternative_hypotheses: string[]
+  model: string
+  tokens_in: number
+  tokens_out: number
+  latency_ms: number
 }
 
 // Config-First 2 段階解析の各 Stage 出力 ─────────────────────
