@@ -208,12 +208,24 @@ export interface AnalysisResult {
   stage_outputs: StageOutput[]
   // 監査エージェント (Phase C) の所見。実行しなければ null
   audit_report: AuditReport | null
+  // ラウンド単位集計 (Phase D)
+  round_metrics: RoundMetrics[]
 }
 
 export interface SuspectedNodeFinding {
   node_id: string
   summary: string
   severity: string  // "primary" | "secondary" | "info" | ""
+}
+
+// ラウンド単位集計 (Phase D) ─────────────────────────
+export interface RoundMetrics {
+  round: number
+  role: string  // "orchestrator" | "<monitor>" | "integrator"
+  model: string
+  tokens_in: number
+  tokens_out: number
+  latency_ms: number
 }
 
 // 監査エージェント (Phase C) の所見 ─────────────────────
@@ -245,6 +257,7 @@ export interface StageOutput {
   latency_ms_total: number
   root_cause_candidates: RootCauseCandidate[]
   recommended_actions: RecommendedAction[]
+  round_metrics: RoundMetrics[]
 }
 
 // トポロジー解析タブで使うノード定義 ─────────────────────────

@@ -32,6 +32,7 @@ from log_analyzer.schema import (
     Metrics,
     RecommendedAction,
     RootCauseCandidate,
+    RoundMetrics,
     SuspectedNodeFinding,
 )
 from log_analyzer.tracing import flush, get_client
@@ -148,6 +149,50 @@ def _build_execution_graph(
             )
         )
     return nodes, edges
+
+
+def _build_round_metrics(token_log: list[dict]) -> list[RoundMetrics]:
+    """token_log を round 順に並べた per-round metrics を返す (Phase D)。
+
+    orchestrator: round=0、各監視: round>=1、integrator: 最終 round+1。
+    """
+    out: list[RoundMetrics] = []
+    # orchestrator (round=0)
+    for entry in token_log:
+        if entry.get("role") == "orchestrator":
+            out.append(RoundMetrics(
+                round=0,
+                role="orchestrator",
+                model=str(entry.get("model") or ""),
+                tokens_in=int(entry.get("tokens_in") or 0),
+                tokens_out=int(entry.get("tokens_out") or 0),
+                latency_ms=int(entry.get("latency_ms") or 0),
+            ))
+    # 監視 (round >= 1)
+    monitors = [e for e in token_log if e.get("role") not in {"orchestrator", "integrator"}]
+    monitors_sorted = sorted(monitors, key=lambda e: int(e.get("round") or 0))
+    for entry in monitors_sorted:
+        out.append(RoundMetrics(
+            round=int(entry.get("round") or 0),
+            role=str(entry.get("role") or ""),
+            model=str(entry.get("model") or ""),
+            tokens_in=int(entry.get("tokens_in") or 0),
+            tokens_out=int(entry.get("tokens_out") or 0),
+            latency_ms=int(entry.get("latency_ms") or 0),
+        ))
+    # integrator
+    max_round = max((r.round for r in out), default=0)
+    for entry in token_log:
+        if entry.get("role") == "integrator":
+            out.append(RoundMetrics(
+                round=max_round + 1,
+                role="integrator",
+                model=str(entry.get("model") or ""),
+                tokens_in=int(entry.get("tokens_in") or 0),
+                tokens_out=int(entry.get("tokens_out") or 0),
+                latency_ms=int(entry.get("latency_ms") or 0),
+            ))
+    return out
 
 
 def _build_analysis_result(
@@ -275,6 +320,7 @@ def _build_analysis_result(
         delegation_history=history_dtos,
         suspected_node_ids=suspected_node_ids,
         suspected_node_findings=suspected_node_findings,
+        round_metrics=_build_round_metrics(token_log),
     )
 
 

@@ -16,6 +16,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { AuditReportView } from './AuditReportView'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
+import { RoundMetricsView } from './RoundMetricsView'
 import { GraphView } from './GraphView'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import type {
@@ -1030,6 +1031,9 @@ function TopologyResultView({ result, langfuseHost, suspected, topology }: Topol
       {/* 実際に動いたワークフロー: 委譲チェーン履歴 + 実行グラフ */}
       <h4>解析ワークフロー</h4>
       <DelegationHistoryView result={result} />
+      {result.round_metrics.length > 0 && (
+        <RoundMetricsView rounds={result.round_metrics} />
+      )}
       {result.execution_graph_nodes.length > 0 && (
         <div className="topology-graph-wrap">
           <div className="topology-graph-caption">

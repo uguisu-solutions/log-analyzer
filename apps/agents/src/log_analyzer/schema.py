@@ -135,6 +135,7 @@ class StageOutput(BaseModel):
     latency_ms_total: int = 0
     root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
     recommended_actions: list[RecommendedAction] = Field(default_factory=list)
+    round_metrics: list["RoundMetrics"] = Field(default_factory=list)
 
 
 class DelegationEventDTO(BaseModel):
@@ -157,6 +158,26 @@ class DelegationEventDTO(BaseModel):
     focus_hint: str = ""
     rationale: str = ""
     confidence: float | None = None  # 監視の confidence（kind="monitor_*" のみ）
+
+
+class RoundMetrics(BaseModel):
+    """構成4 (rally) のラウンド単位集計 (Phase D)。
+
+    議事録「ラウンド履歴、消費トークン、処理時間をラウンド単位で閲覧可能にする」
+    に対応。各ラウンドで動いた監視ノード 1 件分の metrics を 1 行に持つ。
+
+    role:
+        - "orchestrator": round=0 (初手選択)
+        - "<monitor>":    round>=1 (fw/routing/app/dns/sec 等)
+        - "integrator":   round=最終
+    """
+
+    round: int
+    role: str
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    latency_ms: int = 0
 
 
 class AuditReport(BaseModel):
@@ -255,6 +276,9 @@ class AnalysisResult(BaseModel):
     stage_outputs: list[StageOutput] = Field(default_factory=list)
     # 監査エージェント (Phase C) の所見。実行されなかった場合は None。
     audit_report: AuditReport | None = None
+    # ラウンド単位集計 (Phase D)。token_log を round 順に並べたもの。
+    # 他構成 (config1-3,5) では空のまま。
+    round_metrics: list[RoundMetrics] = Field(default_factory=list)
 
 
 # 前方参照の解決 (StageOutput が DelegationEventDTO を文字列参照しているため)

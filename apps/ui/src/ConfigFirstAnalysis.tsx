@@ -15,6 +15,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { AuditReportView } from './AuditReportView'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
+import { RoundMetricsView } from './RoundMetricsView'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import type {
   AnalysisResult,
@@ -855,6 +856,9 @@ function CombinedResultView({ result, stageOneOutput, stageTwoOutput, topology, 
 
       {/* 監査エージェント (Phase C) の所見 */}
       {result.audit_report && <AuditReportView report={result.audit_report} />}
+
+      {/* ラウンド単位リソース消費 (Phase D) */}
+      {result.round_metrics.length > 0 && <RoundMetricsView rounds={result.round_metrics} />}
     </>
   )
 }
@@ -885,6 +889,7 @@ function StageResultView({ stage, topology }: StageResultViewProps) {
     suspected_node_findings: stage.suspected_node_findings,
     stage_outputs: [],
     audit_report: null,
+    round_metrics: stage.round_metrics,
   }
   return (
     <>
@@ -913,6 +918,7 @@ function StageResultView({ stage, topology }: StageResultViewProps) {
       </ul>
       <h4>このステージの委譲チェーン</h4>
       <DelegationHistoryView result={fakeResult} />
+      {stage.round_metrics.length > 0 && <RoundMetricsView rounds={stage.round_metrics} />}
     </>
   )
 }

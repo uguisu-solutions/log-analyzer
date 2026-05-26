@@ -3096,3 +3096,83 @@ code {
 }
 .audit-concerns li { color: #444; }
 .audit-alternatives li { color: #084e96; }
+
+/* ─── ラウンド単位集計 (Phase D) ───────────────────── */
+.round-metrics {
+  margin: 0.8rem 0;
+}
+.round-metrics-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
+}
+.round-metrics-header h4 {
+  margin: 0;
+}
+.round-metrics-totals {
+  font-size: 0.85rem;
+}
+.round-metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.round-metrics-table th, .round-metrics-table td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.round-metrics-table th {
+  background: #f6f7f9;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+.round-metrics-table tr:last-child td {
+  border-bottom: none;
+}
+.round-row.role-orchestrator { background: #fef3c7; }
+.round-row.role-integrator   { background: #fce7f3; }
+.rm-round, .rm-role, .rm-model {
+  white-space: nowrap;
+}
+.rm-model {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.78rem;
+  color: #444;
+}
+.rm-tokens, .rm-latency {
+  min-width: 12rem;
+}
+.rm-bar-cell {
+  position: relative;
+  height: 18px;
+  background: #f1f3f5;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.rm-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border-radius: 3px;
+  opacity: 0.6;
+}
+.rm-bar-tokens { background: #0a5fb7; }
+.rm-bar-latency { background: #1a7f3e; }
+.rm-bar-text {
+  position: relative;
+  z-index: 1;
+  display: block;
+  padding: 0 0.4rem;
+  line-height: 18px;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.78rem;
+  color: #1a1a1a;
+}

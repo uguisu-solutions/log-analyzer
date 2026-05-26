@@ -91,6 +91,7 @@ def _result_to_stage_output(stage: str, result: AnalysisResult) -> StageOutput:
         latency_ms_total=result.metrics.latency_ms_total,
         root_cause_candidates=list(result.root_cause_candidates),
         recommended_actions=list(result.recommended_actions),
+        round_metrics=list(result.round_metrics),
     )
 
 
@@ -170,6 +171,10 @@ def _build_final_result(
         info_loss.append(
             f"{s.stage}: rounds={s.delegation_rounds} confidence={s.confidence:.2f}"
         )
+    # round_metrics は両 Stage を直列に連結 (Stage 1 のラウンド → Stage 2 のラウンド)
+    combined_rounds: list = []
+    for s in stage_outputs:
+        combined_rounds.extend(list(s.round_metrics))
     return AnalysisResult(
         trace_id=trace_id,
         config_id=ConfigId.CONFIG4,
@@ -184,6 +189,7 @@ def _build_final_result(
         suspected_node_ids=list(primary.suspected_node_ids),
         suspected_node_findings=list(primary.suspected_node_findings),
         stage_outputs=stage_outputs,
+        round_metrics=combined_rounds,
     )
 
 
