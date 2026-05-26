@@ -1022,7 +1022,7 @@ function CfNodeEditor(props: CfNodeEditorProps) {
           </select>
         } />
 
-      <CfAttachmentSection title="設定ファイル (Config) — Stage 1 で使用" kind="config" items={configs}
+      <CfAttachmentSection title="設定ファイル (Config)" kind="config" items={configs}
         onAdd={onAddConfig} onUpdate={onUpdateConfig} onRemove={onRemoveConfig} />
     </div>
   )
