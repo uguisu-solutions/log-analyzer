@@ -13,12 +13,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
+import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { GraphView } from './GraphView'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import type {
   AnalysisResult,
   ConfigEntry,
+  DelegationEvent,
   LogEntry,
   NodeAttachment,
   NodeAttachments,
@@ -146,6 +148,14 @@ export function TopologyAnalysis({
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  // rally_max_rounds 到達時の継続/停止モーダル
+  const [runId, setRunId] = useState<string | null>(null)
+  const [decisionBusy, setDecisionBusy] = useState(false)
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    round: number
+    rally_max_rounds: number
+    delegation_history: DelegationEvent[]
+  } | null>(null)
 
   const imageRef = useRef<HTMLImageElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -414,7 +424,19 @@ export function TopologyAnalysis({
       }
       for await (const ev of parseSSE(r)) {
         setStreamEvents(prev => [...prev, ev])
-        if (ev.kind === 'final') {
+        if (ev.kind === 'run_id_assigned') {
+          setRunId(String(ev.data.run_id ?? ''))
+        } else if (ev.kind === 'await_confirmation') {
+          // rally_max_rounds 到達 → 継続/停止モーダル
+          setPendingConfirmation({
+            round: Number(ev.data.round ?? 0),
+            rally_max_rounds: Number(ev.data.rally_max_rounds ?? 0),
+            delegation_history: (ev.data.delegation_history as DelegationEvent[]) ?? [],
+          })
+        } else if (ev.kind === 'user_decision') {
+          // 自身応答受領 → モーダル閉じる
+          setPendingConfirmation(null)
+        } else if (ev.kind === 'final') {
           const res = ev.data.result as AnalysisResult | undefined
           if (res) setResult(res)
         } else if (ev.kind === 'error') {
@@ -430,6 +452,29 @@ export function TopologyAnalysis({
       abortRef.current = null
     }
   }
+  // rally_max_rounds 到達時の継続/停止 (await_confirmation 応答)
+  const submitDecision = async (action: 'continue' | 'stop', extendBy?: number) => {
+    if (!runId) return
+    setDecisionBusy(true)
+    try {
+      const body: { action: string; extend_by?: number } = { action }
+      if (action === 'continue' && extendBy) body.extend_by = extendBy
+      const r = await fetch(`${API_BASE}/api/runs/${runId}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!r.ok) {
+        const text = await r.text()
+        throw new Error(`HTTP ${r.status}: ${text}`)
+      }
+    } catch (e) {
+      setError(`decision 送信失敗: ${(e as Error).message}`)
+    } finally {
+      setDecisionBusy(false)
+    }
+  }
+
   const cancel = () => {
     abortRef.current?.abort()
   }
@@ -636,6 +681,18 @@ export function TopologyAnalysis({
 
       {result && (
         <TopologyResultView result={result} langfuseHost={langfuseHost} suspected={suspectedSet} topology={topology} />
+      )}
+
+      {/* rally_max_rounds 到達時の継続/停止モーダル */}
+      {pendingConfirmation && (
+        <ConfirmationModal
+          round={pendingConfirmation.round}
+          maxRounds={pendingConfirmation.rally_max_rounds}
+          history={pendingConfirmation.delegation_history}
+          busy={decisionBusy}
+          onContinue={(extendBy) => submitDecision('continue', extendBy)}
+          onStop={() => submitDecision('stop')}
+        />
       )}
     </section>
   )

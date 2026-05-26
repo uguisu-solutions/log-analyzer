@@ -12,11 +12,13 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
+import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import type {
   AnalysisResult,
   ConfigEntry,
+  DelegationEvent,
   LogEntry,
   NodeAttachment,
   NodeAttachments,
@@ -126,6 +128,12 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const [finalResult, setFinalResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [decisionBusy, setDecisionBusy] = useState(false)
+  // rally_max_rounds 到達時の継続/停止モーダル (Stage 内部で発火しうる)
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    round: number
+    rally_max_rounds: number
+    delegation_history: DelegationEvent[]
+  } | null>(null)
   // 結果ペインで表示中の Stage タブ
   const [resultTab, setResultTab] = useState<'combined' | 'stage1' | 'stage2'>('combined')
 
@@ -353,6 +361,20 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           setStageStatus('awaiting_decision')
         } else if (ev.kind === 'stage_two_start') {
           setStageStatus('stage2_running')
+        } else if (ev.kind === 'await_confirmation') {
+          // Stage 内部で rally_max_rounds 到達 → 継続/停止モーダル
+          setPendingConfirmation({
+            round: Number(ev.data.round ?? 0),
+            rally_max_rounds: Number(ev.data.rally_max_rounds ?? 0),
+            delegation_history: (ev.data.delegation_history as DelegationEvent[]) ?? [],
+          })
+        } else if (ev.kind === 'user_decision') {
+          // 自身からの応答 (continue/stop) を受領 → モーダルを閉じる
+          // advance/abort は Stage 遷移の方なのでここでは触らない
+          const action = String(ev.data.action ?? '')
+          if (action === 'continue' || action === 'stop') {
+            setPendingConfirmation(null)
+          }
         } else if (ev.kind === 'final') {
           const res = ev.data.result as AnalysisResult | undefined
           if (res) {
@@ -381,14 +403,18 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const cancel = () => { abortRef.current?.abort() }
 
   // ─── decision API 呼び出し ────────────────────────────────────
-  const submitDecision = async (action: 'advance' | 'abort') => {
+  // advance/abort: Stage 1 → Stage 2 遷移用 (Config-First タブ固有)
+  // continue/stop: rally_max_rounds 到達時の継続/停止用 (Stage 内部から発火)
+  const submitDecision = async (action: 'advance' | 'abort' | 'continue' | 'stop', extendBy?: number) => {
     if (!runId) return
     setDecisionBusy(true)
     try {
+      const body: { action: string; extend_by?: number } = { action }
+      if (action === 'continue' && extendBy) body.extend_by = extendBy
       const r = await fetch(`${API_BASE}/api/runs/${runId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify(body),
       })
       if (!r.ok) {
         const text = await r.text()
@@ -570,13 +596,25 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         </section>
       )}
 
-      {/* 必須承認モーダル */}
+      {/* Stage 1 → Stage 2 移行用 必須承認モーダル (Config-First タブ固有) */}
       {stageStatus === 'awaiting_decision' && stageOneOutput && (
         <StageOneApprovalModal
           stageOneOutput={stageOneOutput}
           busy={decisionBusy}
           onAdvance={() => submitDecision('advance')}
           onAbort={() => submitDecision('abort')}
+        />
+      )}
+
+      {/* rally_max_rounds 到達時の継続/停止モーダル (Stage 内部から発火) */}
+      {pendingConfirmation && (
+        <ConfirmationModal
+          round={pendingConfirmation.round}
+          maxRounds={pendingConfirmation.rally_max_rounds}
+          history={pendingConfirmation.delegation_history}
+          busy={decisionBusy}
+          onContinue={(extendBy) => submitDecision('continue', extendBy)}
+          onStop={() => submitDecision('stop')}
         />
       )}
 

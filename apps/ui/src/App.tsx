@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { BuiltinConfigCanvas } from './BuiltinConfigCanvas'
+import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView, nodeLabel } from './DelegationHistoryView'
 import { GraphView } from './GraphView'
 import { LogManager } from './LogManager'
@@ -202,63 +203,6 @@ export function renderEventSummary(ev: SSEEvent): React.ReactNode {
     default:
       return <code>{JSON.stringify(d).slice(0, 200)}</code>
   }
-}
-
-// ─── 確認モーダル ────────────────────────────────────────────────
-interface ConfirmationModalProps {
-  round: number
-  maxRounds: number
-  history: DelegationEvent[]
-  onContinue: (extendBy: number) => void
-  onStop: () => void
-  busy: boolean
-}
-
-function ConfirmationModal({ round, maxRounds, history, onContinue, onStop, busy }: ConfirmationModalProps) {
-  const [extendBy, setExtendBy] = useState<number>(3)
-  return (
-    <div className="modal-overlay">
-      <div className="modal confirmation-modal">
-        <h3>ラリーが上限に到達しました</h3>
-        <p className="modal-summary">
-          現在 <strong>{round}</strong> ラウンド完了、上限 <strong>{maxRounds}</strong>。委譲チェーンを継続するか、ここで integrator に進むかを選んでください。
-        </p>
-        <details className="modal-history" open>
-          <summary>これまでの委譲履歴 ({history.length})</summary>
-          <ol>
-            {history.map((h, i) => (
-              <li key={i} className={`mini-step kind-${h.kind}`}>
-                <span className="mini-round">r{h.round}</span>
-                <span className="mini-arrow">
-                  {nodeLabel(h.from_node)} → {nodeLabel(h.to_node)}
-                </span>
-                {h.rationale && <span className="mini-rationale">{h.rationale}</span>}
-              </li>
-            ))}
-          </ol>
-        </details>
-        <div className="modal-actions">
-          <label className="extend-label">
-            延長ラウンド数:
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={extendBy}
-              onChange={e => setExtendBy(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
-              disabled={busy}
-            />
-          </label>
-          <button onClick={() => onContinue(extendBy)} disabled={busy}>
-            +{extendBy} 延長して継続
-          </button>
-          <button onClick={onStop} disabled={busy} className="btn-secondary">
-            停止して integrator へ
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 // ─── 追加ログ投入モーダル ─────────────────────────────────────
