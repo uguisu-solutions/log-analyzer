@@ -32,6 +32,7 @@ from log_analyzer.schema import (
     Metrics,
     RecommendedAction,
     RootCauseCandidate,
+    SuspectedNodeFinding,
 )
 from log_analyzer.tracing import flush, get_client
 
@@ -159,6 +160,7 @@ def _build_analysis_result(
     rally_round: int,
     rally_max_rounds: int,
     wall_ms: int,
+    topology_node_ids: list[str] | None = None,
 ) -> AnalysisResult:
     """final イベント用の AnalysisResult を組み立てる。"""
     total_in = sum(e["tokens_in"] for e in token_log)
@@ -192,6 +194,62 @@ def _build_analysis_result(
     graph_nodes, graph_edges = _build_execution_graph(token_log, delegation_history)
     history_dtos = [DelegationEventDTO(**_pick_event_dto_fields(d)) for d in delegation_history]
 
+    # トポロジー解析モードの場合、integrator が出した障害候補ノードのうち
+    # 「提供された node_ids 」に含まれるものだけを採用する（LLM が幻の ID を出した場合の防御）。
+    # 新フォーマット (優先): suspected_nodes = [{"node_id", "summary", "severity"}, ...]
+    # LLM のブレに備え:
+    #   - キー: node_id / id / nodeId / nodeID のいずれも受ける
+    #   - severity: 大文字小文字・前後空白を正規化
+    # 旧フォーマット (フォールバック): suspected_node_ids = ["id1", "id2", ...]
+    suspected_node_ids: list[str] = []
+    suspected_node_findings: list[SuspectedNodeFinding] = []
+    if topology_node_ids:
+        allowed = set(topology_node_ids)
+        seen: set[str] = set()
+        allowed_severity = {"primary", "secondary", "info"}
+
+        def _pick_id(entry: dict) -> str:
+            for key in ("node_id", "id", "nodeId", "nodeID"):
+                v = entry.get(key)
+                if v:
+                    return str(v).strip()
+            return ""
+
+        def _norm_severity(v) -> str:
+            s = str(v or "").strip().lower()
+            return s if s in allowed_severity else ""
+
+        # 優先: 構造化 suspected_nodes
+        raw_findings = integrator_result.get("suspected_nodes") or []
+        if isinstance(raw_findings, list):
+            for entry in raw_findings:
+                if not isinstance(entry, dict):
+                    continue
+                nid = _pick_id(entry)
+                if not nid or nid not in allowed or nid in seen:
+                    continue
+                suspected_node_ids.append(nid)
+                suspected_node_findings.append(
+                    SuspectedNodeFinding(
+                        node_id=nid,
+                        summary=str(entry.get("summary") or entry.get("description") or "").strip(),
+                        severity=_norm_severity(entry.get("severity")),
+                    )
+                )
+                seen.add(nid)
+        # 旧フィールド suspected_node_ids も並列に許容: LLM が両方出した場合
+        # にも欠落分を拾う（structured 側にあれば seen で重複排除される）
+        raw_ids = integrator_result.get("suspected_node_ids") or []
+        if isinstance(raw_ids, list):
+            for nid in raw_ids:
+                s = str(nid).strip()
+                if s in allowed and s not in seen:
+                    suspected_node_ids.append(s)
+                    suspected_node_findings.append(
+                        SuspectedNodeFinding(node_id=s, summary="", severity="")
+                    )
+                    seen.add(s)
+
     return AnalysisResult(
         trace_id=trace_id,
         config_id=ConfigId.CONFIG4,
@@ -215,6 +273,8 @@ def _build_analysis_result(
         delegation_rounds=rally_round,
         delegation_max_rounds=rally_max_rounds,
         delegation_history=history_dtos,
+        suspected_node_ids=suspected_node_ids,
+        suspected_node_findings=suspected_node_findings,
     )
 
 
@@ -237,6 +297,7 @@ async def run_rally_stream(
     rally_max_rounds: int = 3,
     decision_waiter: DecisionWaiter | None = None,
     append_queue: "asyncio.Queue[dict] | None" = None,
+    topology_context: dict | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """委譲チェーンを 1 ステップずつ実行しながら ``StreamEvent`` を yield する。
 
@@ -263,6 +324,9 @@ async def run_rally_stream(
         "previous_node": None,
         "pending_focus_hint": "",
         "appended_logs": [],
+        # トポロジー解析タブから渡される。{nodes: [...], links: [...]} 形式。
+        # integrator は suspected_node_ids 生成のためにこの ID 一覧を参照する。
+        "topology_context": topology_context,
     }
 
     langfuse = get_client()
@@ -534,6 +598,13 @@ async def run_rally_stream(
         )
 
     wall_ms = int((time.perf_counter() - wall_start) * 1000)
+    topology_node_ids: list[str] = []
+    if topology_context:
+        topology_node_ids = [
+            str(n.get("id"))
+            for n in topology_context.get("nodes", []) or []
+            if n.get("id") is not None
+        ]
     result = _build_analysis_result(
         log_ref=log_ref,
         trace_id=trace_id,
@@ -543,6 +614,7 @@ async def run_rally_stream(
         rally_round=state["rally_round"],
         rally_max_rounds=state["rally_max_rounds"],
         wall_ms=wall_ms,
+        topology_node_ids=topology_node_ids or None,
     )
     trace.update(output=result.model_dump(mode="json"))
     flush()

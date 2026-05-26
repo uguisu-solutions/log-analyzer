@@ -1,0 +1,8 @@
+2026-05-25T08:00:00Z db-01 INFO postgres started, listening on 5432 (version=16.2)
+2026-05-25T08:30:00Z db-01 INFO autovacuum: vacuumed table=orders pages=240 tuples=12891
+2026-05-25T09:00:00Z db-01 INFO checkpoint complete: wrote 12 buffers (0.1%) write_time=44ms sync_time=8ms
+2026-05-25T09:00:30Z db-01 INFO connection accepted from 10.0.2.12 user=app pid=8821
+2026-05-25T09:00:50Z db-01 INFO connection accepted from 10.0.2.12 user=app pid=8822
+2026-05-25T09:01:05Z db-01 INFO connection accepted from 10.0.2.12 user=app pid=8823
+2026-05-25T09:01:20Z db-01 INFO connection accepted from 10.0.2.12 user=app pid=8824
+2026-05-25T09:01:35Z db-01 INFO connection accepted from 10.0.2.12 user=app pid=8825

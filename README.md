@@ -28,6 +28,7 @@
 - **遷移制約**: 自己遷移と直前ノードへの即時 ping-pong を禁止（違反時は自動 integrator フォールバック）
 - **ログ管理タブ**: アップロード / プレビュー / 削除
 - **実行履歴タブ**: SQLite に各実行のメタデータ（confidence / tokens / Langfuse trace_id）を残し、フィルタ表示
+- **トポロジー解析タブ**: ネットワーク構成図画像を取り込み、各ノードに **複数のログファイル + 複数の設定ファイル (Config)** を割り当てて構成4 で解析。障害候補ノードを severity 別 (直接原因=赤+点滅 / 影響を受けた側=橙 / 関与なし=非ハイライト) に矩形ハイライト + 委譲チェーン履歴 + 実行グラフを同一タブで表示
 - Langfuse による全 LLM 呼び出しのトレース・トークン消費記録 + UI 直リンク
 - **Prompt caching**: orchestrator / 監視 / integrator の system プロンプトと安定 user ブロックに `cache_control: ephemeral` を設定し、連続実行で 2 回目以降の入力 token を最大 90% 削減
 
@@ -46,7 +47,7 @@
 | スキーマ | Pydantic v2 |
 | 永続化 | SQLite（ユーザー定義構成 / 実行履歴）+ ローカル FS（ログ・トポロジ） |
 | 観測性 | [Langfuse](https://langfuse.com/) v2（OSS LLMOps、Docker Compose で同梱） |
-| テスト | pytest（47 件） |
+| テスト | pytest（61 件） |
 
 > **AWS 不採用方針**: Step Functions / Bedrock / DynamoDB / S3 は使用しません。Python asyncio + LangGraph + Anthropic/OpenAI 直叩き + SQLite + ローカル FS で代替しています。
 
@@ -85,20 +86,23 @@ prottype1/
 │   │   │   ├── api.py                 # FastAPI エンドポイント（SSE 含む）
 │   │   │   └── cli.py                 # `log-analyze` CLI
 │   │   ├── scripts/compare_configs.py # 複数構成 × 複数ログ一括比較
-│   │   └── tests/                     # pytest（47 件）
+│   │   └── tests/                     # pytest（61 件）
 │   └── ui/                     # React フロントエンド
 │       └── src/
-│           ├── App.tsx                # タブ管理 / 単一実行 / 比較 / 構成設計 / ログ管理 / 実行履歴
-│           │                          #   + RealtimeStreamView / ConfirmationModal / DelegationHistoryView
+│           ├── App.tsx                # タブ管理 / 単一実行 / 比較 / 構成設計 / ログ管理 / 実行履歴 / トポロジー解析
+│           │                          #   + RealtimeStreamView / ConfirmationModal
 │           ├── BuiltinConfigCanvas.tsx
 │           ├── PipelineBuilder.tsx    # 構成5 D&D エディタ
 │           ├── GraphView.tsx          # 実行後のエージェント組織図
+│           ├── DelegationHistoryView.tsx # 委譲チェーン履歴 (構成4 結果 / トポロジー解析タブで共用)
+│           ├── TopologyAnalysis.tsx   # トポロジー解析タブ (画像 + ノード別ログ + 障害ハイライト)
 │           ├── LogManager.tsx         # ログアップロード / プレビュー / 削除
 │           └── RunHistoryView.tsx     # 実行履歴の一覧 + フィルタ
 ├── infra/langfuse/             # Langfuse v2 docker-compose
 ├── samples/
-│   ├── logs/                   # サンプル合成ログ（FW / Routing / TCP 異常等）
-│   └── topology/               # config4 の read_topology ツール用モック
+│   ├── logs/                   # サンプル合成ログ（FW / Routing / TCP 異常 / scenario1_*）
+│   └── topology/               # config4 の read_topology ツール用モック + トポロジー解析テストシナリオ
+│       └── scenario1_lb_fw_denial/  # FW ポリシ反映漏れによる LB ヘルスチェック失敗（5 ノード）
 └── docs/
     ├── plan/                   # 実装計画
     └── reports/                # 進捗レポート
@@ -192,7 +196,7 @@ npm run dev
 
 ### Web UI（推奨）
 
-`http://localhost:5173` を開くと 5 タブが表示されます。
+`http://localhost:5173` を開くと 6 タブが表示されます。
 
 | タブ | 用途 |
 |---|---|
@@ -201,6 +205,7 @@ npm run dev
 | **構成設計（pipeline）** | 構成5 を D&D で設計 → ユーザー定義構成として保存 |
 | **ログ管理** | `samples/logs/` 配下のログを一覧 / アップロード（10 MB 上限）/ 先頭 200 行プレビュー / 削除 |
 | **実行履歴** | SQLite に蓄積した過去実行を構成 / ログ / 部分文字列でフィルタ表示 + Langfuse 直リンク |
+| **トポロジー解析** | ネットワーク構成図画像 (PNG/SVG, 5MB 上限) をアップロード → 矩形描画でノード (id/type/label/ip) を定義 → 各ノードに **複数のログ + 複数の設定ファイル (Config)** を割り当てて構成4 で解析 → 障害候補ノードを severity 別 (直接原因 / 影響を受けた側 / 参考) に矩形ハイライト + 委譲チェーン履歴 + 実行グラフを表示。テストシナリオ: `samples/topology/scenario1_lb_fw_denial/` |
 
 ノードをクリックすると **プロンプト・モデルをその場で編集** でき、実行前に試したり、ユーザー定義構成として別名保存できます。
 
@@ -248,6 +253,7 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 | GET / POST / PUT / DELETE | `/api/configs/saved[/{id}]` | ユーザー定義構成の CRUD |
 | POST | `/api/runs` | 指定構成で実行 → `AnalysisResult` を返す（同期） |
 | **POST** | **`/api/runs/stream`** | **構成4 を SSE で実行（`text/event-stream`）。各ステップを 1 イベントずつ push** |
+| **POST** | **`/api/runs/topology-stream`** | **トポロジー解析タブ用。`{config, topology, node_logs: {<id>: [{name, content}]}, node_configs: {<id>: [{name, content}]}, rally_max_rounds}` を受け、内部で単一ログに合成→ 構成4 を SSE 実行。1 ノードに複数のログ + 複数の設定ファイル添付可。結果に `suspected_node_ids` + `suspected_node_findings` を含む** |
 | **POST** | **`/api/runs/{run_id}/decision`** | **SSE 中の `await_confirmation` への応答。`{"action": "continue", "extend_by": N}` か `{"action": "stop"}`** |
 | GET | `/api/runs/history` | 実行履歴一覧（フィルタ・ページング対応） |
 | GET / DELETE | `/api/runs/history/{run_id}` | 個別実行の取得・削除 |
@@ -276,7 +282,7 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 47 passed
+# 期待: 61 passed
 ```
 
 ---
@@ -315,5 +321,8 @@ PoC 段階のため未設定。
 ## 関連ドキュメント
 
 - [docs/plan/implementation_plan.md](docs/plan/implementation_plan.md) — 全体実装計画
+- [docs/reports/poc_progress_2026-05-25.md](docs/reports/poc_progress_2026-05-25.md) — 最新進捗（トポロジー解析タブ）
+- [docs/reports/poc_progress_2026-05-14.md](docs/reports/poc_progress_2026-05-14.md) — 構成4 委譲チェーン刷新
+- [samples/topology/scenario1_lb_fw_denial/README.md](samples/topology/scenario1_lb_fw_denial/README.md) — トポロジー解析テストシナリオ
 - [apps/agents/README.md](apps/agents/README.md) — バックエンド詳細
 - [infra/README.md](infra/README.md) — Langfuse セットアップ詳細

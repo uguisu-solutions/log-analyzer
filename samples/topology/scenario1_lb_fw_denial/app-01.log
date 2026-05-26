@@ -1,0 +1,14 @@
+2026-05-25T08:55:00Z app-01 INFO server listening on 0.0.0.0:8080 pid=1234
+2026-05-25T08:55:00Z app-01 INFO db pool initialized size=10 target=10.0.3.20:5432
+2026-05-25T08:55:30Z app-01 INFO request id=req-101 method=GET path=/api/health status=200 latency_ms=3
+2026-05-25T08:56:00Z app-01 INFO request id=req-102 method=GET path=/api/health status=200 latency_ms=2
+2026-05-25T08:56:30Z app-01 INFO request id=req-103 method=GET path=/api/health status=200 latency_ms=3
+2026-05-25T08:57:00Z app-01 INFO request id=req-104 method=GET path=/api/health status=200 latency_ms=2
+2026-05-25T08:57:30Z app-01 INFO request id=req-105 method=GET path=/api/health status=200 latency_ms=3
+2026-05-25T08:58:00Z app-01 INFO request id=req-106 method=GET path=/api/health status=200 latency_ms=2
+2026-05-25T08:58:30Z app-01 INFO request id=req-107 method=GET path=/api/health status=200 latency_ms=3
+2026-05-25T08:59:00Z app-01 INFO request id=req-108 method=GET path=/api/health status=200 latency_ms=2
+2026-05-25T08:59:30Z app-01 INFO request id=req-109 method=GET path=/api/health status=200 latency_ms=3
+2026-05-25T09:00:00Z app-01 INFO request id=req-110 method=GET path=/api/health status=200 latency_ms=2
+2026-05-25T09:02:00Z app-01 INFO heartbeat process_uptime_s=420 mem_rss_mb=148 cpu_pct=0.5 incoming_connections_last_60s=0
+2026-05-25T09:03:00Z app-01 INFO heartbeat process_uptime_s=480 mem_rss_mb=148 cpu_pct=0.4 incoming_connections_last_60s=0

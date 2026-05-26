@@ -200,4 +200,48 @@ export interface AnalysisResult {
   delegation_rounds: number
   delegation_max_rounds: number
   delegation_history: DelegationEvent[]
+  // トポロジー解析タブ専用（他経路では空配列）
+  suspected_node_ids: string[]
+  suspected_node_findings: SuspectedNodeFinding[]
 }
+
+export interface SuspectedNodeFinding {
+  node_id: string
+  summary: string
+  severity: string  // "primary" | "secondary" | "info" | ""
+}
+
+// トポロジー解析タブで使うノード定義 ─────────────────────────
+export interface TopologyNode {
+  id: string
+  type: string  // "L2" / "L3" / "FW" / "Server" / 任意
+  label: string
+  ip: string
+  // 画像座標系での矩形（0..1 の正規化座標）
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface TopologyLink {
+  source: string
+  target: string
+}
+
+export interface TopologyDef {
+  image: string | null  // data URL (PNG/SVG)
+  imageWidth: number
+  imageHeight: number
+  nodes: TopologyNode[]
+  links: TopologyLink[]
+}
+
+// 1 ノードに添付する 1 ファイル (ログ or 設定ファイル) ─────────
+export interface NodeAttachment {
+  name: string
+  content: string
+}
+
+// nodeId → 添付ファイル群
+export type NodeAttachments = Record<string, NodeAttachment[]>
