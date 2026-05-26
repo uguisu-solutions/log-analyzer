@@ -14,6 +14,7 @@
     DELETE /api/configs/saved/{id}            削除
     POST   /api/runs                          指定構成を指定ログに当て、AnalysisResult を返す
     POST   /api/runs/stream                   構成4 (rally) を SSE でストリーミング実行
+    POST   /api/runs/topology-stream          トポロジー + ノード別ログを構成4 で SSE 実行
     POST   /api/runs/{run_id}/decision        確認モーダルからの継続 / 停止指示を送る
 """
 from __future__ import annotations
@@ -265,6 +266,196 @@ class DecisionRequest(BaseModel):
 
     action: str  # "continue" | "stop"
     extend_by: int | None = None  # action="continue" のみ。既定 3
+
+
+class TopologyNode(BaseModel):
+    """トポロジー解析タブで定義された 1 ノード。"""
+
+    id: str
+    type: str = ""  # "L2" / "L3" / "FW" / "Server" / 任意
+    label: str = ""
+    ip: str = ""
+
+
+class TopologyLink(BaseModel):
+    """ノード間の論理リンク（解析の参考情報、UI 描画には使わない）。"""
+
+    source: str
+    target: str
+
+
+class NodeAttachmentDTO(BaseModel):
+    """各ノードに添付する 1 ファイル (ログ or 設定ファイル)。"""
+
+    name: str = ""  # ファイル名 / 識別子 (任意)
+    content: str = ""
+
+
+class TopologyRunRequest(BaseModel):
+    """``POST /api/runs/topology-stream`` のリクエスト。
+
+    config4 (rally) または config4 派生の user 構成のみ受け付ける。
+    ``node_logs`` / ``node_configs`` は `{nodeId: [{name, content}, ...]}` の辞書で、
+    1 ノードあたり複数のログ・設定ファイルを添付できる。content が空のものはスキップ。
+    """
+
+    config: str  # "config4" / "user:<id>" のみ
+    topology: dict  # {"nodes": [...], "links": [...]}
+    # 1 ノードに複数ログを添付できる。例: {"fw-01": [{"name": "syslog", "content": "..."}, {"name": "deny", "content": "..."}]}
+    node_logs: dict[str, list[NodeAttachmentDTO]] = {}
+    # 1 ノードに複数の設定ファイルを添付できる。同上の形式
+    node_configs: dict[str, list[NodeAttachmentDTO]] = {}
+    rally_max_rounds: int | None = None
+    overrides: dict[str, str] | None = None
+    model_overrides: dict[str, str] | None = None
+
+
+def _normalize_attachments(
+    raw: dict | None,
+) -> dict[str, list[dict]]:
+    """``{nodeId: [{name, content}, ...]}`` を正規化。
+
+    Pydantic 経由なら NodeAttachmentDTO のリストが渡ってくるが、テストや手動構築の
+    便宜のため dict / 旧形式 (str) も受け入れる。
+    """
+    if not raw:
+        return {}
+    out: dict[str, list[dict]] = {}
+    for nid, items in raw.items():
+        bucket: list[dict] = []
+        # 旧形式互換: 単一文字列 → 1 件のアタッチメント
+        if isinstance(items, str):
+            if items.strip():
+                bucket.append({"name": "", "content": items})
+        elif isinstance(items, list):
+            for it in items:
+                if hasattr(it, "model_dump"):  # Pydantic NodeAttachmentDTO
+                    d = it.model_dump()
+                elif isinstance(it, dict):
+                    d = it
+                else:
+                    continue
+                name = str(d.get("name") or "").strip()
+                content = str(d.get("content") or "")
+                if not content.strip():
+                    continue
+                bucket.append({"name": name, "content": content})
+        if bucket:
+            out[str(nid)] = bucket
+    return out
+
+
+def _build_topology_log_text(
+    topology: dict,
+    node_logs: dict | None,
+    node_configs: dict | None = None,
+) -> tuple[str, list[dict]]:
+    """topology + ノード別添付 (logs / configs) から rally に渡す単一 log_text を構築。
+
+    フォーマット:
+
+        ## トポロジー要約
+        - id=fw-01, type=FW, label=コア FW, ip=10.0.0.1
+        - id=sw-l2-01, type=L2, label=配下スイッチ, ip=10.0.0.2
+        リンク: fw-01 → sw-l2-01
+
+        === NODE: fw-01 (type=FW, label=コア FW, ip=10.0.0.1) ===
+
+        [ログ] fw-syslog.log:
+        <content>
+
+        [ログ] fw-deny.log:
+        <content>
+
+        [設定] fw-policy.conf:
+        <content>
+
+        === NODE: sw-l2-01 (...) ===
+        ...
+
+    返り値: (合成ログ, 正規化ノードのリスト)
+    """
+    nodes_raw = topology.get("nodes") or []
+    nodes: list[dict] = []
+    for n in nodes_raw:
+        if not isinstance(n, dict):
+            continue
+        nid = n.get("id")
+        if not nid:
+            continue
+        nodes.append(
+            {
+                "id": str(nid),
+                "type": str(n.get("type") or ""),
+                "label": str(n.get("label") or ""),
+                "ip": str(n.get("ip") or ""),
+            }
+        )
+    links_raw = topology.get("links") or []
+    links: list[tuple[str, str]] = []
+    for lk in links_raw:
+        if not isinstance(lk, dict):
+            continue
+        s = lk.get("source")
+        t = lk.get("target")
+        if s and t:
+            links.append((str(s), str(t)))
+
+    logs_map = _normalize_attachments(node_logs)
+    configs_map = _normalize_attachments(node_configs)
+
+    parts: list[str] = []
+    parts.append("## トポロジー要約")
+    if nodes:
+        for n in nodes:
+            attrs = [f"id={n['id']}"]
+            if n["type"]:
+                attrs.append(f"type={n['type']}")
+            if n["label"]:
+                attrs.append(f"label={n['label']}")
+            if n["ip"]:
+                attrs.append(f"ip={n['ip']}")
+            parts.append("- " + ", ".join(attrs))
+    else:
+        parts.append("(ノード定義なし)")
+    if links:
+        parts.append("リンク:")
+        for s, t in links:
+            parts.append(f"  - {s} → {t}")
+    parts.append("")
+
+    # ノード別に複数の log / config ファイルを並べる
+    valid_ids = {n["id"] for n in nodes}
+    for n in nodes:
+        attached_logs = logs_map.get(n["id"], [])
+        attached_configs = configs_map.get(n["id"], [])
+        if not attached_logs and not attached_configs:
+            continue
+        header_attrs = [f"type={n['type'] or '?'}", f"label={n['label'] or '?'}"]
+        if n["ip"]:
+            header_attrs.append(f"ip={n['ip']}")
+        parts.append(f"=== NODE: {n['id']} ({', '.join(header_attrs)}) ===")
+        parts.append("")
+        for i, a in enumerate(attached_logs, 1):
+            name = a["name"] or f"log_{i}"
+            parts.append(f"[ログ] {name}:")
+            parts.append(a["content"].rstrip())
+            parts.append("")
+        for i, a in enumerate(attached_configs, 1):
+            name = a["name"] or f"config_{i}"
+            parts.append(f"[設定] {name}:")
+            parts.append(a["content"].rstrip())
+            parts.append("")
+
+    # 未定義 ID への添付指定は警告として残す
+    orphan_ids = sorted(
+        ({nid for nid in logs_map if nid not in valid_ids}
+         | {nid for nid in configs_map if nid not in valid_ids})
+    )
+    if orphan_ids:
+        parts.append("(注: 未定義の node_id に添付が指定されました: " + ", ".join(orphan_ids) + ")")
+
+    return ("\n".join(parts) + "\n", nodes)
 
 
 class AppendLogRequest(BaseModel):
@@ -910,6 +1101,121 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
                 metrics = final_data.get("metrics") or {}
                 storage.insert_run_history(
                     log_name=req.log_name,
+                    config_id=req.config,
+                    base_config=base_config,
+                    confidence=float(final_data.get("confidence", 0.0)),
+                    tokens_in=int(metrics.get("tokens_in", 0)),
+                    tokens_out=int(metrics.get("tokens_out", 0)),
+                    latency_ms=int(metrics.get("latency_ms_total", 0)),
+                    trace_id=str(final_data.get("trace_id") or ""),
+                    top_category=(top or {}).get("category"),
+                    top_summary=(top or {}).get("summary"),
+                )
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/runs/topology-stream")
+async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
+    """トポロジー + ノード別ログを構成4 (rally) で SSE 実行する。
+
+    リクエスト boundary は config4 / config4 派生 user 構成のみ。
+    結果の AnalysisResult には ``suspected_node_ids`` が含まれ、UI 側で
+    トポロジー上のノードをハイライト表示するのに使う。
+    """
+    base_config, p_overrides, m_overrides, _pipeline = _resolve_run_target(
+        req.config, req.overrides, req.model_overrides, None
+    )
+    if base_config != "config4":
+        raise HTTPException(
+            status_code=400,
+            detail="トポロジー解析は config4 (rally) ベースの構成のみ対応",
+        )
+    if p_overrides or m_overrides:
+        _validate_overrides(base_config, p_overrides, m_overrides)
+
+    log_text, normalized_nodes = _build_topology_log_text(
+        req.topology, req.node_logs, req.node_configs
+    )
+    if not normalized_nodes:
+        raise HTTPException(status_code=400, detail="topology.nodes が空")
+    # 少なくとも 1 ノードに 1 件以上の log または config が必要
+    def _has_any_content(bucket: list[NodeAttachmentDTO] | None) -> bool:
+        return bool(bucket) and any((a.content or "").strip() for a in bucket)
+    has_any_attachment = any(
+        _has_any_content(req.node_logs.get(n["id"]))
+        or _has_any_content(req.node_configs.get(n["id"]))
+        for n in normalized_nodes
+    )
+    if not has_any_attachment:
+        raise HTTPException(
+            status_code=400,
+            detail="いずれか 1 ノード以上にログまたは設定ファイルを設定してください",
+        )
+
+    topology_context = {
+        "nodes": normalized_nodes,
+        "links": [
+            {"source": s, "target": t}
+            for s, t in (
+                (lk.get("source"), lk.get("target"))
+                for lk in (req.topology.get("links") or [])
+                if isinstance(lk, dict)
+            )
+            if s and t
+        ],
+    }
+
+    run_id = uuid4().hex
+    append_queue: asyncio.Queue[dict] = asyncio.Queue()
+    _APPEND_QUEUES[run_id] = append_queue
+    log_ref = f"topology-run:{run_id[:8]}"
+
+    async def _wait_for_decision() -> dict:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict] = loop.create_future()
+        _PENDING_DECISIONS[run_id] = fut
+        try:
+            return await fut
+        finally:
+            _PENDING_DECISIONS.pop(run_id, None)
+
+    async def gen() -> AsyncIterator[bytes]:
+        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
+        final_data: dict | None = None
+        try:
+            async for ev in run_rally_stream(
+                log_text,
+                log_ref,
+                prompt_overrides=p_overrides,
+                model_overrides=m_overrides,
+                rally_max_rounds=req.rally_max_rounds or 3,
+                decision_waiter=_wait_for_decision,
+                append_queue=append_queue,
+                topology_context=topology_context,
+            ):
+                yield _sse_bytes(ev.kind, ev.data)
+                if ev.kind == "final":
+                    final_data = ev.data.get("result")
+        except Exception as e:
+            yield _sse_bytes("error", {"message": str(e), "stage": "topology-stream"})
+            return
+        finally:
+            _APPEND_QUEUES.pop(run_id, None)
+
+        if final_data is not None:
+            try:
+                cands = final_data.get("root_cause_candidates") or []
+                top = cands[0] if cands else None
+                metrics = final_data.get("metrics") or {}
+                storage.insert_run_history(
+                    log_name=log_ref,
                     config_id=req.config,
                     base_config=base_config,
                     confidence=float(final_data.get("confidence", 0.0)),

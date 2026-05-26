@@ -91,6 +91,20 @@ class GraphEdge(BaseModel):
     label: str | None = None
 
 
+class SuspectedNodeFinding(BaseModel):
+    """トポロジー解析タブで返す、障害候補ノード 1 件の詳細。
+
+    severity の意味:
+        - "primary":   その障害の直接原因と判断されたノード
+        - "secondary": primary の影響で症状が出ているだけのノード
+        - "info":      観測されたが障害に直接関与しないノード
+    """
+
+    node_id: str
+    summary: str = ""
+    severity: str = ""  # "primary" | "secondary" | "info" | ""
+
+
 class DelegationEventDTO(BaseModel):
     """構成4 委譲チェーンの 1 ステップを UI に渡すための DTO。
 
@@ -142,3 +156,10 @@ class AnalysisResult(BaseModel):
     delegation_rounds: int = 0
     delegation_max_rounds: int = 0
     delegation_history: list[DelegationEventDTO] = Field(default_factory=list)
+    # トポロジー解析タブから実行された場合のみ埋まる。LLM が「障害に関係していると判断した」
+    # ノードIDの部分集合。UI 側で該当ノードをハイライト表示する。
+    # 他の経路（CLI / 通常 /api/runs / 構成1-3）では常に空配列。
+    suspected_node_ids: list[str] = Field(default_factory=list)
+    # 同上。ノード単位の詳細（summary / severity）。UI で各ノードに「ここで何が起こっているか」を
+    # 表示するために使う。``suspected_node_ids`` と整合（ID は同じか部分集合）。
+    suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)

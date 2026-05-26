@@ -213,6 +213,16 @@
 > LangGraph 依存は撤去し、手動 async ループ + `StreamingResponse` で実装。
 > 詳細は [docs/reports/poc_progress_2026-05-14.md](../reports/poc_progress_2026-05-14.md) 参照。
 
+> **2026-05-25 追加**: 構成4 を **「ネットワーク構成図 + ノード別ログ・設定ファイル」入力モード**
+> でも呼び出せるよう、UI 側に **トポロジー解析タブ** と backend に
+> `POST /api/runs/topology-stream` を追加。topology + 各ノードに添付された
+> **複数のログファイル + 複数の設定ファイル (Config)** を 1 本のログ文字列に合成して
+> 既存の `run_rally_stream` に流し、integrator が `suspected_nodes: [{node_id, summary, severity}]`
+> を出力する（schema 拡張: `AnalysisResult.suspected_node_ids` + `suspected_node_findings`、
+> schema_version は v0.1 据置）。UI は severity 別に矩形を配色（primary=赤+点滅 /
+> secondary=橙 / info=ハイライトなし）。委譲チェーンや確認モーダルなど構成4 既存資産は
+> そのまま流用。詳細は [docs/reports/poc_progress_2026-05-25.md](../reports/poc_progress_2026-05-25.md) 参照。
+
 ### 3.6 構成カバレッジ表（Dify単体 vs LangGraph必須）
 
 | 機能 | Dify単体 | LangGraph必須 |
@@ -239,6 +249,7 @@
 | 検証実行 | ログをアップロード→構成を実行→結果表示 |
 | 構成比較 | 複数構成の結果を横並びで精度比較 |
 | 人間判断必須フラグ | UI 上で**外せない**仕組み（議事録L3） |
+| **トポロジー解析タブ** | 2026-05-25 追加。ネットワーク構成図画像 + 各ノードの複数ログ + 複数設定ファイル (Config) を取り込み、構成4 (rally) で解析し、障害ノードを severity 別 (直接原因 / 影響を受けた側 / 参考) に矩形ハイライト |
 
 ### 4.2 検証パイプラインIF
 

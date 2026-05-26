@@ -1,0 +1,18 @@
+2026-05-25T08:55:00Z fw-01 INFO policy reload start rev=2026-05-25_001 source=cli user=ops02
+2026-05-25T08:55:00Z fw-01 INFO policy reload completed rev=2026-05-25_001 rules_loaded=412
+2026-05-25T08:59:50Z fw-01 INFO permit src=10.0.1.10 dst=10.0.2.12 dport=8080 proto=tcp action=allow rule=lb-to-app-02
+2026-05-25T09:00:00Z fw-01 INFO permit src=10.0.1.10 dst=10.0.2.12 dport=8080 proto=tcp action=allow rule=lb-to-app-02
+2026-05-25T09:00:14Z fw-01 INFO permit src=10.0.1.10 dst=10.0.2.12 dport=8080 proto=tcp action=allow rule=lb-to-app-02
+2026-05-25T09:00:15Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:00:20Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:00:25Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:00:30Z fw-01 INFO permit src=10.0.1.10 dst=10.0.2.12 dport=8080 proto=tcp action=allow rule=lb-to-app-02
+2026-05-25T09:00:35Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:00:40Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:00:45Z fw-01 INFO permit src=10.0.1.10 dst=10.0.2.12 dport=8080 proto=tcp action=allow rule=lb-to-app-02
+2026-05-25T09:00:50Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:01:00Z fw-01 NOTICE expected rule 'lb-to-app-01' not present in active policy rev=2026-05-25_001 (compare to previous rev=2026-05-24_007)
+2026-05-25T09:01:00Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:01:15Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:01:30Z fw-01 WARN deny  src=10.0.1.10 dst=10.0.2.11 dport=8080 proto=tcp action=deny  rule=default-deny
+2026-05-25T09:01:45Z fw-01 INFO permit src=10.0.1.10 dst=10.0.2.12 dport=8080 proto=tcp action=allow rule=lb-to-app-02

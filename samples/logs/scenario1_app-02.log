@@ -1,0 +1,10 @@
+2026-05-25T08:55:00Z app-02 INFO server listening on 0.0.0.0:8080 pid=1235
+2026-05-25T08:55:00Z app-02 INFO db pool initialized size=10 target=10.0.3.20:5432
+2026-05-25T09:00:14Z app-02 INFO request id=req-201 method=GET path=/api/health status=200 latency_ms=3  src=10.0.1.10
+2026-05-25T09:00:30Z app-02 INFO request id=req-202 method=GET path=/api/users/42  status=200 latency_ms=47 src=10.0.1.10
+2026-05-25T09:00:35Z app-02 INFO request id=req-203 method=GET path=/api/items     status=200 latency_ms=52 src=10.0.1.10
+2026-05-25T09:00:50Z app-02 INFO request id=req-204 method=GET path=/api/health    status=200 latency_ms=2  src=10.0.1.10
+2026-05-25T09:01:05Z app-02 INFO request id=req-205 method=POST path=/api/orders   status=201 latency_ms=88 src=10.0.1.10
+2026-05-25T09:01:20Z app-02 WARN request id=req-206 method=GET path=/api/items     status=200 latency_ms=210 src=10.0.1.10 note=elevated_latency
+2026-05-25T09:01:35Z app-02 INFO request id=req-207 method=GET path=/api/health    status=200 latency_ms=3  src=10.0.1.10
+2026-05-25T09:01:50Z app-02 WARN request id=req-208 method=GET path=/api/items     status=200 latency_ms=240 src=10.0.1.10 note=elevated_latency
