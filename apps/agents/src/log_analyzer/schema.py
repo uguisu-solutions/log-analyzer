@@ -105,6 +105,31 @@ class SuspectedNodeFinding(BaseModel):
     severity: str = ""  # "primary" | "secondary" | "info" | ""
 
 
+class StageOutput(BaseModel):
+    """Config-First 2 段階解析の各 Stage の中間結果 (Phase A 追加)。
+
+    - stage="config": コンフィグ情報のみで形成された仮説 (Stage 1)
+    - stage="log":    ログで事実確認した結果 (Stage 2)
+
+    通常の 1 段階モード / トポロジー解析タブ / config1-3 / config5 では空配列。
+    """
+
+    stage: str  # "config" | "log"
+    stage_label: str = ""
+    confidence: float = 0.0
+    summary: str = ""
+    suspected_node_ids: list[str] = Field(default_factory=list)
+    suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)
+    delegation_rounds: int = 0
+    delegation_history: list["DelegationEventDTO"] = Field(default_factory=list)
+    trace_id: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    latency_ms_total: int = 0
+    root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
+    recommended_actions: list[RecommendedAction] = Field(default_factory=list)
+
+
 class DelegationEventDTO(BaseModel):
     """構成4 委譲チェーンの 1 ステップを UI に渡すための DTO。
 
@@ -163,3 +188,9 @@ class AnalysisResult(BaseModel):
     # 同上。ノード単位の詳細（summary / severity）。UI で各ノードに「ここで何が起こっているか」を
     # 表示するために使う。``suspected_node_ids`` と整合（ID は同じか部分集合）。
     suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)
+    # Config-First 2 段階解析の各 Stage の中間結果。1 段階モードでは空配列。
+    stage_outputs: list[StageOutput] = Field(default_factory=list)
+
+
+# 前方参照の解決 (StageOutput が DelegationEventDTO を文字列参照しているため)
+StageOutput.model_rebuild()

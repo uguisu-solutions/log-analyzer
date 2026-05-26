@@ -2710,3 +2710,154 @@ code {
 .topology-graph-wrap .graph-container {
   height: 320px;
 }
+
+/* ─── Config-First 2 段階解析タブ ──────────────────────── */
+.config-first-mode .stage-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.8rem;
+  background: #f6f7f9;
+  border: 1px solid #e0e3e7;
+  border-radius: 6px;
+  margin-bottom: 0.8rem;
+  flex-wrap: wrap;
+}
+.stage-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  background: #fff;
+  border: 1px solid #d0d5db;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: #555;
+}
+.stage-step .stage-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  background: #e0e3e7;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: #555;
+}
+.stage-step.active {
+  background: #eaf3fb;
+  border-color: #0a5fb7;
+  color: #084e96;
+  font-weight: 600;
+}
+.stage-step.active .stage-num {
+  background: #0a5fb7;
+  color: #fff;
+}
+.stage-step.done {
+  background: #e7f5ec;
+  border-color: #1a7f3e;
+  color: #0f5128;
+}
+.stage-step.done .stage-num {
+  background: #1a7f3e;
+  color: #fff;
+}
+.stage-step.skipped {
+  background: #f5f5f5;
+  border-color: #c0c5cb;
+  color: #999;
+  text-decoration: line-through;
+}
+.stage-arrow {
+  color: #888;
+  font-size: 0.95rem;
+}
+
+/* Stage 1 完了承認モーダル */
+.modal.stage-approval-modal {
+  max-width: 720px;
+}
+.modal.stage-approval-modal .modal-summary {
+  background: #fff8e1;
+  padding: 0.6rem 0.8rem;
+  border-left: 4px solid #b8860b;
+  border-radius: 4px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.modal-meta {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+/* 結果ペインの Stage タブ */
+.result-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 0.6rem;
+}
+.result-tabs .tab {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.88rem;
+}
+
+/* Stage サマリ並列カード */
+.stage-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+.stage-summary-card {
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  border-left: 4px solid #ccc;
+  background: #fafbfc;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.stage-summary-card.stage-config {
+  border-left-color: #b8860b;
+  background: #fff8e1;
+}
+.stage-summary-card.stage-log {
+  border-left-color: #0a5fb7;
+  background: #eaf3fb;
+}
+.stage-summary-card.muted {
+  color: #888;
+  background: #f5f5f5;
+  border-left-color: #c0c5cb;
+}
+.stage-summary-head {
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+}
+.stage-summary-text {
+  margin-top: 0.3rem;
+  color: #1a1a1a;
+}
+
+/* リアルタイムログの Stage タグ */
+.stage-tag {
+  display: inline-block;
+  padding: 0.1em 0.45em;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+.stage-tag.stage-config {
+  background: #b8860b;
+  color: #fff;
+}
+.stage-tag.stage-log {
+  background: #0a5fb7;
+  color: #fff;
+}

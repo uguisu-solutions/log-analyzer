@@ -203,12 +203,32 @@ export interface AnalysisResult {
   // トポロジー解析タブ専用（他経路では空配列）
   suspected_node_ids: string[]
   suspected_node_findings: SuspectedNodeFinding[]
+  // Config-First 2 段階解析専用（他経路では空配列）
+  stage_outputs: StageOutput[]
 }
 
 export interface SuspectedNodeFinding {
   node_id: string
   summary: string
   severity: string  // "primary" | "secondary" | "info" | ""
+}
+
+// Config-First 2 段階解析の各 Stage 出力 ─────────────────────
+export interface StageOutput {
+  stage: string  // "config" | "log"
+  stage_label: string
+  confidence: number
+  summary: string
+  suspected_node_ids: string[]
+  suspected_node_findings: SuspectedNodeFinding[]
+  delegation_rounds: number
+  delegation_history: DelegationEvent[]
+  trace_id: string
+  tokens_in: number
+  tokens_out: number
+  latency_ms_total: number
+  root_cause_candidates: RootCauseCandidate[]
+  recommended_actions: RecommendedAction[]
 }
 
 // トポロジー解析タブで使うノード定義 ─────────────────────────

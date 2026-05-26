@@ -6,6 +6,7 @@ import { LogManager } from './LogManager'
 import { PipelineBuilder } from './PipelineBuilder'
 import { RunHistoryView } from './RunHistoryView'
 import { TopologyAnalysis } from './TopologyAnalysis'
+import { ConfigFirstAnalysis } from './ConfigFirstAnalysis'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -19,7 +20,7 @@ import './App.css'
 
 const API_BASE = 'http://localhost:8000'
 
-type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology'
+type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-first'
 
 function ResultDetails({ result }: { result: AnalysisResult }) {
   return (
@@ -920,6 +921,13 @@ function App() {
         >
           トポロジー解析
         </button>
+        <button
+          onClick={() => setMode('config-first')}
+          className={mode === 'config-first' ? 'tab active' : 'tab'}
+          disabled={singleRunning || isCompareRunning}
+        >
+          Config-First 解析
+        </button>
       </div>
 
       {mode === 'builder' && (
@@ -948,6 +956,16 @@ function App() {
 
       {mode === 'topology' && (
         <TopologyAnalysis
+          configList={configList}
+          logs={logs}
+          parseSSE={parseSSE}
+          renderEventSummary={renderEventSummary}
+          langfuseHost={langfuseHost}
+        />
+      )}
+
+      {mode === 'config-first' && (
+        <ConfigFirstAnalysis
           configList={configList}
           logs={logs}
           parseSSE={parseSSE}

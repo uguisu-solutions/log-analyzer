@@ -15,7 +15,8 @@
     POST   /api/runs                          指定構成を指定ログに当て、AnalysisResult を返す
     POST   /api/runs/stream                   構成4 (rally) を SSE でストリーミング実行
     POST   /api/runs/topology-stream          トポロジー + ノード別ログを構成4 で SSE 実行
-    POST   /api/runs/{run_id}/decision        確認モーダルからの継続 / 停止指示を送る
+    POST   /api/runs/config-first-stream      Config-First 2 段階 (Configs → 人間承認 → Logs) で SSE 実行
+    POST   /api/runs/{run_id}/decision        確認モーダルからの継続 / 停止 / 進む / 中止指示を送る
 """
 from __future__ import annotations
 
@@ -38,7 +39,8 @@ from pydantic import BaseModel
 from log_analyzer import pipeline_runner, prompt_slots, storage
 from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.rally_agent import StreamEvent, run_rally_stream
-from log_analyzer.schema import AnalysisResult
+from log_analyzer.rally_two_stage import run_two_stage_stream
+from log_analyzer.schema import AnalysisResult, StageOutput
 
 load_dotenv()
 storage.init_db()
@@ -262,9 +264,18 @@ class RunRequest(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    """確認モーダルからの応答。"""
+    """確認モーダルからの応答。
 
-    action: str  # "continue" | "stop"
+    rally_max_rounds 上限到達時:
+        - "continue" (+ extend_by): rally_max_rounds を延長して再開
+        - "stop": 即時 integrator 直行
+
+    Config-First 2 段階解析の Stage 1 → Stage 2 遷移時 (Phase A 追加):
+        - "advance": ログ検証 (Stage 2) に進む
+        - "abort":   Stage 1 で打ち切り、Stage 1 結果のみを最終とする
+    """
+
+    action: str  # "continue" | "stop" | "advance" | "abort"
     extend_by: int | None = None  # action="continue" のみ。既定 3
 
 
@@ -1236,6 +1247,149 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
     )
 
 
+class ConfigFirstRunRequest(BaseModel):
+    """``POST /api/runs/config-first-stream`` のリクエスト。
+
+    トポロジー + ノード別ログ + 設定ファイルを受け、Config-First 2 段階解析を実行する。
+    Stage 1 では configs のみ、Stage 2 では logs + Stage 1 仮説 を rally に渡す。
+    config4 (rally) ベースのみ対応。
+    """
+
+    config: str
+    topology: dict
+    node_logs: dict[str, list[NodeAttachmentDTO]] = {}
+    node_configs: dict[str, list[NodeAttachmentDTO]] = {}
+    rally_max_rounds: int | None = None
+    overrides: dict[str, str] | None = None
+    model_overrides: dict[str, str] | None = None
+
+
+@app.post("/api/runs/config-first-stream")
+async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingResponse:
+    """Config-First 2 段階解析を SSE で実行する。
+
+    Stage 1: 構成図 + configs のみで rally 実行 → suspected_nodes 仮説
+    人間承認モーダル (advance / abort)
+    Stage 2 (advance 時): Stage 1 仮説を冒頭に置いた合成ログ (logs 込み) で rally 実行 → 検証
+    """
+    base_config, p_overrides, m_overrides, _pipeline = _resolve_run_target(
+        req.config, req.overrides, req.model_overrides, None
+    )
+    if base_config != "config4":
+        raise HTTPException(
+            status_code=400,
+            detail="Config-First 解析は config4 (rally) ベースの構成のみ対応",
+        )
+    if p_overrides or m_overrides:
+        _validate_overrides(base_config, p_overrides, m_overrides)
+
+    # トポロジーの妥当性チェック (どちらの Stage でも共通)
+    _, normalized_nodes = _build_topology_log_text(req.topology, {}, {})
+    if not normalized_nodes:
+        raise HTTPException(status_code=400, detail="topology.nodes が空")
+
+    # Stage 1 で渡せる Config が 1 件もないなら 400
+    def _has_any_content(bucket) -> bool:
+        if not bucket:
+            return False
+        return any((a.content or "").strip() for a in bucket)
+    has_any_config = any(
+        _has_any_content(req.node_configs.get(n["id"])) for n in normalized_nodes
+    )
+    if not has_any_config:
+        raise HTTPException(
+            status_code=400,
+            detail="Config-First 解析には少なくとも 1 ノードに設定ファイル (Config) が必要です",
+        )
+
+    # 合成: Stage 1 (configs のみ)
+    stage_one_log_text, _ = _build_topology_log_text(
+        req.topology, {}, req.node_configs
+    )
+
+    # topology_context 共通
+    topology_context = {
+        "nodes": normalized_nodes,
+        "links": [
+            {"source": s, "target": t}
+            for s, t in (
+                (lk.get("source"), lk.get("target"))
+                for lk in (req.topology.get("links") or [])
+                if isinstance(lk, dict)
+            )
+            if s and t
+        ],
+    }
+
+    run_id = uuid4().hex
+    log_ref = f"config-first-run:{run_id[:8]}"
+
+    async def _wait_for_decision() -> dict:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict] = loop.create_future()
+        _PENDING_DECISIONS[run_id] = fut
+        try:
+            return await fut
+        finally:
+            _PENDING_DECISIONS.pop(run_id, None)
+
+    # Stage 2 用ログ合成は Stage 1 結果を見てから組み立てるためテンプレ関数化
+    def _stage_two_log_text(stage_one_output: StageOutput) -> str:
+        from log_analyzer.rally_two_stage import _build_stage_one_hypothesis_block
+        hypothesis_block = _build_stage_one_hypothesis_block(stage_one_output)
+        stage_two_body, _ = _build_topology_log_text(
+            req.topology, req.node_logs, req.node_configs
+        )
+        return hypothesis_block + stage_two_body
+
+    async def gen() -> AsyncIterator[bytes]:
+        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
+        final_data: dict | None = None
+        try:
+            async for ev in run_two_stage_stream(
+                stage_one_log_text=stage_one_log_text,
+                stage_two_log_text_template=_stage_two_log_text,
+                log_ref=log_ref,
+                topology_context=topology_context,
+                prompt_overrides=p_overrides,
+                model_overrides=m_overrides,
+                rally_max_rounds=req.rally_max_rounds or 3,
+                decision_waiter=_wait_for_decision,
+            ):
+                yield _sse_bytes(ev.kind, ev.data)
+                if ev.kind == "final":
+                    final_data = ev.data.get("result")
+        except Exception as e:
+            yield _sse_bytes("error", {"message": str(e), "stage": "config-first-stream"})
+            return
+
+        if final_data is not None:
+            try:
+                cands = final_data.get("root_cause_candidates") or []
+                top = cands[0] if cands else None
+                metrics = final_data.get("metrics") or {}
+                storage.insert_run_history(
+                    log_name=log_ref,
+                    config_id=req.config,
+                    base_config=base_config,
+                    confidence=float(final_data.get("confidence", 0.0)),
+                    tokens_in=int(metrics.get("tokens_in", 0)),
+                    tokens_out=int(metrics.get("tokens_out", 0)),
+                    latency_ms=int(metrics.get("latency_ms_total", 0)),
+                    trace_id=str(final_data.get("trace_id") or ""),
+                    top_category=(top or {}).get("category"),
+                    top_summary=(top or {}).get("summary"),
+                )
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/runs/{run_id}/append-log")
 async def runs_append_log(run_id: str, req: AppendLogRequest) -> dict:
     """実行中のストリームに追加ログを投入する。
@@ -1279,22 +1433,32 @@ async def runs_append_log(run_id: str, req: AppendLogRequest) -> dict:
     }
 
 
+_VALID_DECISION_ACTIONS = {"continue", "stop", "advance", "abort"}
+
+
 @app.post("/api/runs/{run_id}/decision")
 async def runs_decision(run_id: str, req: DecisionRequest) -> dict:
-    """確認モーダルからの継続 / 停止指示。
+    """確認モーダルからの応答。
 
-    action="continue" なら ``rally_max_rounds`` を +extend_by 延長して再開。
-    action="stop" なら次ラウンドに進まず integrator にフォールバック。
+    rally_max_rounds 上限到達時:
+        - action="continue" (+ extend_by): rally_max_rounds を延長して再開
+        - action="stop": 次ラウンドに進まず integrator にフォールバック
+
+    Config-First 2 段階解析の Stage 1 → Stage 2 遷移時:
+        - action="advance": Stage 2 (ログ検証) に進む
+        - action="abort":   Stage 1 で打ち切り、Stage 1 結果のみを最終とする
     """
+    # action の妥当性を先にチェック (pending decision の有無に依らず弾く)
+    if req.action not in _VALID_DECISION_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"action は {sorted(_VALID_DECISION_ACTIONS)} のいずれか",
+        )
     fut = _PENDING_DECISIONS.get(run_id)
     if fut is None or fut.done():
         raise HTTPException(
             status_code=404,
             detail=f"no pending decision for run {run_id}",
-        )
-    if req.action not in {"continue", "stop"}:
-        raise HTTPException(
-            status_code=400, detail="action は 'continue' または 'stop'"
         )
     payload: dict = {"action": req.action}
     if req.action == "continue":
