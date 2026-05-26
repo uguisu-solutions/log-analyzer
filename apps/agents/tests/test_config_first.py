@@ -189,6 +189,43 @@ def test_config_first_requires_at_least_one_config():
     assert "Config" in r.json()["detail"] or "config" in r.json()["detail"].lower()
 
 
+def test_skip_config_stage_accepts_logs_only():
+    """skip_config_stage=True 時は configs 不要、logs が 1 件以上あれば実行可能。
+
+    実 LLM 呼び出しの手前まで進ませる: 不正な saved_config を指定して 404 で止まる
+    ことを確認 (通常モードと同様の経路バリデーション通過)。
+    """
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-first-stream",
+        json={
+            "config": "user:99999",  # 存在しない
+            "topology": {"nodes": [{"id": "fw-01"}], "links": []},
+            "node_logs": {"fw-01": [{"name": "fw.log", "content": "deny ..."}]},
+            "node_configs": {},  # 空でも OK
+            "skip_config_stage": True,
+        },
+    )
+    assert r.status_code == 404  # saved_config 未登録、ログ・config 不在の 400 ではない
+
+
+def test_skip_config_stage_still_requires_at_least_one_log():
+    """skip 時は configs 不要だが、代わりに logs が 1 件以上必須。"""
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-first-stream",
+        json={
+            "config": "config4",
+            "topology": {"nodes": [{"id": "fw-01"}], "links": []},
+            "node_logs": {},
+            "node_configs": {"fw-01": [{"name": "x.conf", "content": "x"}]},  # configs はあるが skip
+            "skip_config_stage": True,
+        },
+    )
+    assert r.status_code == 400
+    assert "ログ" in r.json()["detail"]
+
+
 def test_decision_api_accepts_advance_abort():
     """decision エンドポイントが新規 advance / abort を受け付けること。
 

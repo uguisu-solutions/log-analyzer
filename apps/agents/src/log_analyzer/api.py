@@ -1253,6 +1253,11 @@ class ConfigFirstRunRequest(BaseModel):
     トポロジー + ノード別ログ + 設定ファイルを受け、Config-First 2 段階解析を実行する。
     Stage 1 では configs のみ、Stage 2 では logs + Stage 1 仮説 を rally に渡す。
     config4 (rally) ベースのみ対応。
+
+    議事録 2026-05-26 §「コンフィグファーストシナリオの検証」より:
+    `skip_config_stage=True` を指定すると Stage 1 (Configs 解析) と人間承認をスキップし、
+    Stage 2 相当 (logs のみで rally 実行) を 1 回だけ走らせる。Configs 利用 有/無 を
+    同条件で比較するための「OFF」モード。
     """
 
     config: str
@@ -1262,6 +1267,7 @@ class ConfigFirstRunRequest(BaseModel):
     rally_max_rounds: int | None = None
     overrides: dict[str, str] | None = None
     model_overrides: dict[str, str] | None = None
+    skip_config_stage: bool = False
 
 
 @app.post("/api/runs/config-first-stream")
@@ -1288,21 +1294,33 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
     if not normalized_nodes:
         raise HTTPException(status_code=400, detail="topology.nodes が空")
 
-    # Stage 1 で渡せる Config が 1 件もないなら 400
+    # 入力検証 (モードで要求するものが変わる):
+    #   通常モード: 少なくとも 1 ノードに Config が必要 (Stage 1 用)
+    #   skip モード: 少なくとも 1 ノードに Log が必要 (Logs only 単段で走る)
     def _has_any_content(bucket) -> bool:
         if not bucket:
             return False
         return any((a.content or "").strip() for a in bucket)
-    has_any_config = any(
-        _has_any_content(req.node_configs.get(n["id"])) for n in normalized_nodes
-    )
-    if not has_any_config:
-        raise HTTPException(
-            status_code=400,
-            detail="Config-First 解析には少なくとも 1 ノードに設定ファイル (Config) が必要です",
+    if req.skip_config_stage:
+        has_any_log = any(
+            _has_any_content(req.node_logs.get(n["id"])) for n in normalized_nodes
         )
+        if not has_any_log:
+            raise HTTPException(
+                status_code=400,
+                detail="Configs スキップモードでは少なくとも 1 ノードにログが必要です",
+            )
+    else:
+        has_any_config = any(
+            _has_any_content(req.node_configs.get(n["id"])) for n in normalized_nodes
+        )
+        if not has_any_config:
+            raise HTTPException(
+                status_code=400,
+                detail="Config-First 解析には少なくとも 1 ノードに設定ファイル (Config) が必要です",
+            )
 
-    # 合成: Stage 1 (configs のみ)
+    # 合成: Stage 1 (configs のみ) — skip 時は不要だが両モードで topology_context は共通
     stage_one_log_text, _ = _build_topology_log_text(
         req.topology, {}, req.node_configs
     )
@@ -1341,6 +1359,83 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
             req.topology, req.node_logs, req.node_configs
         )
         return hypothesis_block + stage_two_body
+
+    # Configs スキップ時: Stage 2 相当 (logs のみ) を 1 回だけ rally する経路
+    async def _gen_skip_mode() -> AsyncIterator[bytes]:
+        from log_analyzer.rally_two_stage import _result_to_stage_output, _build_final_result
+        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
+        yield _sse_bytes(
+            "stage_one_skipped",
+            {
+                "stage": "config",
+                "reason": "user opted out (skip_config_stage=true)",
+                "message": "Configs 解析と人間承認をスキップし、Logs のみで 1 段階解析を実行します。",
+            },
+        )
+        # log_text は logs のみ (configs を含めない — Configs 利用 OFF の意図に合わせる)
+        skip_log_text, _ = _build_topology_log_text(req.topology, req.node_logs, {})
+        yield _sse_bytes(
+            "stage_two_start",
+            {"stage": "log", "stage_label": "Logs のみ単段解析 (skip mode)"},
+        )
+        final_result: AnalysisResult | None = None
+        try:
+            async for ev in run_rally_stream(
+                skip_log_text,
+                f"{log_ref}::skip",
+                prompt_overrides=p_overrides,
+                model_overrides=m_overrides,
+                rally_max_rounds=req.rally_max_rounds or 3,
+                decision_waiter=_wait_for_decision,
+                topology_context={**topology_context, "stage": "log"},
+            ):
+                # stage タグを注入して UI 側で識別可能にする (Stage 2 単独相当)
+                if "stage" not in ev.data:
+                    ev.data["stage"] = "log"
+                if ev.kind == "final":
+                    payload = ev.data.get("result")
+                    if isinstance(payload, dict):
+                        final_result = AnalysisResult.model_validate(payload)
+                    # 上層には統合済 final を流すのでここでは流さない
+                    continue
+                yield _sse_bytes(ev.kind, ev.data)
+        except Exception as e:
+            yield _sse_bytes("error", {"message": str(e), "stage": "config-first-stream"})
+            return
+
+        if final_result is None:
+            yield _sse_bytes("error", {"message": "skip-mode rally が結果を返しませんでした", "stage": "log"})
+            return
+
+        # 通常モードと同じ AnalysisResult 形式に寄せる (stage_outputs に 1 件のみ)
+        stage_output = _result_to_stage_output("log", final_result)
+        final = _build_final_result(
+            stage_outputs=[stage_output],
+            trace_id=final_result.trace_id,
+            log_ref=log_ref,
+        )
+        final_dict = final.model_dump(mode="json")
+        yield _sse_bytes("final", {"result": final_dict})
+
+        # 履歴記録 (best-effort)
+        try:
+            cands = final_dict.get("root_cause_candidates") or []
+            top = cands[0] if cands else None
+            metrics = final_dict.get("metrics") or {}
+            storage.insert_run_history(
+                log_name=log_ref,
+                config_id=req.config,
+                base_config=base_config,
+                confidence=float(final_dict.get("confidence", 0.0)),
+                tokens_in=int(metrics.get("tokens_in", 0)),
+                tokens_out=int(metrics.get("tokens_out", 0)),
+                latency_ms=int(metrics.get("latency_ms_total", 0)),
+                trace_id=str(final_dict.get("trace_id") or ""),
+                top_category=(top or {}).get("category"),
+                top_summary=(top or {}).get("summary"),
+            )
+        except Exception:
+            pass
 
     async def gen() -> AsyncIterator[bytes]:
         yield _sse_bytes("run_id_assigned", {"run_id": run_id})
@@ -1383,8 +1478,9 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
             except Exception:
                 pass
 
+    chosen_gen = _gen_skip_mode if req.skip_config_stage else gen
     return StreamingResponse(
-        gen(),
+        chosen_gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

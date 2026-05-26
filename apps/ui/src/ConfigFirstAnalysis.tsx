@@ -109,6 +109,9 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
     if (!selectedConfig && rallyConfigs.length > 0) setSelectedConfig(rallyConfigs[0].id)
   }, [rallyConfigs, selectedConfig])
   const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
+  // 議事録「Configs 利用 ON/OFF」: true なら Stage 1 と人間承認をスキップして
+  // Logs のみで 1 段階 rally する。同タブ内で「Configs あり vs なし」の比較評価を可能にする。
+  const [skipConfigStage, setSkipConfigStage] = useState<boolean>(false)
 
   // ─── 2 段階実行状態 ──────────────────────────────────────────
   const [stageStatus, setStageStatus] = useState<StageStatus>('idle')
@@ -294,10 +297,13 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
     if (stageStatus !== 'idle' && stageStatus !== 'completed' && stageStatus !== 'aborted' && stageStatus !== 'error') return false
     if (!selectedConfig) return false
     if (topology.nodes.length === 0) return false
-    // Config-First は最低 1 件の Config が必須 (Stage 1 で使う)
-    const hasConfig = Object.values(nodeConfigs).some(list => list.some(a => a.content.trim().length > 0))
-    return hasConfig
-  }, [stageStatus, selectedConfig, topology.nodes, nodeConfigs])
+    // 通常モード: Stage 1 用に Config が 1 件以上必要
+    // skip モード:   Stage 2 単段相当のため Log が 1 件以上必要
+    if (skipConfigStage) {
+      return Object.values(nodeLogs).some(list => list.some(a => a.content.trim().length > 0))
+    }
+    return Object.values(nodeConfigs).some(list => list.some(a => a.content.trim().length > 0))
+  }, [stageStatus, selectedConfig, topology.nodes, nodeConfigs, nodeLogs, skipConfigStage])
 
   // ─── 実行 ────────────────────────────────────────────────────
   const run = async () => {
@@ -317,6 +323,7 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         },
         node_logs: filteredAttachments(nodeLogs),
         node_configs: filteredAttachments(nodeConfigs),
+        skip_config_stage: skipConfigStage,
       }
       const r = await fetch(`${API_BASE}/api/runs/config-first-stream`, {
         method: 'POST',
@@ -332,6 +339,9 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         setStreamEvents(prev => [...prev, ev])
         if (ev.kind === 'run_id_assigned') {
           setRunId(String(ev.data.run_id ?? ''))
+        } else if (ev.kind === 'stage_one_skipped') {
+          // skip モード: Stage 1 と人間承認を飛ばして直接 Stage 2 (単段) へ
+          setStageStatus('stage2_running')
         } else if (ev.kind === 'stage_one_complete') {
           const so = ev.data.stage_output as StageOutput | undefined
           if (so) setStageOneOutput(so)
@@ -398,7 +408,7 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         </p>
       </div>
 
-      <StageIndicator status={stageStatus} />
+      <StageIndicator status={stageStatus} skipConfigStage={skipConfigStage} />
 
       <div className="topology-toolbar">
         <label className="btn-file">
@@ -482,6 +492,29 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         </aside>
       </div>
 
+      <div className="topology-mode-bar">
+        <div className="mode-toggle">
+          <span className="mode-toggle-label">Configs 利用:</span>
+          <label className="radio-pill">
+            <input type="radio" name="cf-mode" checked={!skipConfigStage}
+              onChange={() => setSkipConfigStage(false)}
+              disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'} />
+            <span>ON — 2 段階 (Configs → 承認 → Logs)</span>
+          </label>
+          <label className="radio-pill">
+            <input type="radio" name="cf-mode" checked={skipConfigStage}
+              onChange={() => setSkipConfigStage(true)}
+              disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'} />
+            <span>OFF — Logs のみ 1 段階 (Configs スキップ)</span>
+          </label>
+        </div>
+        <p className="mode-toggle-hint muted">
+          {skipConfigStage
+            ? 'Stage 1 と人間承認をスキップし、Logs のみで rally を 1 回実行します。Configs 利用ありとの比較評価用。'
+            : '議事録の標準モード。Configs で当たりをつけ、人間承認の後にログで事実確認します。'}
+        </p>
+      </div>
+
       <div className="topology-run-bar">
         <label>
           構成:
@@ -497,9 +530,9 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         </label>
         <button onClick={run} disabled={!canRun}>
           {stageStatus === 'stage1_running' ? 'Stage 1 実行中…'
-            : stageStatus === 'stage2_running' ? 'Stage 2 実行中…'
+            : stageStatus === 'stage2_running' ? (skipConfigStage ? 'Logs 解析中…' : 'Stage 2 実行中…')
             : stageStatus === 'awaiting_decision' ? '人間承認待ち'
-            : '解析を開始'}
+            : skipConfigStage ? 'Logs のみで解析' : '解析を開始'}
         </button>
         {(stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision') && (
           <button onClick={cancel} className="btn-secondary">中止</button>
@@ -564,27 +597,34 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
 
 // ─── サブコンポーネント ──────────────────────────────────────
 
-function StageIndicator({ status }: { status: StageStatus }) {
+function StageIndicator({ status, skipConfigStage }: { status: StageStatus; skipConfigStage: boolean }) {
   const stage1Done = status === 'awaiting_decision' || status === 'stage2_running' || status === 'completed' || status === 'aborted'
   const stage2Done = status === 'completed'
   const stage1Active = status === 'stage1_running'
   const stage2Active = status === 'stage2_running'
   const awaiting = status === 'awaiting_decision'
+  // skip モード: Stage 1 と人間承認ステップは「skipped」表示にする
+  const stage1Class = skipConfigStage
+    ? 'skipped'
+    : [stage1Active ? 'active' : '', stage1Done ? 'done' : ''].filter(Boolean).join(' ')
+  const approvalClass = skipConfigStage
+    ? 'skipped'
+    : [awaiting ? 'active' : '', stage1Done && status !== 'awaiting_decision' ? 'done' : ''].filter(Boolean).join(' ')
   return (
     <div className="stage-indicator">
-      <div className={['stage-step', stage1Active ? 'active' : '', stage1Done ? 'done' : ''].filter(Boolean).join(' ')}>
+      <div className={['stage-step', stage1Class].filter(Boolean).join(' ')}>
         <span className="stage-num">1</span>
-        <span className="stage-name">Configs 解析</span>
+        <span className="stage-name">Configs 解析{skipConfigStage && ' (skip)'}</span>
       </div>
       <div className="stage-arrow">→</div>
-      <div className={['stage-step', awaiting ? 'active' : '', stage1Done && status !== 'awaiting_decision' ? 'done' : ''].filter(Boolean).join(' ')}>
+      <div className={['stage-step', approvalClass].filter(Boolean).join(' ')}>
         <span className="stage-num">✓</span>
-        <span className="stage-name">人間承認</span>
+        <span className="stage-name">人間承認{skipConfigStage && ' (skip)'}</span>
       </div>
       <div className="stage-arrow">→</div>
-      <div className={['stage-step', stage2Active ? 'active' : '', stage2Done ? 'done' : '', status === 'aborted' ? 'skipped' : ''].filter(Boolean).join(' ')}>
-        <span className="stage-num">2</span>
-        <span className="stage-name">Logs 検証</span>
+      <div className={['stage-step', stage2Active ? 'active' : '', stage2Done ? 'done' : '', !skipConfigStage && status === 'aborted' ? 'skipped' : ''].filter(Boolean).join(' ')}>
+        <span className="stage-num">{skipConfigStage ? '1' : '2'}</span>
+        <span className="stage-name">Logs 解析</span>
       </div>
       <div className="stage-arrow">→</div>
       <div className={['stage-step', status === 'completed' || status === 'aborted' ? 'done' : ''].filter(Boolean).join(' ')}>

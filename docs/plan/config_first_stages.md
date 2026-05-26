@@ -1,6 +1,7 @@
-# Config-First 2 段階解析 — 設計ドキュメント (Phase A)
+# Config-First 2 段階解析 — 設計ドキュメント (Phase A + A.5)
 
 **作成日**: 2026-05-26
+**更新日**: 2026-05-26 (A.5 Configs ON/OFF トグル追記)
 **ブランチ**: `feature/config-first-stages`
 **前提**: 既存のトポロジー解析タブ ([feature/topology-analysis](../reports/poc_progress_2026-05-25.md)) が `main` 取り込み待ち。本機能はそこから派生する後続フェーズ。
 
@@ -280,6 +281,51 @@ Stage 2 ライブログ中 → Stage 2 の suspected_nodes でハイライト
 | D | ラウンド集計ビュー | 既に `StageOutput.metrics` を持つので可視化のみ |
 | E | チャット形式 UI | 本タブの UI レイアウトを会話スレッド型に再構成 |
 | F | 問診票有無の比較ベンチマーク | `compare_configs.py` 拡張 |
+
+---
+
+## 9.5. Phase A.5: Configs 利用 ON/OFF トグル
+
+議事録「**システム側で、コンフィグ利用のオン/オフ切り替えができるように準備する**」に対応。
+タブ内のラジオボタンで以下の 2 モードを切り替え可能:
+
+| モード | 動作 | 必須入力 |
+|---|---|---|
+| **ON** (既定) | Configs → 人間承認 → Logs の 2 段階 (Phase A 標準) | 各ノードに Config 1 件以上 |
+| **OFF** (Skip) | Stage 1 と人間承認をスキップ、**Logs のみ**で 1 段階 rally | 各ノードに Log 1 件以上 |
+
+### バックエンド差分
+
+- `ConfigFirstRunRequest.skip_config_stage: bool = False` を追加
+- エンドポイントで分岐:
+  - 入力検証: skip 時は Config 不要、代わりに Log 必須
+  - skip 時は `run_two_stage_stream` をバイパスし、`run_rally_stream` を直接 1 回呼ぶ
+  - log_text は `_build_topology_log_text(topology, node_logs, {})` (configs は含めない、意図に忠実)
+  - 新 SSE イベント `stage_one_skipped` を emit (UI はこれで Stage 1 表示をスキップ扱いに)
+  - 最終 AnalysisResult の `stage_outputs` は 1 件 (stage="log") のみ
+
+### SSE シーケンス (skip モード)
+
+```
+run_id_assigned
+stage_one_skipped              ← 新イベント (Stage 1 を飛ばしたことを通知)
+stage_two_start                ← Stage 2 単段の開始 (実質は 1 段階目)
+(run_rally_stream events, stage="log")
+final                          ← stage_outputs = [stage="log"] 1 件のみ
+```
+
+### UI 差分
+
+- 「Configs 利用」セレクタ (ラジオ 2 択) を実行バー上部に追加
+- StageIndicator は skip 時に Stage 1 + 人間承認を「(skip)」表示
+- canRun: skip 時は Log 必須、通常時は Config 必須
+- 承認モーダルは skip 時は出ない (decision_waiter が呼ばれないため)
+
+### 検証ユースケース
+
+議事録の **「精度・速度・コスト」3 軸評価** で `Configs あり vs なし` の比較が
+同タブ内で完結する。同じシナリオを `ON` と `OFF` で順に実行し、
+suspected_node_ids の一致率 / confidence / tokens / latency_ms_total を突き合わせる。
 
 ---
 
