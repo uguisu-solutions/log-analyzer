@@ -3331,3 +3331,103 @@ code {
   font-weight: 700;
 }
 .link-button:hover { color: #084e96; }
+
+/* ─── ChatInput (実行中の介入入力, Phase E 拡張) ─── */
+.chat-section {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8rem;
+  margin: 0.6rem 0;
+}
+.chat-section > h3 {
+  margin: 0 0 0.6rem 0;
+  font-size: 1.05rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3rem;
+}
+.chat-input {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: #eaf3fb;
+  border: 1px solid #b6d4f0;
+  border-radius: 8px;
+}
+.chat-input.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.chat-input-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+.chat-input-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: #084e96;
+}
+.chat-input-hint {
+  font-size: 0.78rem;
+}
+.chat-input-type {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
+}
+.chat-input-type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  background: #fff;
+  border: 1px solid #d0d5db;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.chat-input-type-pill.active {
+  background: #0a5fb7;
+  color: #fff;
+  border-color: #0a5fb7;
+}
+.chat-input-type-pill input { margin: 0; }
+.chat-input-text {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #d0d5db;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.88rem;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.chat-input-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+.chat-input-send {
+  padding: 0.4rem 0.8rem;
+  background: #b8860b;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.chat-input-send:hover:not(:disabled) { background: #9c7209; }
+.chat-input-send:disabled {
+  background: #d0d5db;
+  color: #888;
+  cursor: not-allowed;
+}
+.chat-input-status { font-size: 0.78rem; }
+.chat-input-error {
+  font-size: 0.82rem;
+  color: #b3261e;
+}

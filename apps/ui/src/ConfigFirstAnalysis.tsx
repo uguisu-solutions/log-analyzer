@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { AuditReportView } from './AuditReportView'
 import { ChatHistoryView } from './ChatHistoryView'
+import { ChatInput } from './ChatInput'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { LiveChatView } from './LiveChatView'
@@ -125,8 +126,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
   // 監査エージェント (Phase C): Stage 2 の integrator 後 (または abort 時は Stage 1) に GPT で独立検証
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
-  // 表示モード (Phase E)
-  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
+  // 表示モード (Phase E): デフォルトをチャットに (議事録の UI 要求)
+  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('chat')
 
   // ─── 2 段階実行状態 ──────────────────────────────────────────
   const [stageStatus, setStageStatus] = useState<StageStatus>('idle')
@@ -533,11 +534,14 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         </aside>
       </div>
 
-      <QuestionnairePanel
-        answers={questionnaireAnswers}
-        onAnswersChange={setQuestionnaireAnswers}
-        disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'}
-      />
+      {/* standard モード時のみ実行バー直前に表示 (chat モードはチャット内に統合) */}
+      {viewMode === 'standard' && (
+        <QuestionnairePanel
+          answers={questionnaireAnswers}
+          onAnswersChange={setQuestionnaireAnswers}
+          disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'}
+        />
+      )}
 
       <div className="topology-mode-bar">
         <div className="mode-toggle">
@@ -594,33 +598,53 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
 
       {error && <div className="topology-error">エラー: {error}</div>}
 
-      {/* イベントが届き次第トグルを表示 (結果完了を待たない) */}
-      {(streamEvents.length > 0 || finalResult) && (
-        <ViewModeToggle mode={viewMode} onChange={setViewMode} />
-      )}
+      <ViewModeToggle mode={viewMode} onChange={setViewMode} />
 
-      {streamEvents.length > 0 && (
-        <section className="realtime-stream">
+      {/* chat モード: 問診票 + ライブログ + 介入入力 を 1 セクションに統合 */}
+      {viewMode === 'chat' && (
+        <section className="realtime-stream chat-section">
           <h3>
-            {viewMode === 'chat' ? 'リアルタイム会話' : 'リアルタイム実行ログ'}
-            <span className="realtime-count">{streamEvents.length} イベント</span>
+            会話
+            {streamEvents.length > 0 && (
+              <span className="realtime-count">{streamEvents.length} イベント</span>
+            )}
           </h3>
-          {viewMode === 'chat' ? (
+          <QuestionnairePanel
+            answers={questionnaireAnswers}
+            onAnswersChange={setQuestionnaireAnswers}
+            disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'}
+          />
+          {streamEvents.length > 0 ? (
             <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} />
           ) : (
-            <ol className="stream-events">
-              {streamEvents.map((ev, i) => {
-                const stage = (ev.data as { stage?: string }).stage
-                return (
-                  <li key={i} className={`stream-event kind-${ev.kind} ${stage ? `stg-${stage}` : ''}`}>
-                    {stage && <span className={`stage-tag stage-${stage}`}>{stage === 'config' ? 'Stage 1' : 'Stage 2'}</span>}
-                    <span className="stream-kind">{ev.kind}</span>
-                    <span className="stream-body">{renderEventSummary(ev)}</span>
-                  </li>
-                )
-              })}
-            </ol>
+            <div className="live-chat-empty muted">実行を開始するとここに会話が表示されます。</div>
           )}
+          <ChatInput
+            runId={runId}
+            disabled={stageStatus !== 'stage1_running' && stageStatus !== 'stage2_running'}
+          />
+        </section>
+      )}
+
+      {/* 標準モード: 従来のイベントリスト */}
+      {viewMode === 'standard' && streamEvents.length > 0 && (
+        <section className="realtime-stream">
+          <h3>
+            リアルタイム実行ログ
+            <span className="realtime-count">{streamEvents.length} イベント</span>
+          </h3>
+          <ol className="stream-events">
+            {streamEvents.map((ev, i) => {
+              const stage = (ev.data as { stage?: string }).stage
+              return (
+                <li key={i} className={`stream-event kind-${ev.kind} ${stage ? `stg-${stage}` : ''}`}>
+                  {stage && <span className={`stage-tag stage-${stage}`}>{stage === 'config' ? 'Stage 1' : 'Stage 2'}</span>}
+                  <span className="stream-kind">{ev.kind}</span>
+                  <span className="stream-body">{renderEventSummary(ev)}</span>
+                </li>
+              )
+            })}
+          </ol>
         </section>
       )}
 

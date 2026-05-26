@@ -498,10 +498,58 @@ async def run_rally_stream(
             break
 
         # ─── 監視ノード実行 ──────────────────────────────────
-        # ユーザーが投入した追加ログをここで取り込み、以降の監視に反映させる。
+        # ユーザーが投入した追加コンテンツ (ログ / 設定 / コメント) をここで取り込む。
         # 元の log_text は変更しないので prompt caching の安定ブロックは維持される。
-        for record in _drain_appends(state, append_queue):
+        drained = _drain_appends(state, append_queue)
+        for record in drained:
             yield StreamEvent("log_appended", record)
+
+        # 介入再起動: ユーザーから追加コンテンツが届いていた場合、現在予定していた
+        # 監視を走らせず、orchestrator を再呼び出しして初期ノードを再選択する。
+        # 議事録 2026-05-26「処理中にプロンプトで介入があった場合は、一度
+        # オーケストレーションノードに戻り、初期ノード選択から再開」に対応。
+        if drained:
+            yield StreamEvent(
+                "intervention_restart",
+                {
+                    "reason": "ユーザーから追加コンテンツが届きました。orchestrator に戻り初期ノードを再選択します。",
+                    "added_count": len(drained),
+                    "previous_planned_node": current,
+                },
+            )
+            try:
+                orch = await _run_sync(orchestrator_select_first, state)
+            except Exception as e:
+                yield StreamEvent("error", {"stage": "orchestrator_restart", "message": str(e)})
+                return
+            state["token_log"].append(
+                {
+                    "role": "orchestrator",
+                    "model": orch["model"],
+                    "tokens_in": orch["tokens_in"],
+                    "tokens_out": orch["tokens_out"],
+                    "latency_ms": orch["latency_ms"],
+                    "input": orch["user_input"][:2000],
+                    "raw_output": orch["raw_output"],
+                }
+            )
+            restart_event = {
+                "round": state["rally_round"],
+                "kind": "orchestrator_restart",
+                "from_node": "orchestrator",
+                "to_node": orch["first_node"],
+                "focus_hint": orch["focus_hint"],
+                "rationale": (orch["rationale"] or "") + " (ユーザー介入により再選択)",
+                "confidence": None,
+            }
+            if orch.get("parse_error"):
+                restart_event["parse_error"] = orch["parse_error"]
+            state["delegation_history"].append(restart_event)
+            yield StreamEvent("orchestrator_decision", restart_event)
+            state["current_node"] = orch["first_node"]
+            state["pending_focus_hint"] = orch["focus_hint"]
+            state["previous_node"] = "orchestrator"
+            continue  # 次のループ反復で、新しい current_node に対して監視を走らせる
 
         next_round = state["rally_round"] + 1
         state["rally_round"] = next_round

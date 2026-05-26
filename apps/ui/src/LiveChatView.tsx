@@ -152,12 +152,29 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
         )
         return
       }
-      case 'log_appended':
+      case 'log_appended': {
+        const source = String(d.source ?? '?')
+        // intervention:{type}:user の場合は type タグを綺麗に表示
+        const m = source.match(/^intervention:(comment|log|config):/)
+        const tagLabel = m
+          ? (m[1] === 'comment' ? '介入コメント' : m[1] === 'log' ? '介入ログ' : '介入設定')
+          : '追加ログ'
         messages.push(
-          <ChatMessage key={`ev-${i}`} sender="human" speaker="人間オペレータ" tag="追加ログ">
-            <p className="chat-rationale">＋ ログ投入 (source={String(d.source ?? '?')}, round_added={String(d.round_added ?? 0)})</p>
+          <ChatMessage key={`ev-${i}`} sender="human" speaker="人間オペレータ" tag={tagLabel}>
+            <p className="chat-rationale">＋ 投入 (source={source}, round_added={String(d.round_added ?? 0)})</p>
             {d.content && (
               <p className="muted small">{String(d.content).slice(0, 200)}{String(d.content).length > 200 ? '…' : ''}</p>
+            )}
+          </ChatMessage>
+        )
+        return
+      }
+      case 'intervention_restart':
+        messages.push(
+          <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="再選択">
+            <p>🔄 ユーザー介入を検出 ({String(d.added_count ?? 0)} 件)。orchestrator に戻り初期ノードを再選択します。</p>
+            {d.previous_planned_node && (
+              <p className="muted small">予定していたノード: <code>{String(d.previous_planned_node)}</code></p>
             )}
           </ChatMessage>
         )

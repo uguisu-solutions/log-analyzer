@@ -142,13 +142,14 @@ class DelegationEventDTO(BaseModel):
     """構成4 委譲チェーンの 1 ステップを UI に渡すための DTO。
 
     kind の意味:
-        - "orchestrator_initial": オーケストレータが初手の監視を指名
-        - "monitor_delegation":   監視が次の監視に委譲
-        - "monitor_finalize":     監視が integrator を指名（自然終了）
+        - "orchestrator_initial":  オーケストレータが初手の監視を指名 (実行開始時 1 回)
+        - "orchestrator_restart":  ユーザー介入により orchestrator が再選択 (2026-05-26 追加)
+        - "monitor_delegation":    監視が次の監視に委譲
+        - "monitor_finalize":      監視が integrator を指名（自然終了）
         - "routing_violation_fallback": 自己遷移 / ping-pong 違反で integrator に強制
-        - "max_rounds_finalize":  rally_max_rounds 到達による強制 finalize
-        - "user_finalize":        ユーザーが確認モーダルで停止を選択
-        - "user_extend":          ユーザーが確認モーダルで延長を選択（履歴記録用）
+        - "max_rounds_finalize":   rally_max_rounds 到達による強制 finalize
+        - "user_finalize":         ユーザーが確認モーダルで停止を選択
+        - "user_extend":           ユーザーが確認モーダルで延長を選択（履歴記録用）
     """
 
     round: int

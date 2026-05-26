@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { AuditReportView } from './AuditReportView'
 import { ChatHistoryView } from './ChatHistoryView'
+import { ChatInput } from './ChatInput'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { LiveChatView } from './LiveChatView'
@@ -149,8 +150,8 @@ export function TopologyAnalysis({
   const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
   // 監査エージェント (Phase C): integrator 後に GPT で独立検証するか
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
-  // 表示モード (Phase E): 標準 / チャット
-  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
+  // 表示モード (Phase E): デフォルトをチャットに (議事録の UI 要求)
+  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('chat')
 
   const [running, setRunning] = useState(false)
   const [streamEvents, setStreamEvents] = useState<SSEEvent[]>([])
@@ -637,11 +638,14 @@ export function TopologyAnalysis({
         </aside>
       </div>
 
-      <QuestionnairePanel
-        answers={questionnaireAnswers}
-        onAnswersChange={setQuestionnaireAnswers}
-        disabled={running}
-      />
+      {/* standard モード時のみ実行バー直前に表示 (chat モードはチャット内に統合) */}
+      {viewMode === 'standard' && (
+        <QuestionnairePanel
+          answers={questionnaireAnswers}
+          onAnswersChange={setQuestionnaireAnswers}
+          disabled={running}
+        />
+      )}
 
       <div className="topology-run-bar">
         <label>
@@ -684,29 +688,47 @@ export function TopologyAnalysis({
 
       {error && <div className="topology-error">エラー: {error}</div>}
 
-      {/* 実行開始でイベントが届いたら、結果ペインの前にトグルを出す */}
-      {(streamEvents.length > 0 || result) && (
-        <ViewModeToggle mode={viewMode} onChange={setViewMode} />
-      )}
+      {/* 表示モード切替は常に表示 (chat モードでは問診票入力も含むため) */}
+      <ViewModeToggle mode={viewMode} onChange={setViewMode} />
 
-      {streamEvents.length > 0 && (
-        <section className="realtime-stream">
+      {/* chat モード: 問診票 + ライブログ + 介入入力 を 1 セクションに統合 */}
+      {viewMode === 'chat' && (
+        <section className="realtime-stream chat-section">
           <h3>
-            {viewMode === 'chat' ? 'リアルタイム会話' : 'リアルタイム実行ログ'}
-            <span className="realtime-count">{streamEvents.length} イベント</span>
+            会話
+            {streamEvents.length > 0 && (
+              <span className="realtime-count">{streamEvents.length} イベント</span>
+            )}
           </h3>
-          {viewMode === 'chat' ? (
+          <QuestionnairePanel
+            answers={questionnaireAnswers}
+            onAnswersChange={setQuestionnaireAnswers}
+            disabled={running}
+          />
+          {streamEvents.length > 0 ? (
             <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} />
           ) : (
-            <ol className="stream-events">
-              {streamEvents.map((ev, i) => (
-                <li key={i} className={`stream-event kind-${ev.kind}`}>
-                  <span className="stream-kind">{ev.kind}</span>
-                  <span className="stream-body">{renderEventSummary(ev)}</span>
-                </li>
-              ))}
-            </ol>
+            <div className="live-chat-empty muted">実行を開始するとここに会話が表示されます。</div>
           )}
+          <ChatInput runId={runId} disabled={!running} />
+        </section>
+      )}
+
+      {/* 標準モードの従来表示 */}
+      {viewMode === 'standard' && streamEvents.length > 0 && (
+        <section className="realtime-stream">
+          <h3>
+            リアルタイム実行ログ
+            <span className="realtime-count">{streamEvents.length} イベント</span>
+          </h3>
+          <ol className="stream-events">
+            {streamEvents.map((ev, i) => (
+              <li key={i} className={`stream-event kind-${ev.kind}`}>
+                <span className="stream-kind">{ev.kind}</span>
+                <span className="stream-body">{renderEventSummary(ev)}</span>
+              </li>
+            ))}
+          </ol>
         </section>
       )}
 
