@@ -585,7 +585,7 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
             disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running'} />
           <span>GPT 監査も実行</span>
         </label>
-        <button onClick={run} disabled={!canRun}>
+        <button onClick={run} disabled={!canRun} className="run-button">
           {stageStatus === 'stage1_running' ? 'Stage 1 実行中…'
             : stageStatus === 'stage2_running' ? (skipConfigStage ? 'Logs 解析中…' : 'Stage 2 実行中…')
             : stageStatus === 'awaiting_decision' ? '人間承認待ち'

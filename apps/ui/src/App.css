@@ -2579,14 +2579,24 @@ code {
 .cnt-empty { color: #bbb; }
 .btn-danger {
   background: #b3261e;
-  color: #fff;
+  color: #fff !important;
   border: none;
   padding: 0.3rem 0.6rem;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: background 120ms;
 }
-.btn-danger:hover { background: #8c1c16; }
+.btn-danger:hover:not(:disabled) {
+  background: #8c1c16;
+  color: #fff !important;
+}
+.btn-danger:disabled {
+  background: #d99c98;
+  cursor: not-allowed;
+}
 
 .topology-run-bar {
   display: flex;
@@ -2614,7 +2624,6 @@ code {
 }
 .topology-run-bar > button {
   white-space: nowrap;
-  padding: 0.45rem 0.9rem;
 }
 .topology-error {
   padding: 0.6rem 0.8rem;

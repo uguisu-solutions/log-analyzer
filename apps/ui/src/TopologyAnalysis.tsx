@@ -680,7 +680,7 @@ export function TopologyAnalysis({
           />
           <span>GPT 監査も実行</span>
         </label>
-        <button onClick={run} disabled={!canRun}>
+        <button onClick={run} disabled={!canRun} className="run-button">
           {running ? '解析中...' : 'トポロジー解析を実行'}
         </button>
         {running && <button onClick={cancel} className="btn-secondary">中止</button>}

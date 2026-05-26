@@ -126,17 +126,17 @@ def init_db() -> None:
 _DEFAULT_QUESTIONNAIRE_NAME = "default"
 _DEFAULT_QUESTIONNAIRE_ITEMS: list[dict] = [
     {"key": "symptom_onset", "label": "症状はいつから発生していますか",
-     "type": "text", "options": [], "placeholder": "例: 2026-05-26 09:00 頃から", "required": False},
+     "type": "text", "options": [], "placeholder": "", "required": False},
     {"key": "scope", "label": "影響範囲",
      "type": "choice", "options": ["全ユーザー", "特定ユーザー", "特定エリア / 拠点", "特定機能のみ", "不明"],
      "placeholder": "", "required": False},
     {"key": "reproducibility", "label": "再現性",
      "type": "choice", "options": ["常に再現", "断続的", "1 回のみ", "不明"],
      "placeholder": "", "required": False},
-    {"key": "recent_changes", "label": "直前の変更 (リリース / 設定変更 / 物理工事 等)",
-     "type": "textarea", "options": [], "placeholder": "例: 前日 18:30 に fw-01 のポリシ更新", "required": False},
+    {"key": "recent_changes", "label": "直前の変更",
+     "type": "textarea", "options": [], "placeholder": "", "required": False},
     {"key": "free_notes", "label": "その他の手掛かり",
-     "type": "textarea", "options": [], "placeholder": "ユーザーからの一次申告内容、tcpdump 結果 等を自由記述", "required": False},
+     "type": "textarea", "options": [], "placeholder": "", "required": False},
 ]
 
 
@@ -154,7 +154,7 @@ def _ensure_default_questionnaire(conn: sqlite3.Connection) -> None:
         "(name, description, items_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         (
             _DEFAULT_QUESTIONNAIRE_NAME,
-            "デフォルトの問診票 (議事録 2026-05-26 で合意した 5 項目)",
+            "デフォルトの問診票",
             json.dumps(_DEFAULT_QUESTIONNAIRE_ITEMS, ensure_ascii=False),
             now,
             now,
