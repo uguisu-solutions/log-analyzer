@@ -7,9 +7,12 @@ export interface SlotInfo {
 }
 
 export interface ConfigEntry {
-  id: string  // "config1" / "user:<id>"
+  id: string  // "config1" / "user:<id>" / "config-first"
   label: string
-  type: 'builtin' | 'user'
+  // "builtin":           単一実行 / 比較タブから実行可
+  // "user":              saved_configs から作成されたユーザー定義
+  // "builtin_view_only": 構成図表示のみ。実行は専用タブから
+  type: 'builtin' | 'user' | 'builtin_view_only'
   base_config: string
 }
 

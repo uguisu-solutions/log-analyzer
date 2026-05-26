@@ -420,6 +420,7 @@ function App() {
   const selectedConfigEntry = configList.find(c => c.id === selectedConfig)
   const selectedBaseConfig = selectedConfigEntry?.base_config ?? ''
   const isUserConfig = selectedConfigEntry?.type === 'user'
+  const isViewOnlyConfig = selectedConfigEntry?.type === 'builtin_view_only'
   const userConfigId = isUserConfig ? Number(selectedConfig.split(':')[1]) : null
 
   // 保存・送信用の overrides: デフォルトと異なる slot だけに絞る
@@ -949,10 +950,10 @@ function App() {
             </label>
             <button
               onClick={handleSingleRun}
-              disabled={singleRunning || !selectedLog || !selectedConfig}
+              disabled={singleRunning || !selectedLog || !selectedConfig || isViewOnlyConfig}
               className="run-button"
             >
-              {singleRunning ? `実行中… ${singleElapsedSec}s` : '実行'}
+              {singleRunning ? `実行中… ${singleElapsedSec}s` : isViewOnlyConfig ? '実行不可（専用タブから）' : '実行'}
             </button>
           </section>
 
@@ -960,6 +961,17 @@ function App() {
             <div className="config5-hint">
               この構成は <strong>config5（user_pipeline）</strong> ベースです。プロンプトとモデルの編集は
               <strong>「構成設計（pipeline）」</strong>タブで行ってください。
+            </div>
+          )}
+
+          {isViewOnlyConfig && (
+            <div className="config5-hint view-only-hint">
+              この構成は <strong>表示専用</strong> です（実行不可）。
+              構成図を参考にしつつ、解析の実行は
+              <button className="link-button" onClick={() => setMode('config-first')}>
+                「Config-First 解析」タブ
+              </button>
+              から行ってください。
             </div>
           )}
 

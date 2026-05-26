@@ -3295,3 +3295,21 @@ code {
   font-size: 0.74rem;
   margin-top: 0.4rem;
 }
+
+/* ─── 単一実行タブ: 表示専用構成の誘導ヒント ─── */
+.view-only-hint {
+  background: #fff7ed;
+  border-left: 4px solid #fb923c;
+  color: #7c2d12;
+}
+.link-button {
+  background: none;
+  border: none;
+  color: #0a5fb7;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0 0.2rem;
+  font-size: inherit;
+  font-weight: 700;
+}
+.link-button:hover { color: #084e96; }

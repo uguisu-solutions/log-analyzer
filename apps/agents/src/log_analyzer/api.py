@@ -72,6 +72,7 @@ BUILTIN_CONFIG_LABELS: dict[str, str] = {
     "config3": "config3 — マルチモデル並列（3 モデル並列 → 統合）",
     "config4": "config4 — オーケストレータ駆動（LangGraph orchestrator が監視を再評価しながらラリー）",
     "config5": "config5 — ユーザー定義パイプライン（DAG 自由設計）",
+    "config-first": "config-first — Config-First 2 段階解析（表示専用 / 実行は専用タブから）",
 }
 
 # 選択 UI から除外する builtin。config5 は pipeline_def 必須なので、
@@ -182,6 +183,51 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"source": "sec_monitor", "target": "fw_monitor", "kind": "feedback", "label": "委譲"},
         ],
     },
+    # Config-First 2 段階解析の **メタ構造**（単一実行タブで表示専用に出す）。
+    # 各 Stage の内部 rally は config4 と同じ構造なので、ここでは Stage を 1 ノード
+    # にまとめ「2 段階 + 人間承認 + (任意) GPT 監査」のフローを高レベルに示す。
+    # 実行は専用「Config-First 解析」タブから (executable_from_single=false)。
+    "config-first": {
+        "nodes": [
+            # 入力レイヤ (横並びの 4 つ)
+            {"id": "input_topology", "type": "input", "label": "構成図\n(画像 + ノード矩形)"},
+            {"id": "input_configs", "type": "input", "label": "ノード別 Configs"},
+            {"id": "input_logs", "type": "input", "label": "ノード別 Logs"},
+            {"id": "input_questionnaire", "type": "input", "label": "問診票回答\n(Phase B)"},
+            # メタフロー本体
+            {"id": "stage_one", "type": "static",
+             "label": "Stage 1: Configs 解析\n(rally on configs only)\n→ suspected_nodes 仮説"},
+            {"id": "human_approval", "type": "static",
+             "label": "人間承認モーダル\n(advance / abort)"},
+            {"id": "stage_two", "type": "static",
+             "label": "Stage 2: Logs 検証\n(rally on logs + Stage 1 仮説)"},
+            {"id": "audit", "type": "static",
+             "label": "GPT 監査\n(Phase C, 任意)"},
+            {"id": "final", "type": "static",
+             "label": "最終 AnalysisResult\nstage_outputs[] / suspected_node_findings\n/ audit_report / round_metrics"},
+        ],
+        "edges": [
+            # 入力 → Stage 1
+            {"source": "input_topology", "target": "stage_one"},
+            {"source": "input_configs", "target": "stage_one"},
+            {"source": "input_questionnaire", "target": "stage_one"},
+            # Stage 1 → 人間承認
+            {"source": "stage_one", "target": "human_approval", "label": "stage_one_complete"},
+            # 人間承認 → Stage 2 (advance)
+            {"source": "human_approval", "target": "stage_two", "label": "advance"},
+            # 人間承認 → 最終 (abort、破線)
+            {"source": "human_approval", "target": "final", "label": "abort", "kind": "feedback"},
+            # Stage 2 の追加入力
+            {"source": "input_logs", "target": "stage_two"},
+            {"source": "input_topology", "target": "stage_two"},
+            # Stage 2 → 監査 (任意)
+            {"source": "stage_two", "target": "audit", "label": "audit_after_integrator=true"},
+            # Stage 2 → 最終 (監査 OFF、破線)
+            {"source": "stage_two", "target": "final", "label": "audit OFF", "kind": "feedback"},
+            # 監査 → 最終
+            {"source": "audit", "target": "final"},
+        ],
+    },
 }
 
 # 比較ビュー（Phase 2 W6）で 4 構成同時実行することを想定し max_workers=4。
@@ -191,10 +237,13 @@ _executor = ThreadPoolExecutor(max_workers=4)
 
 
 class ConfigEntry(BaseModel):
-    id: str  # "config1" / "user:<id>"
+    id: str  # "config1" / "user:<id>" / "config-first"
     label: str
-    type: str  # "builtin" / "user"
-    base_config: str  # "config1" .. "config4"
+    # "builtin": 単一実行/比較タブから実行可
+    # "user":    saved_configs から作成されたユーザー定義
+    # "builtin_view_only": 構成図表示のみ。実行は専用タブから (config-first 等)
+    type: str
+    base_config: str  # "config1" .. "config4" / "config-first"
 
 
 class ConfigsResponse(BaseModel):
@@ -674,6 +723,16 @@ def list_configs() -> ConfigsResponse:
         for cid in CONFIG_RUNNERS.keys()
         if cid not in HIDDEN_BUILTIN_CONFIGS
     ]
+    # 表示専用メタ構成 (例: Config-First の 2 段階フロー)。
+    # 単一実行タブで「構成図だけ確認したい」用途。実行ボタンは UI 側で無効化。
+    view_only: list[ConfigEntry] = [
+        ConfigEntry(
+            id="config-first",
+            label=BUILTIN_CONFIG_LABELS["config-first"],
+            type="builtin_view_only",
+            base_config="config-first",
+        ),
+    ]
     user_configs: list[ConfigEntry] = []
     for sc in storage.list_saved_configs():
         base = sc["base_config"]
@@ -693,7 +752,7 @@ def list_configs() -> ConfigsResponse:
                 base_config=base,
             )
         )
-    return ConfigsResponse(configs=builtins + user_configs)
+    return ConfigsResponse(configs=builtins + view_only + user_configs)
 
 
 @app.get("/api/logs", response_model=LogsResponse)
@@ -830,6 +889,9 @@ def get_builtin_structure(base_config: str) -> BuiltinStructureResponse:
 
 @app.get("/api/prompt-slots/{base_config}", response_model=PromptSlotsResponse)
 def get_prompt_slots(base_config: str) -> PromptSlotsResponse:
+    # view-only メタ構造 (例: config-first) は編集可能 slot を持たない
+    if base_config == "config-first":
+        return PromptSlotsResponse(base_config=base_config, slots=[])
     if base_config not in prompt_slots.VALID_BASE_CONFIGS:
         raise HTTPException(status_code=400, detail=f"unknown base_config: {base_config}")
     slots = prompt_slots.get_slots(base_config)
