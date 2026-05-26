@@ -1,9 +1,10 @@
-# Config-First 2 段階解析 — 設計ドキュメント (Phase A + A.5 + G + B)
+# Config-First 2 段階解析 — 設計ドキュメント (Phase A + A.5 + G + B + C + D + E + F)
 
 **作成日**: 2026-05-26
 **更新日**:
   - 2026-05-26 — A.5 Configs ON/OFF トグル追記
   - 2026-05-26 — Phase G (rank 撤去 + schema v0.2) と Phase B (問診票) を追記
+  - 2026-05-26 — Phase C (GPT 監査) / D (ラウンド集計) / E (チャット表示) / F (問診票有無比較) を追記
 **ブランチ**: `feature/config-first-stages`
 **前提**: 既存のトポロジー解析タブ ([feature/topology-analysis](../reports/poc_progress_2026-05-25.md)) が `main` 取り込み待ち。本機能はそこから派生する後続フェーズ。
 
@@ -431,6 +432,154 @@ Config-First 解析タブの両方で同じ部品を再利用:
 (機微情報が誤って残ることを避けるため)。テンプレ管理 UI (作成 / 編集モーダル) は
 本フェーズでは API のみ提供、UI 追加は将来 (Phase F の比較ベンチマーク作業中に
 「問診票あり vs なし」を切り替えやすくする際に必要になれば実装)。
+
+---
+
+## 9.8. Phase C: GPT 監査エージェント
+
+議事録「監査エージェント (GPT想定)」に対応。Claude 系で動いた rally の結論を
+**独立した別モデル (GPT-4o-mini)** でポストホック検証する補助段階。
+
+### スキーマ
+```python
+class AuditReport:
+    verdict: str  # "agree" | "partial" | "disagree" | "uncertain"
+    confidence: float
+    summary: str
+    concerns: list[str]
+    alternative_hypotheses: list[str]
+    model: str
+    tokens_in / tokens_out / latency_ms
+
+class AnalysisResult:
+    ...
+    audit_report: AuditReport | None = None
+```
+
+### バックエンド
+- `audit_agent.py` 新設: `run_audit(log_text, topology_context, analysis_result)` を提供
+  - 既定モデル: `gpt-4o-mini` (`AUDIT_MODEL` 環境変数で上書き可)
+  - `OPENAI_API_KEY` 未設定 / API エラー時は `verdict="uncertain"` で本流を壊さない
+  - safe_extract_json + 規定外 verdict の正規化
+- rally_agent.py: `run_rally_stream(audit_after_integrator=True)` で integrator 後に audit を 1 回実行
+  SSE: `audit_start` → `audit_done`
+- rally_two_stage.py: 最終 result に対して 1 回だけ `_attach_audit()` を呼ぶ
+  (Stage 1 では audit せず、abort 経路なら Stage 1 結果に対して audit)
+- api.py: `TopologyRunRequest` / `ConfigFirstRunRequest` に
+  `audit_after_integrator: bool` を追加し、3 エンドポイントすべてに伝播
+
+### UI
+- `AuditReportView.tsx` 新規: verdict 別配色
+  (agree=緑 / partial=黄 / disagree=赤 / uncertain=灰)
+  + summary + concerns + alternative_hypotheses
+- 両タブの実行バーに「GPT 監査も実行」チェックボックス
+- 結果ペイン (Topology / Config-First 統合タブ) に AuditReportView 配置
+
+---
+
+## 9.9. Phase D: ラウンド単位リソース消費
+
+議事録「ラウンド履歴、消費トークン、処理時間をラウンド単位で閲覧可能にする」
+に対応。
+
+### スキーマ
+```python
+class RoundMetrics:
+    round: int    # 0=orchestrator, 1..=監視, 最終=integrator
+    role: str
+    model: str
+    tokens_in / tokens_out / latency_ms
+
+class AnalysisResult:
+    ...
+    round_metrics: list[RoundMetrics] = []
+
+class StageOutput:
+    ...
+    round_metrics: list[RoundMetrics] = []
+```
+
+### バックエンド
+- rally_agent.py: `_build_round_metrics(token_log)` で
+  orchestrator(round=0) → 各監視(round 順) → integrator(最終 round+1) に並べ直し
+- rally_two_stage.py: 各 Stage の `_result_to_stage_output` で取り込み、
+  最終 result では両 Stage を直列連結
+
+### UI
+- `RoundMetricsView.tsx` 新規: テーブル + バー表示
+  tokens は青バー、latency は緑バー (各 round 単位、最大値で正規化)
+- 両タブの解析ワークフロー直下に配置
+- Config-First では Stage 別タブ / 統合タブいずれにも表示
+
+---
+
+## 9.10. Phase E: チャット形式 結果表示
+
+議事録「UI: チャット形式を想定し、問診票の要求や回答結果を表示する」に対応。
+既存の AnalysisResult を「人間 → orchestrator → 各監視 → integrator → 監査」
+の会話スレッドとしてレンダリングする**読み取り専用ビュー**。
+
+### バックエンド
+変更なし。既存の delegation_history + result + audit_report + Phase B の
+問診票回答を UI 側でのみ再構成する。
+
+### UI
+- `ChatHistoryView.tsx` 新規: メッセージ単位レンダラ
+  - sender 別配色 (human=青 / agent=黄 / integrator=ピンク / audit=緑)
+  - 各メッセージに speaker / round タグ / model · tokens · latency メタ
+- `ViewModeToggle.tsx` 新規: 「標準 / チャット表示」のラジオ切替を両タブで共用
+- 結果ペイン上部にトグルを配置、chat 選択時は ChatHistoryView のみ表示
+  標準モードは従来の ResultTabs / Stage 別タブを保持
+
+### 後続検討
+- 実行中の会話 (SSE 進行中) もチャット表示する案 → 現在は完了後の result のみ対象
+- ユーザーが追加メッセージを送信できる導線 (既存 `append-log` を流用) → 未実装
+
+---
+
+## 9.11. Phase F: 問診票あり/なし比較ベンチマーク CLI
+
+議事録「問診票（指標）の有無両条件で同一シナリオを評価し、スコアリング、
+ラウンド数、精度、速度を網羅する」に対応。
+
+### scripts/benchmark_questionnaire.py
+- シナリオディレクトリを規約ベースで読み込み
+  ```
+  <scenario_dir>/
+      <node-id>.conf    → node_configs
+      <node-id>.log     → node_logs
+      questionnaire.json (任意。無ければデフォルト 5 項目を使う)
+  ```
+- 名前 prefix からノード type を推定 (`fw-`→FW / `lb-`→LB / `api-`→Server 等)
+- `questionnaire on / off × --runs N` の matrix を直列実行
+  LLM レート制限を避けるため並列化はしない (UI 同等の `_build_topology_log_text`
+  → `run_rally_async` を経由)
+- 出力:
+  - 標準出力: Markdown 比較表 + on/off 平均集計
+  - `--output <path>`: CSV 出力 (`label / questionnaire / confidence /
+    rounds / tokens_in / tokens_out / latency_ms_total / elapsed_wall_s /
+    top_category / top_summary`)
+
+### 使い方
+```powershell
+cd apps\agents
+.\.venv\Scripts\Activate.ps1
+python scripts\benchmark_questionnaire.py `
+    --scenario ..\..\samples\topology\scenario2_api_acl_missing `
+    --runs 1 --output bench-scenario2.csv
+```
+
+### 評価軸
+- **精度**: `suspected_node_ids` の意図されたノードへの一致 / `top_category` / `top_summary`
+- **速度**: `latency_ms_total` / `elapsed_wall_s` / `delegation_rounds`
+- **コスト**: `tokens_in` / `tokens_out` (LLM 単価は環境依存のためスクリプト側で計算しない)
+
+### 既知の制約
+- 並列実行なし (LLM レート制限を保守的に避けるため)
+- 同シナリオを `--runs > 1` で繰り返しても LLM の確率的揺らぎが平均化される程度
+  本格的な統計検定をしたい場合はさらにシナリオを増やすのが筋
+- skip_config_stage や audit_after_integrator のオン/オフ matrix は未実装
+  (Phase A.5 / Phase C を benchmark に組み合わせる場合は CLI 引数追加が必要)
 
 ---
 
