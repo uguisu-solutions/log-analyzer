@@ -3182,16 +3182,34 @@ code {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.4rem 0.6rem;
-  background: #f6f7f9;
-  border: 1px solid var(--border);
+  padding: 0.5rem 0.8rem;
+  background: linear-gradient(90deg, #eaf3fb 0%, #f6f7f9 100%);
+  border: 1px solid #b6d4f0;
+  border-left: 4px solid #0a5fb7;
   border-radius: 6px;
-  margin-bottom: 0.6rem;
+  margin: 0.6rem 0;
+  box-shadow: 0 1px 2px rgba(10, 95, 183, 0.08);
+}
+.view-mode-toggle::before {
+  content: '🪟';
+  font-size: 1.1rem;
 }
 .view-mode-label {
-  font-weight: 600;
-  font-size: 0.88rem;
-  color: #333;
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: #084e96;
+}
+.live-chat {
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 0.4rem;
+  background: #fafbfc;
+  border-radius: 4px;
+}
+.live-chat-empty {
+  padding: 1rem;
+  text-align: center;
+  font-size: 0.9rem;
 }
 
 .chat-thread {

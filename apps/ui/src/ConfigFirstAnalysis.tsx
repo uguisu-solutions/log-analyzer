@@ -16,6 +16,7 @@ import { AuditReportView } from './AuditReportView'
 import { ChatHistoryView } from './ChatHistoryView'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
+import { LiveChatView } from './LiveChatView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
@@ -593,21 +594,33 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
 
       {error && <div className="topology-error">エラー: {error}</div>}
 
+      {/* イベントが届き次第トグルを表示 (結果完了を待たない) */}
+      {(streamEvents.length > 0 || finalResult) && (
+        <ViewModeToggle mode={viewMode} onChange={setViewMode} />
+      )}
+
       {streamEvents.length > 0 && (
         <section className="realtime-stream">
-          <h3>リアルタイム実行ログ <span className="realtime-count">{streamEvents.length} イベント</span></h3>
-          <ol className="stream-events">
-            {streamEvents.map((ev, i) => {
-              const stage = (ev.data as { stage?: string }).stage
-              return (
-                <li key={i} className={`stream-event kind-${ev.kind} ${stage ? `stg-${stage}` : ''}`}>
-                  {stage && <span className={`stage-tag stage-${stage}`}>{stage === 'config' ? 'Stage 1' : 'Stage 2'}</span>}
-                  <span className="stream-kind">{ev.kind}</span>
-                  <span className="stream-body">{renderEventSummary(ev)}</span>
-                </li>
-              )
-            })}
-          </ol>
+          <h3>
+            {viewMode === 'chat' ? 'リアルタイム会話' : 'リアルタイム実行ログ'}
+            <span className="realtime-count">{streamEvents.length} イベント</span>
+          </h3>
+          {viewMode === 'chat' ? (
+            <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} />
+          ) : (
+            <ol className="stream-events">
+              {streamEvents.map((ev, i) => {
+                const stage = (ev.data as { stage?: string }).stage
+                return (
+                  <li key={i} className={`stream-event kind-${ev.kind} ${stage ? `stg-${stage}` : ''}`}>
+                    {stage && <span className={`stage-tag stage-${stage}`}>{stage === 'config' ? 'Stage 1' : 'Stage 2'}</span>}
+                    <span className="stream-kind">{ev.kind}</span>
+                    <span className="stream-body">{renderEventSummary(ev)}</span>
+                  </li>
+                )
+              })}
+            </ol>
+          )}
         </section>
       )}
 
@@ -637,7 +650,6 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
       {(stageStatus === 'completed' || stageStatus === 'aborted') && finalResult && (
         <section className="topology-result">
           <h3>解析結果</h3>
-          <ViewModeToggle mode={viewMode} onChange={setViewMode} />
           {viewMode === 'chat' ? (
             <ChatHistoryView result={finalResult} questionnaireAnswers={questionnaireAnswers} />
           ) : (

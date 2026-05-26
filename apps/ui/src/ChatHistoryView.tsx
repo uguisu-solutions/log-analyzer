@@ -173,19 +173,19 @@ export function ChatHistoryView({ result, questionnaireAnswers }: Props) {
   return <div className="chat-thread">{messages}</div>
 }
 
-interface ChatMessageProps {
-  sender: 'human' | 'agent' | 'integrator' | 'audit'
+export interface ChatMessageProps {
+  sender: 'human' | 'agent' | 'integrator' | 'audit' | 'system'
   speaker: string
   tag?: string
   metric?: RoundMetrics | null
   children: React.ReactNode
 }
 
-function ChatMessage({ sender, speaker, tag, metric, children }: ChatMessageProps) {
+export function ChatMessage({ sender, speaker, tag, metric, children }: ChatMessageProps) {
   return (
     <div className={`chat-message chat-${sender}`}>
       <div className="chat-avatar">
-        {sender === 'human' ? '👤' : sender === 'integrator' ? '🧩' : sender === 'audit' ? '🔎' : '🤖'}
+        {sender === 'human' ? '👤' : sender === 'integrator' ? '🧩' : sender === 'audit' ? '🔎' : sender === 'system' ? 'ℹ️' : '🤖'}
       </div>
       <div className="chat-bubble">
         <div className="chat-meta-row">

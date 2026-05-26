@@ -17,6 +17,7 @@ import { AuditReportView } from './AuditReportView'
 import { ChatHistoryView } from './ChatHistoryView'
 import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
+import { LiveChatView } from './LiveChatView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { GraphView } from './GraphView'
@@ -683,32 +684,41 @@ export function TopologyAnalysis({
 
       {error && <div className="topology-error">エラー: {error}</div>}
 
+      {/* 実行開始でイベントが届いたら、結果ペインの前にトグルを出す */}
+      {(streamEvents.length > 0 || result) && (
+        <ViewModeToggle mode={viewMode} onChange={setViewMode} />
+      )}
+
       {streamEvents.length > 0 && (
         <section className="realtime-stream">
-          <h3>リアルタイム実行ログ <span className="realtime-count">{streamEvents.length} イベント</span></h3>
-          <ol className="stream-events">
-            {streamEvents.map((ev, i) => (
-              <li key={i} className={`stream-event kind-${ev.kind}`}>
-                <span className="stream-kind">{ev.kind}</span>
-                <span className="stream-body">{renderEventSummary(ev)}</span>
-              </li>
-            ))}
-          </ol>
+          <h3>
+            {viewMode === 'chat' ? 'リアルタイム会話' : 'リアルタイム実行ログ'}
+            <span className="realtime-count">{streamEvents.length} イベント</span>
+          </h3>
+          {viewMode === 'chat' ? (
+            <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} />
+          ) : (
+            <ol className="stream-events">
+              {streamEvents.map((ev, i) => (
+                <li key={i} className={`stream-event kind-${ev.kind}`}>
+                  <span className="stream-kind">{ev.kind}</span>
+                  <span className="stream-body">{renderEventSummary(ev)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
         </section>
       )}
 
       {result && (
-        <>
-          <ViewModeToggle mode={viewMode} onChange={setViewMode} />
-          {viewMode === 'standard' ? (
-            <TopologyResultView result={result} langfuseHost={langfuseHost} suspected={suspectedSet} topology={topology} />
-          ) : (
-            <section className="topology-result">
-              <h3>解析結果 (チャット表示)</h3>
-              <ChatHistoryView result={result} questionnaireAnswers={questionnaireAnswers} />
-            </section>
-          )}
-        </>
+        viewMode === 'standard' ? (
+          <TopologyResultView result={result} langfuseHost={langfuseHost} suspected={suspectedSet} topology={topology} />
+        ) : (
+          <section className="topology-result">
+            <h3>解析結果 (チャット表示)</h3>
+            <ChatHistoryView result={result} questionnaireAnswers={questionnaireAnswers} />
+          </section>
+        )
       )}
 
       {/* rally_max_rounds 到達時の継続/停止モーダル */}
