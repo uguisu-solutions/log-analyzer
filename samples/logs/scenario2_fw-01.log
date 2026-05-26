@@ -1,0 +1,16 @@
+2026-05-25T18:30:00+09:00 fw-01 %ASA-5-111008: User 'ops02' executed the 'write memory' command.
+2026-05-25T18:30:01+09:00 fw-01 %ASA-5-111010: User 'ops02', running 'CLI' from IP 10.1.1.50, executed 'no access-list inside_out extended permit tcp host 10.1.1.10 object-group api-backends eq 443'
+2026-05-26T09:00:00+09:00 fw-01 %ASA-6-302013: Built outbound TCP connection 88123 for outside:203.0.113.5/55021 to inside:10.1.1.10/443
+2026-05-26T09:00:00+09:00 fw-01 %ASA-6-302013: Built inbound TCP connection 88124 for inside:10.1.1.10/12345 to inside:10.1.2.20/443
+2026-05-26T09:00:05+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45102 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
+2026-05-26T09:00:10+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45103 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
+2026-05-26T09:00:15+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45104 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
+2026-05-26T09:00:20+09:00 fw-01 %ASA-6-302013: Built inbound TCP connection 88130 for inside:10.1.1.10/12350 to inside:10.1.2.20/443
+2026-05-26T09:00:25+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45112 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
+2026-05-26T09:00:30+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45113 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
+2026-05-26T09:00:40+09:00 fw-01 %ASA-6-302013: Built inbound TCP connection 88140 for inside:10.1.1.10/12365 to inside:10.1.2.20/443
+2026-05-26T09:00:50+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45125 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
+2026-05-26T09:01:00+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45126 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
+2026-05-26T09:01:15+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45131 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
+2026-05-26T09:01:30+09:00 fw-01 %ASA-6-302013: Built inbound TCP connection 88155 for inside:10.1.1.10/12380 to inside:10.1.2.20/443
+2026-05-26T09:01:45+09:00 fw-01 %ASA-4-106023: Deny tcp src inside:10.1.1.10/45140 dst inside:10.1.2.21/443 by access-group "inside_out" [0x0, 0x0]
