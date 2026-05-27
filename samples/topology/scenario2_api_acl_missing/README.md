@@ -139,9 +139,18 @@ suspected_nodes も保守的な結果になる。これと Stage 2 まで進め�
 | [web-01.log](./web-01.log) | 正常運用 (web 経路は影響なし) |
 | [api-01.conf](./api-01.conf) | gunicorn systemd unit + api.yaml |
 | [api-01.log](./api-01.log) | プロセス健全だが `requests_last_60s=0` (沈黙) |
+| [terraform/](./terraform/) | **Terraform 一括取込用**: 同じ障害を AWS Security Group コメントアウトで表現 |
 
 ログファイルは UI のドロップダウンから直接ロードできるよう、`samples/logs/scenario2_*.log`
 にも同内容コピーが置かれている。
+
+## Terraform 取込での代替フロー
+
+「設定ファイルをノード毎に貼り付け」の代わりに、UI ツールバーの
+「**Terraform 一括取込**」ボタンから [terraform/bundled.tf](./terraform/bundled.tf)
+を選択すると、`fw-01` / `lb-01` / `web-01` / `api-01` の 4 ノードに対応する
+HCL リソースが自動マッチして一括投入されます。詳細は
+[terraform/README.md](./terraform/README.md)。
 
 ---
 
