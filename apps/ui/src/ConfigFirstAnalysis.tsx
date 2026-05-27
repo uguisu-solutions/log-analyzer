@@ -21,6 +21,7 @@ import { LiveChatView } from './LiveChatView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
+import { TerraformImporter } from './TerraformImporter'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -128,6 +129,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
   // 表示モード (Phase E): デフォルトをチャットに (議事録の UI 要求)
   const [viewMode, setViewMode] = useState<'standard' | 'chat'>('chat')
+  // Terraform 一括取込モーダルの開閉
+  const [tfImporterOpen, setTfImporterOpen] = useState(false)
 
   // ─── 2 段階実行状態 ──────────────────────────────────────────
   const [stageStatus, setStageStatus] = useState<StageStatus>('idle')
@@ -461,6 +464,14 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           <button className={editMode === 'select' ? 'tab active' : 'tab'} onClick={() => setEditMode('select')} disabled={!topology.image}>選択・編集</button>
           <button className={editMode === 'add' ? 'tab active' : 'tab'} onClick={() => setEditMode('add')} disabled={!topology.image}>ノード追加（ドラッグで矩形描画）</button>
         </div>
+        <button
+          className="btn-secondary"
+          onClick={() => setTfImporterOpen(true)}
+          disabled={topology.nodes.length === 0}
+          title={topology.nodes.length === 0 ? 'ノードを先に作成してください' : ''}
+        >
+          Terraform 一括取込
+        </button>
         <button className="btn-secondary" onClick={clearAll} disabled={!topology.image && topology.nodes.length === 0}>すべてクリア</button>
       </div>
 
@@ -655,6 +666,23 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           busy={decisionBusy}
           onAdvance={() => submitDecision('advance')}
           onAbort={() => submitDecision('abort')}
+        />
+      )}
+
+      {/* Terraform 一括取込モーダル */}
+      {tfImporterOpen && (
+        <TerraformImporter
+          nodes={topology.nodes}
+          onApply={(additions) => {
+            setNodeConfigs(prev => {
+              const next: NodeAttachments = { ...prev }
+              for (const [nodeId, attaches] of Object.entries(additions)) {
+                next[nodeId] = [...(next[nodeId] ?? []), ...attaches]
+              }
+              return next
+            })
+          }}
+          onClose={() => setTfImporterOpen(false)}
         />
       )}
 

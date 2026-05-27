@@ -71,7 +71,7 @@ export function ChatInput({ runId, disabled }: Props) {
   return (
     <div className={`chat-input ${disabled ? 'is-disabled' : ''}`}>
       <div className="chat-input-header">
-        <span className="chat-input-title">💬 介入を送信</span>
+        <span className="chat-input-title">介入を送信</span>
         <span className="chat-input-hint muted">
           送信すると orchestrator に戻り、初期ノードを再選択します
         </span>

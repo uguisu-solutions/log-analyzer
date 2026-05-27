@@ -172,7 +172,7 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
       case 'intervention_restart':
         messages.push(
           <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="再選択">
-            <p>🔄 ユーザー介入を検出 ({String(d.added_count ?? 0)} 件)。orchestrator に戻り初期ノードを再選択します。</p>
+            <p>ユーザー介入を検出 ({String(d.added_count ?? 0)} 件)。orchestrator に戻り初期ノードを再選択します。</p>
             {d.previous_planned_node && (
               <p className="muted small">予定していたノード: <code>{String(d.previous_planned_node)}</code></p>
             )}

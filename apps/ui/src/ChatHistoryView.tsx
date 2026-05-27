@@ -185,7 +185,7 @@ export function ChatMessage({ sender, speaker, tag, metric, children }: ChatMess
   return (
     <div className={`chat-message chat-${sender}`}>
       <div className="chat-avatar">
-        {sender === 'human' ? '👤' : sender === 'integrator' ? '🧩' : sender === 'audit' ? '🔎' : sender === 'system' ? 'ℹ️' : '🤖'}
+        {sender === 'human' ? 'You' : sender === 'integrator' ? 'INT' : sender === 'audit' ? 'AUD' : sender === 'system' ? 'SYS' : 'AGT'}
       </div>
       <div className="chat-bubble">
         <div className="chat-meta-row">
