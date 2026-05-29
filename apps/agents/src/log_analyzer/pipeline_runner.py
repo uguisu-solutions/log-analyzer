@@ -67,7 +67,7 @@ DEFAULT_OUTPUT_PROMPT = """\
 出力 (JSON のみ):
 {
   "root_cause_candidates": [
-    {"rank": 1, "category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["..."]}
+    {"category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["..."]}
   ],
   "recommended_actions": [
     {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high"}
@@ -76,7 +76,7 @@ DEFAULT_OUTPUT_PROMPT = """\
 }
 
 ルール:
-- 候補は最大 3 件、確からしい順にランク付け
+- 候補は最大 3 件まで。配列順は確信度順でよいが「rank 1 が最良」のような順位強調表現は使わない (UI は並列表示)
 - ロールバック・再起動・設定変更・データ削除を伴うアクションは必ず `human_judgment_required: true`（議事録 L3）
 - フィールド名・enum 値は英語、`summary` / `action` の自然文は日本語
 - コードフェンスで囲まない

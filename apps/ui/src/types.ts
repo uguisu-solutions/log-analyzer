@@ -7,9 +7,12 @@ export interface SlotInfo {
 }
 
 export interface ConfigEntry {
-  id: string  // "config1" / "user:<id>"
+  id: string  // "config1" / "user:<id>" / "config-first"
   label: string
-  type: 'builtin' | 'user'
+  // "builtin":           単一実行 / 比較タブから実行可
+  // "user":              saved_configs から作成されたユーザー定義
+  // "builtin_view_only": 構成図表示のみ。実行は専用タブから
+  type: 'builtin' | 'user' | 'builtin_view_only'
   base_config: string
 }
 
@@ -128,10 +131,11 @@ export interface RunHistoryListResponse {
 }
 
 export interface RootCauseCandidate {
-  rank: number
   category: string
   summary: string
   evidence: string[]
+  // 旧 schema v0.1 互換: バックエンドが古いデータを返したときの保険。新規データには存在しない
+  rank?: number
 }
 
 export interface RecommendedAction {
@@ -203,12 +207,60 @@ export interface AnalysisResult {
   // トポロジー解析タブ専用（他経路では空配列）
   suspected_node_ids: string[]
   suspected_node_findings: SuspectedNodeFinding[]
+  // Config-First 2 段階解析専用（他経路では空配列）
+  stage_outputs: StageOutput[]
+  // 監査エージェント (Phase C) の所見。実行しなければ null
+  audit_report: AuditReport | null
+  // ラウンド単位集計 (Phase D)
+  round_metrics: RoundMetrics[]
 }
 
 export interface SuspectedNodeFinding {
   node_id: string
   summary: string
   severity: string  // "primary" | "secondary" | "info" | ""
+}
+
+// ラウンド単位集計 (Phase D) ─────────────────────────
+export interface RoundMetrics {
+  round: number
+  role: string  // "orchestrator" | "<monitor>" | "integrator"
+  model: string
+  tokens_in: number
+  tokens_out: number
+  latency_ms: number
+}
+
+// 監査エージェント (Phase C) の所見 ─────────────────────
+export interface AuditReport {
+  verdict: string  // "agree" | "partial" | "disagree" | "uncertain"
+  confidence: number
+  summary: string
+  concerns: string[]
+  alternative_hypotheses: string[]
+  model: string
+  tokens_in: number
+  tokens_out: number
+  latency_ms: number
+}
+
+// Config-First 2 段階解析の各 Stage 出力 ─────────────────────
+export interface StageOutput {
+  stage: string  // "config" | "log"
+  stage_label: string
+  confidence: number
+  summary: string
+  suspected_node_ids: string[]
+  suspected_node_findings: SuspectedNodeFinding[]
+  delegation_rounds: number
+  delegation_history: DelegationEvent[]
+  trace_id: string
+  tokens_in: number
+  tokens_out: number
+  latency_ms_total: number
+  root_cause_candidates: RootCauseCandidate[]
+  recommended_actions: RecommendedAction[]
+  round_metrics: RoundMetrics[]
 }
 
 // トポロジー解析タブで使うノード定義 ─────────────────────────
@@ -245,3 +297,25 @@ export interface NodeAttachment {
 
 // nodeId → 添付ファイル群
 export type NodeAttachments = Record<string, NodeAttachment[]>
+
+// 問診票 (Phase B) ─────────────────────────────────────
+export interface QuestionnaireItem {
+  key: string
+  label: string
+  type: string  // "text" | "textarea" | "choice"
+  options: string[]
+  placeholder: string
+  required: boolean
+}
+
+export interface QuestionnaireTemplate {
+  id: number
+  name: string
+  description: string
+  items: QuestionnaireItem[]
+  created_at: string
+  updated_at: string
+}
+
+// {key: answer} の辞書
+export type QuestionnaireAnswers = Record<string, string>

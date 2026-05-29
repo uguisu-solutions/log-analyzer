@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { BuiltinConfigCanvas } from './BuiltinConfigCanvas'
+import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView, nodeLabel } from './DelegationHistoryView'
 import { GraphView } from './GraphView'
 import { LogManager } from './LogManager'
 import { PipelineBuilder } from './PipelineBuilder'
 import { RunHistoryView } from './RunHistoryView'
 import { TopologyAnalysis } from './TopologyAnalysis'
+import { ConfigFirstAnalysis } from './ConfigFirstAnalysis'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -19,18 +21,17 @@ import './App.css'
 
 const API_BASE = 'http://localhost:8000'
 
-type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology'
+type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-first'
 
 function ResultDetails({ result }: { result: AnalysisResult }) {
   return (
     <>
       <DelegationHistoryView result={result} />
       <h3>根本原因候補（{result.root_cause_candidates.length}）</h3>
-      <ol className="candidates">
+      <ul className="candidates candidates-grid">
         {result.root_cause_candidates.map((c, i) => (
           <li key={i}>
             <span className={`badge cat-${c.category}`}>{c.category}</span>
-            <span className="rank">rank {c.rank}</span>
             <div className="summary-text">{c.summary}</div>
             <details>
               <summary>evidence ({c.evidence.length})</summary>
@@ -40,7 +41,7 @@ function ResultDetails({ result }: { result: AnalysisResult }) {
             </details>
           </li>
         ))}
-      </ol>
+      </ul>
 
       <h3>推奨アクション（{result.recommended_actions.length}）</h3>
       <ul className="actions">
@@ -202,63 +203,6 @@ export function renderEventSummary(ev: SSEEvent): React.ReactNode {
     default:
       return <code>{JSON.stringify(d).slice(0, 200)}</code>
   }
-}
-
-// ─── 確認モーダル ────────────────────────────────────────────────
-interface ConfirmationModalProps {
-  round: number
-  maxRounds: number
-  history: DelegationEvent[]
-  onContinue: (extendBy: number) => void
-  onStop: () => void
-  busy: boolean
-}
-
-function ConfirmationModal({ round, maxRounds, history, onContinue, onStop, busy }: ConfirmationModalProps) {
-  const [extendBy, setExtendBy] = useState<number>(3)
-  return (
-    <div className="modal-overlay">
-      <div className="modal confirmation-modal">
-        <h3>ラリーが上限に到達しました</h3>
-        <p className="modal-summary">
-          現在 <strong>{round}</strong> ラウンド完了、上限 <strong>{maxRounds}</strong>。委譲チェーンを継続するか、ここで integrator に進むかを選んでください。
-        </p>
-        <details className="modal-history" open>
-          <summary>これまでの委譲履歴 ({history.length})</summary>
-          <ol>
-            {history.map((h, i) => (
-              <li key={i} className={`mini-step kind-${h.kind}`}>
-                <span className="mini-round">r{h.round}</span>
-                <span className="mini-arrow">
-                  {nodeLabel(h.from_node)} → {nodeLabel(h.to_node)}
-                </span>
-                {h.rationale && <span className="mini-rationale">{h.rationale}</span>}
-              </li>
-            ))}
-          </ol>
-        </details>
-        <div className="modal-actions">
-          <label className="extend-label">
-            延長ラウンド数:
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={extendBy}
-              onChange={e => setExtendBy(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
-              disabled={busy}
-            />
-          </label>
-          <button onClick={() => onContinue(extendBy)} disabled={busy}>
-            +{extendBy} 延長して継続
-          </button>
-          <button onClick={onStop} disabled={busy} className="btn-secondary">
-            停止して integrator へ
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 // ─── 追加ログ投入モーダル ─────────────────────────────────────
@@ -476,6 +420,7 @@ function App() {
   const selectedConfigEntry = configList.find(c => c.id === selectedConfig)
   const selectedBaseConfig = selectedConfigEntry?.base_config ?? ''
   const isUserConfig = selectedConfigEntry?.type === 'user'
+  const isViewOnlyConfig = selectedConfigEntry?.type === 'builtin_view_only'
   const userConfigId = isUserConfig ? Number(selectedConfig.split(':')[1]) : null
 
   // 保存・送信用の overrides: デフォルトと異なる slot だけに絞る
@@ -920,6 +865,13 @@ function App() {
         >
           トポロジー解析
         </button>
+        <button
+          onClick={() => setMode('config-first')}
+          className={mode === 'config-first' ? 'tab active' : 'tab'}
+          disabled={singleRunning || isCompareRunning}
+        >
+          Config-First 解析
+        </button>
       </div>
 
       {mode === 'builder' && (
@@ -948,6 +900,16 @@ function App() {
 
       {mode === 'topology' && (
         <TopologyAnalysis
+          configList={configList}
+          logs={logs}
+          parseSSE={parseSSE}
+          renderEventSummary={renderEventSummary}
+          langfuseHost={langfuseHost}
+        />
+      )}
+
+      {mode === 'config-first' && (
+        <ConfigFirstAnalysis
           configList={configList}
           logs={logs}
           parseSSE={parseSSE}
@@ -988,10 +950,10 @@ function App() {
             </label>
             <button
               onClick={handleSingleRun}
-              disabled={singleRunning || !selectedLog || !selectedConfig}
+              disabled={singleRunning || !selectedLog || !selectedConfig || isViewOnlyConfig}
               className="run-button"
             >
-              {singleRunning ? `実行中… ${singleElapsedSec}s` : '実行'}
+              {singleRunning ? `実行中… ${singleElapsedSec}s` : isViewOnlyConfig ? '実行不可（専用タブから）' : '実行'}
             </button>
           </section>
 
@@ -999,6 +961,17 @@ function App() {
             <div className="config5-hint">
               この構成は <strong>config5（user_pipeline）</strong> ベースです。プロンプトとモデルの編集は
               <strong>「構成設計（pipeline）」</strong>タブで行ってください。
+            </div>
+          )}
+
+          {isViewOnlyConfig && (
+            <div className="config5-hint view-only-hint">
+              この構成は <strong>表示専用</strong> です（実行不可）。
+              構成図を参考にしつつ、解析の実行は
+              <button className="link-button" onClick={() => setMode('config-first')}>
+                「Config-First 解析」タブ
+              </button>
+              から行ってください。
             </div>
           )}
 

@@ -13,14 +13,25 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
+import { AuditReportView } from './AuditReportView'
+import { ChatHistoryView } from './ChatHistoryView'
+import { ChatInput } from './ChatInput'
+import { ConfirmationModal } from './ConfirmationModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
+import { LiveChatView } from './LiveChatView'
+import { RoundMetricsView } from './RoundMetricsView'
+import { ViewModeToggle } from './ViewModeToggle'
 import { GraphView } from './GraphView'
+import { QuestionnairePanel } from './QuestionnairePanel'
+import { TerraformImporter } from './TerraformImporter'
 import type {
   AnalysisResult,
   ConfigEntry,
+  DelegationEvent,
   LogEntry,
   NodeAttachment,
   NodeAttachments,
+  QuestionnaireAnswers,
   SSEEvent,
   SuspectedNodeFinding,
   TopologyDef,
@@ -116,6 +127,8 @@ export function TopologyAnalysis({
   // 1 ノードに複数のログ / 設定ファイルを {name, content} として持てる
   const [nodeLogs, setNodeLogs] = useState<NodeAttachments>({})
   const [nodeConfigs, setNodeConfigs] = useState<NodeAttachments>({})
+  // 問診票回答 (Phase B、揮発)
+  const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
 
   // ─── 編集状態 ─────────────────────────────────────────────
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -136,12 +149,26 @@ export function TopologyAnalysis({
     }
   }, [rallyConfigs, selectedConfig])
   const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
+  // 監査エージェント (Phase C): integrator 後に GPT で独立検証するか
+  const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
+  // 表示モード (Phase E): デフォルトをチャットに (議事録の UI 要求)
+  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('chat')
+  // Terraform 一括取込モーダルの開閉
+  const [tfImporterOpen, setTfImporterOpen] = useState(false)
 
   const [running, setRunning] = useState(false)
   const [streamEvents, setStreamEvents] = useState<SSEEvent[]>([])
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  // rally_max_rounds 到達時の継続/停止モーダル
+  const [runId, setRunId] = useState<string | null>(null)
+  const [decisionBusy, setDecisionBusy] = useState(false)
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    round: number
+    rally_max_rounds: number
+    delegation_history: DelegationEvent[]
+  } | null>(null)
 
   const imageRef = useRef<HTMLImageElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -396,6 +423,8 @@ export function TopologyAnalysis({
         },
         node_logs: filteredAttachments(nodeLogs),
         node_configs: filteredAttachments(nodeConfigs),
+        questionnaire_answers: questionnaireAnswers,
+        audit_after_integrator: auditAfterIntegrator,
       }
       const r = await fetch(`${API_BASE}/api/runs/topology-stream`, {
         method: 'POST',
@@ -409,7 +438,19 @@ export function TopologyAnalysis({
       }
       for await (const ev of parseSSE(r)) {
         setStreamEvents(prev => [...prev, ev])
-        if (ev.kind === 'final') {
+        if (ev.kind === 'run_id_assigned') {
+          setRunId(String(ev.data.run_id ?? ''))
+        } else if (ev.kind === 'await_confirmation') {
+          // rally_max_rounds 到達 → 継続/停止モーダル
+          setPendingConfirmation({
+            round: Number(ev.data.round ?? 0),
+            rally_max_rounds: Number(ev.data.rally_max_rounds ?? 0),
+            delegation_history: (ev.data.delegation_history as DelegationEvent[]) ?? [],
+          })
+        } else if (ev.kind === 'user_decision') {
+          // 自身応答受領 → モーダル閉じる
+          setPendingConfirmation(null)
+        } else if (ev.kind === 'final') {
           const res = ev.data.result as AnalysisResult | undefined
           if (res) setResult(res)
         } else if (ev.kind === 'error') {
@@ -425,6 +466,29 @@ export function TopologyAnalysis({
       abortRef.current = null
     }
   }
+  // rally_max_rounds 到達時の継続/停止 (await_confirmation 応答)
+  const submitDecision = async (action: 'continue' | 'stop', extendBy?: number) => {
+    if (!runId) return
+    setDecisionBusy(true)
+    try {
+      const body: { action: string; extend_by?: number } = { action }
+      if (action === 'continue' && extendBy) body.extend_by = extendBy
+      const r = await fetch(`${API_BASE}/api/runs/${runId}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!r.ok) {
+        const text = await r.text()
+        throw new Error(`HTTP ${r.status}: ${text}`)
+      }
+    } catch (e) {
+      setError(`decision 送信失敗: ${(e as Error).message}`)
+    } finally {
+      setDecisionBusy(false)
+    }
+  }
+
   const cancel = () => {
     abortRef.current?.abort()
   }
@@ -463,6 +527,14 @@ export function TopologyAnalysis({
             ノード追加（ドラッグで矩形描画）
           </button>
         </div>
+        <button
+          className="btn-secondary"
+          onClick={() => setTfImporterOpen(true)}
+          disabled={topology.nodes.length === 0}
+          title={topology.nodes.length === 0 ? 'ノードを先に作成してください' : ''}
+        >
+          Terraform 一括取込
+        </button>
         <button className="btn-secondary" onClick={clearAll} disabled={!topology.image && topology.nodes.length === 0}>
           すべてクリア
         </button>
@@ -577,6 +649,15 @@ export function TopologyAnalysis({
         </aside>
       </div>
 
+      {/* standard モード時のみ実行バー直前に表示 (chat モードはチャット内に統合) */}
+      {viewMode === 'standard' && (
+        <QuestionnairePanel
+          answers={questionnaireAnswers}
+          onAnswersChange={setQuestionnaireAnswers}
+          disabled={running}
+        />
+      )}
+
       <div className="topology-run-bar">
         <label>
           構成:
@@ -601,7 +682,16 @@ export function TopologyAnalysis({
             disabled={running}
           />
         </label>
-        <button onClick={run} disabled={!canRun}>
+        <label className="audit-toggle">
+          <input
+            type="checkbox"
+            checked={auditAfterIntegrator}
+            onChange={e => setAuditAfterIntegrator(e.target.checked)}
+            disabled={running}
+          />
+          <span>GPT 監査も実行</span>
+        </label>
+        <button onClick={run} disabled={!canRun} className="run-button">
           {running ? '解析中...' : 'トポロジー解析を実行'}
         </button>
         {running && <button onClick={cancel} className="btn-secondary">中止</button>}
@@ -609,9 +699,39 @@ export function TopologyAnalysis({
 
       {error && <div className="topology-error">エラー: {error}</div>}
 
-      {streamEvents.length > 0 && (
+      {/* 表示モード切替は常に表示 (chat モードでは問診票入力も含むため) */}
+      <ViewModeToggle mode={viewMode} onChange={setViewMode} />
+
+      {/* chat モード: 問診票 + ライブログ + 介入入力 を 1 セクションに統合 */}
+      {viewMode === 'chat' && (
+        <section className="realtime-stream chat-section">
+          <h3>
+            会話
+            {streamEvents.length > 0 && (
+              <span className="realtime-count">{streamEvents.length} イベント</span>
+            )}
+          </h3>
+          <QuestionnairePanel
+            answers={questionnaireAnswers}
+            onAnswersChange={setQuestionnaireAnswers}
+            disabled={running}
+          />
+          {streamEvents.length > 0 ? (
+            <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} />
+          ) : (
+            <div className="live-chat-empty muted">実行を開始するとここに会話が表示されます。</div>
+          )}
+          <ChatInput runId={runId} disabled={!running} />
+        </section>
+      )}
+
+      {/* 標準モードの従来表示 */}
+      {viewMode === 'standard' && streamEvents.length > 0 && (
         <section className="realtime-stream">
-          <h3>リアルタイム実行ログ <span className="realtime-count">{streamEvents.length} イベント</span></h3>
+          <h3>
+            リアルタイム実行ログ
+            <span className="realtime-count">{streamEvents.length} イベント</span>
+          </h3>
           <ol className="stream-events">
             {streamEvents.map((ev, i) => (
               <li key={i} className={`stream-event kind-${ev.kind}`}>
@@ -624,7 +744,44 @@ export function TopologyAnalysis({
       )}
 
       {result && (
-        <TopologyResultView result={result} langfuseHost={langfuseHost} suspected={suspectedSet} topology={topology} />
+        viewMode === 'standard' ? (
+          <TopologyResultView result={result} langfuseHost={langfuseHost} suspected={suspectedSet} topology={topology} />
+        ) : (
+          <section className="topology-result">
+            <h3>解析結果 (チャット表示)</h3>
+            <ChatHistoryView result={result} questionnaireAnswers={questionnaireAnswers} />
+          </section>
+        )
+      )}
+
+      {/* Terraform 一括取込モーダル */}
+      {tfImporterOpen && (
+        <TerraformImporter
+          nodes={topology.nodes}
+          onApply={(additions) => {
+            // 既存添付を保持しつつ追記 (上書きしない、同名なら重複追加)
+            setNodeConfigs(prev => {
+              const next: NodeAttachments = { ...prev }
+              for (const [nodeId, attaches] of Object.entries(additions)) {
+                next[nodeId] = [...(next[nodeId] ?? []), ...attaches]
+              }
+              return next
+            })
+          }}
+          onClose={() => setTfImporterOpen(false)}
+        />
+      )}
+
+      {/* rally_max_rounds 到達時の継続/停止モーダル */}
+      {pendingConfirmation && (
+        <ConfirmationModal
+          round={pendingConfirmation.round}
+          maxRounds={pendingConfirmation.rally_max_rounds}
+          history={pendingConfirmation.delegation_history}
+          busy={decisionBusy}
+          onContinue={(extendBy) => submitDecision('continue', extendBy)}
+          onStop={() => submitDecision('stop')}
+        />
       )}
     </section>
   )
@@ -915,11 +1072,10 @@ function TopologyResultView({ result, langfuseHost, suspected, topology }: Topol
       )}
 
       <h4>根本原因候補（{result.root_cause_candidates.length}）</h4>
-      <ol className="candidates">
+      <ul className="candidates candidates-grid">
         {result.root_cause_candidates.map((c, i) => (
           <li key={i}>
             <span className={`badge cat-${c.category}`}>{c.category}</span>
-            <span className="rank">rank {c.rank}</span>
             <div className="summary-text">{c.summary}</div>
             {c.evidence.length > 0 && (
               <details>
@@ -931,7 +1087,7 @@ function TopologyResultView({ result, langfuseHost, suspected, topology }: Topol
             )}
           </li>
         ))}
-      </ol>
+      </ul>
 
       <h4>推奨アクション（{result.recommended_actions.length}）</h4>
       <ul className="actions">
@@ -944,9 +1100,15 @@ function TopologyResultView({ result, langfuseHost, suspected, topology }: Topol
         ))}
       </ul>
 
+      {/* 監査エージェント (Phase C) の所見 */}
+      {result.audit_report && <AuditReportView report={result.audit_report} />}
+
       {/* 実際に動いたワークフロー: 委譲チェーン履歴 + 実行グラフ */}
       <h4>解析ワークフロー</h4>
       <DelegationHistoryView result={result} />
+      {result.round_metrics.length > 0 && (
+        <RoundMetricsView rounds={result.round_metrics} />
+      )}
       {result.execution_graph_nodes.length > 0 && (
         <div className="topology-graph-wrap">
           <div className="topology-graph-caption">

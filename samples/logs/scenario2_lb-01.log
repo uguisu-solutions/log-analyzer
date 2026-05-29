@@ -1,0 +1,15 @@
+2026-05-26T08:30:00+09:00 lb-01 haproxy[1024]: Server web_pool/web-01 is UP
+2026-05-26T08:30:00+09:00 lb-01 haproxy[1024]: Server api_pool/api-01 is UP
+2026-05-26T08:55:00+09:00 lb-01 haproxy[1024]: 203.0.113.5:55021 [26/May/2026:08:55:00 +0900] https_in web_pool/web-01 0/0/1/45/46 200 1240 - - ---- 1/1/0/0/0 0/0 "GET / HTTP/1.1"
+2026-05-26T09:00:05+09:00 lb-01 haproxy[1024]: Health check for server api_pool/api-01 failed, reason: Layer4 connection problem, info: "Connection refused at step 1 of tcp-check (connect)", check duration: 5004ms
+2026-05-26T09:00:10+09:00 lb-01 haproxy[1024]: Health check for server api_pool/api-01 failed, reason: Layer4 connection problem, check duration: 5003ms
+2026-05-26T09:00:15+09:00 lb-01 haproxy[1024]: Health check for server api_pool/api-01 failed, reason: Layer4 connection problem, check duration: 5004ms
+2026-05-26T09:00:15+09:00 lb-01 haproxy[1024]: Server api_pool/api-01 is DOWN, reason: Layer4 connection problem, info: "Connection refused at step 1 of tcp-check (connect)", check duration: 5004ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-05-26T09:00:15+09:00 lb-01 haproxy[1024]: backend api_pool has no server available!
+2026-05-26T09:00:18+09:00 lb-01 haproxy[1024]: 203.0.113.7:33105 [26/May/2026:09:00:18 +0900] https_in api_pool/<NOSRV> -1/-1/-1/-1/0 503 213 - - SC-- 2/2/0/0/0 0/0 "GET /api/users HTTP/1.1"
+2026-05-26T09:00:22+09:00 lb-01 haproxy[1024]: 203.0.113.8:33106 [26/May/2026:09:00:22 +0900] https_in api_pool/<NOSRV> -1/-1/-1/-1/0 503 213 - - SC-- 2/2/0/0/0 0/0 "GET /api/items HTTP/1.1"
+2026-05-26T09:00:30+09:00 lb-01 haproxy[1024]: 203.0.113.5:55028 [26/May/2026:09:00:30 +0900] https_in web_pool/web-01 0/0/1/42/43 200 1240 - - ---- 2/2/1/1/0 0/0 "GET / HTTP/1.1"
+2026-05-26T09:00:45+09:00 lb-01 haproxy[1024]: Health check for server api_pool/api-01 still failing, reason: Layer4 connection problem
+2026-05-26T09:01:00+09:00 lb-01 haproxy[1024]: Health check for server api_pool/api-01 still failing
+2026-05-26T09:01:15+09:00 lb-01 haproxy[1024]: backend api_pool has no server available!
+2026-05-26T09:01:30+09:00 lb-01 haproxy[1024]: Health check for server api_pool/api-01 still failing

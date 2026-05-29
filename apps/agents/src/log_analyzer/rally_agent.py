@@ -32,6 +32,7 @@ from log_analyzer.schema import (
     Metrics,
     RecommendedAction,
     RootCauseCandidate,
+    RoundMetrics,
     SuspectedNodeFinding,
 )
 from log_analyzer.tracing import flush, get_client
@@ -148,6 +149,50 @@ def _build_execution_graph(
             )
         )
     return nodes, edges
+
+
+def _build_round_metrics(token_log: list[dict]) -> list[RoundMetrics]:
+    """token_log を round 順に並べた per-round metrics を返す (Phase D)。
+
+    orchestrator: round=0、各監視: round>=1、integrator: 最終 round+1。
+    """
+    out: list[RoundMetrics] = []
+    # orchestrator (round=0)
+    for entry in token_log:
+        if entry.get("role") == "orchestrator":
+            out.append(RoundMetrics(
+                round=0,
+                role="orchestrator",
+                model=str(entry.get("model") or ""),
+                tokens_in=int(entry.get("tokens_in") or 0),
+                tokens_out=int(entry.get("tokens_out") or 0),
+                latency_ms=int(entry.get("latency_ms") or 0),
+            ))
+    # 監視 (round >= 1)
+    monitors = [e for e in token_log if e.get("role") not in {"orchestrator", "integrator"}]
+    monitors_sorted = sorted(monitors, key=lambda e: int(e.get("round") or 0))
+    for entry in monitors_sorted:
+        out.append(RoundMetrics(
+            round=int(entry.get("round") or 0),
+            role=str(entry.get("role") or ""),
+            model=str(entry.get("model") or ""),
+            tokens_in=int(entry.get("tokens_in") or 0),
+            tokens_out=int(entry.get("tokens_out") or 0),
+            latency_ms=int(entry.get("latency_ms") or 0),
+        ))
+    # integrator
+    max_round = max((r.round for r in out), default=0)
+    for entry in token_log:
+        if entry.get("role") == "integrator":
+            out.append(RoundMetrics(
+                round=max_round + 1,
+                role="integrator",
+                model=str(entry.get("model") or ""),
+                tokens_in=int(entry.get("tokens_in") or 0),
+                tokens_out=int(entry.get("tokens_out") or 0),
+                latency_ms=int(entry.get("latency_ms") or 0),
+            ))
+    return out
 
 
 def _build_analysis_result(
@@ -275,6 +320,7 @@ def _build_analysis_result(
         delegation_history=history_dtos,
         suspected_node_ids=suspected_node_ids,
         suspected_node_findings=suspected_node_findings,
+        round_metrics=_build_round_metrics(token_log),
     )
 
 
@@ -298,6 +344,7 @@ async def run_rally_stream(
     decision_waiter: DecisionWaiter | None = None,
     append_queue: "asyncio.Queue[dict] | None" = None,
     topology_context: dict | None = None,
+    audit_after_integrator: bool = False,
 ) -> AsyncIterator[StreamEvent]:
     """委譲チェーンを 1 ステップずつ実行しながら ``StreamEvent`` を yield する。
 
@@ -451,10 +498,58 @@ async def run_rally_stream(
             break
 
         # ─── 監視ノード実行 ──────────────────────────────────
-        # ユーザーが投入した追加ログをここで取り込み、以降の監視に反映させる。
+        # ユーザーが投入した追加コンテンツ (ログ / 設定 / コメント) をここで取り込む。
         # 元の log_text は変更しないので prompt caching の安定ブロックは維持される。
-        for record in _drain_appends(state, append_queue):
+        drained = _drain_appends(state, append_queue)
+        for record in drained:
             yield StreamEvent("log_appended", record)
+
+        # 介入再起動: ユーザーから追加コンテンツが届いていた場合、現在予定していた
+        # 監視を走らせず、orchestrator を再呼び出しして初期ノードを再選択する。
+        # 議事録 2026-05-26「処理中にプロンプトで介入があった場合は、一度
+        # オーケストレーションノードに戻り、初期ノード選択から再開」に対応。
+        if drained:
+            yield StreamEvent(
+                "intervention_restart",
+                {
+                    "reason": "ユーザーから追加コンテンツが届きました。orchestrator に戻り初期ノードを再選択します。",
+                    "added_count": len(drained),
+                    "previous_planned_node": current,
+                },
+            )
+            try:
+                orch = await _run_sync(orchestrator_select_first, state)
+            except Exception as e:
+                yield StreamEvent("error", {"stage": "orchestrator_restart", "message": str(e)})
+                return
+            state["token_log"].append(
+                {
+                    "role": "orchestrator",
+                    "model": orch["model"],
+                    "tokens_in": orch["tokens_in"],
+                    "tokens_out": orch["tokens_out"],
+                    "latency_ms": orch["latency_ms"],
+                    "input": orch["user_input"][:2000],
+                    "raw_output": orch["raw_output"],
+                }
+            )
+            restart_event = {
+                "round": state["rally_round"],
+                "kind": "orchestrator_restart",
+                "from_node": "orchestrator",
+                "to_node": orch["first_node"],
+                "focus_hint": orch["focus_hint"],
+                "rationale": (orch["rationale"] or "") + " (ユーザー介入により再選択)",
+                "confidence": None,
+            }
+            if orch.get("parse_error"):
+                restart_event["parse_error"] = orch["parse_error"]
+            state["delegation_history"].append(restart_event)
+            yield StreamEvent("orchestrator_decision", restart_event)
+            state["current_node"] = orch["first_node"]
+            state["pending_focus_hint"] = orch["focus_hint"]
+            state["previous_node"] = "orchestrator"
+            continue  # 次のループ反復で、新しい current_node に対して監視を走らせる
 
         next_round = state["rally_round"] + 1
         state["rally_round"] = next_round
@@ -616,6 +711,34 @@ async def run_rally_stream(
         wall_ms=wall_ms,
         topology_node_ids=topology_node_ids or None,
     )
+
+    # ─── 5. 監査エージェント (Phase C, オプション) ─────────────────
+    if audit_after_integrator:
+        from log_analyzer.audit_agent import run_audit  # 遅延 import (依存軽量化)
+        yield StreamEvent("audit_start", {"model_hint": "gpt-4o-mini"})
+        try:
+            audit = await _run_sync(
+                run_audit, log_text, topology_context, result
+            )
+        except Exception as e:
+            yield StreamEvent("error", {"stage": "audit", "message": str(e)})
+            audit = None
+        if audit is not None:
+            result.audit_report = audit
+            yield StreamEvent(
+                "audit_done",
+                {
+                    "verdict": audit.verdict,
+                    "confidence": audit.confidence,
+                    "concerns": len(audit.concerns),
+                    "alternatives": len(audit.alternative_hypotheses),
+                    "tokens_in": audit.tokens_in,
+                    "tokens_out": audit.tokens_out,
+                    "latency_ms": audit.latency_ms,
+                    "model": audit.model,
+                },
+            )
+
     trace.update(output=result.model_dump(mode="json"))
     flush()
     yield StreamEvent("final", {"result": result.model_dump(mode="json")})

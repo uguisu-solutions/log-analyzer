@@ -2579,32 +2579,51 @@ code {
 .cnt-empty { color: #bbb; }
 .btn-danger {
   background: #b3261e;
-  color: #fff;
+  color: #fff !important;
   border: none;
   padding: 0.3rem 0.6rem;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: background 120ms;
 }
-.btn-danger:hover { background: #8c1c16; }
+.btn-danger:hover:not(:disabled) {
+  background: #8c1c16;
+  color: #fff !important;
+}
+.btn-danger:disabled {
+  background: #d99c98;
+  cursor: not-allowed;
+}
 
 .topology-run-bar {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.75rem 1rem;
   align-items: center;
-  padding: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.8rem;
   background: #f6f7f9;
   border: 1px solid #e0e3e7;
   border-radius: 6px;
 }
-.topology-run-bar label {
+.topology-run-bar > label {
   display: flex;
   gap: 0.4rem;
   align-items: center;
   font-size: 0.88rem;
+  white-space: nowrap;
+}
+.topology-run-bar > label > select {
+  max-width: 24rem;
+  min-width: 0;
 }
 .topology-run-bar input[type="number"] {
   width: 4.5rem;
+}
+.topology-run-bar > button {
+  white-space: nowrap;
 }
 .topology-error {
   padding: 0.6rem 0.8rem;
@@ -2709,4 +2728,836 @@ code {
 }
 .topology-graph-wrap .graph-container {
   height: 320px;
+}
+
+/* ─── Config-First 2 段階解析タブ ──────────────────────── */
+.config-first-mode .stage-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.8rem;
+  background: #f6f7f9;
+  border: 1px solid #e0e3e7;
+  border-radius: 6px;
+  margin-bottom: 0.8rem;
+  flex-wrap: wrap;
+}
+.stage-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  background: #fff;
+  border: 1px solid #d0d5db;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: #555;
+}
+.stage-step .stage-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  background: #e0e3e7;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: #555;
+}
+.stage-step.active {
+  background: #eaf3fb;
+  border-color: #0a5fb7;
+  color: #084e96;
+  font-weight: 600;
+}
+.stage-step.active .stage-num {
+  background: #0a5fb7;
+  color: #fff;
+}
+.stage-step.done {
+  background: #e7f5ec;
+  border-color: #1a7f3e;
+  color: #0f5128;
+}
+.stage-step.done .stage-num {
+  background: #1a7f3e;
+  color: #fff;
+}
+.stage-step.skipped {
+  background: #f5f5f5;
+  border-color: #c0c5cb;
+  color: #999;
+  text-decoration: line-through;
+}
+.stage-arrow {
+  color: #888;
+  font-size: 0.95rem;
+}
+
+/* Stage 1 完了承認モーダル */
+.modal.stage-approval-modal {
+  max-width: 720px;
+}
+.modal.stage-approval-modal .modal-summary {
+  background: #fff8e1;
+  padding: 0.6rem 0.8rem;
+  border-left: 4px solid #b8860b;
+  border-radius: 4px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.modal-meta {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+/* 結果ペインの Stage タブ */
+.result-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 0.6rem;
+}
+.result-tabs .tab {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.88rem;
+}
+
+/* Stage サマリ並列カード */
+.stage-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+.stage-summary-card {
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  border-left: 4px solid #ccc;
+  background: #fafbfc;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.stage-summary-card.stage-config {
+  border-left-color: #b8860b;
+  background: #fff8e1;
+}
+.stage-summary-card.stage-log {
+  border-left-color: #0a5fb7;
+  background: #eaf3fb;
+}
+.stage-summary-card.muted {
+  color: #888;
+  background: #f5f5f5;
+  border-left-color: #c0c5cb;
+}
+.stage-summary-head {
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+}
+.stage-summary-text {
+  margin-top: 0.3rem;
+  color: #1a1a1a;
+}
+
+/* リアルタイムログの Stage タグ */
+.stage-tag {
+  display: inline-block;
+  padding: 0.1em 0.45em;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+.stage-tag.stage-config {
+  background: #b8860b;
+  color: #fff;
+}
+.stage-tag.stage-log {
+  background: #0a5fb7;
+  color: #fff;
+}
+
+/* ─── Config-First モード切替トグル ────────────────────── */
+.topology-mode-bar {
+  padding: 0.6rem 0.8rem;
+  background: #fff;
+  border: 1px solid #e0e3e7;
+  border-radius: 6px;
+  margin-bottom: 0.6rem;
+}
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+.mode-toggle-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #333;
+}
+.radio-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #d0d5db;
+  border-radius: 999px;
+  background: #fafbfc;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 120ms;
+  white-space: nowrap;
+}
+.radio-pill:hover {
+  background: #f1f3f5;
+}
+.radio-pill input[type="radio"] {
+  margin: 0;
+}
+.radio-pill input[type="radio"]:checked + span {
+  font-weight: 700;
+  color: #084e96;
+}
+.mode-toggle-hint {
+  margin: 0.35rem 0 0 0;
+  font-size: 0.8rem;
+}
+
+/* ─── Phase G: 根本原因候補を並列グリッド表示に (rank 撤去) ─── */
+.candidates.candidates-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.6rem;
+  list-style: none;
+  padding-left: 0;
+}
+.candidates.candidates-grid li {
+  background: var(--bg);
+  padding: 0.75rem;
+  border-radius: 4px;
+  border-left: 3px solid var(--border);
+  margin: 0;
+}
+/* rank バッジ自体は撤去済みだが、互換のため .rank class は残しておく (非表示) */
+.rank {
+  display: none;
+}
+
+/* ─── 問診票パネル (Phase B) ─────────────────────────── */
+.questionnaire-panel {
+  background: #fff;
+  border: 1px solid #e0e3e7;
+  border-radius: 6px;
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 0.6rem;
+}
+.questionnaire-panel > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.2rem 0;
+}
+.questionnaire-panel > summary::-webkit-details-marker { display: none; }
+.questionnaire-panel > summary::before {
+  content: '▶';
+  display: inline-block;
+  font-size: 0.7rem;
+  color: #888;
+  transition: transform 120ms;
+}
+.questionnaire-panel[open] > summary::before { transform: rotate(90deg); }
+.qp-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+.qp-meta {
+  font-size: 0.82rem;
+  color: #555;
+}
+.qp-count {
+  margin-left: 0.5rem;
+  background: #eaf3fb;
+  color: #084e96;
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  font-size: 0.78em;
+}
+.qp-hint {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: #888;
+}
+.qp-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px dashed #e0e3e7;
+  margin-bottom: 0.6rem;
+  flex-wrap: wrap;
+}
+.qp-template-select {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+.qp-template-select select {
+  min-width: 16rem;
+}
+.qp-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.6rem;
+}
+.qp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+.qp-item-label span {
+  font-weight: 600;
+}
+.qp-required {
+  font-style: normal;
+  margin-left: 0.4rem;
+  padding: 0.05em 0.4em;
+  background: #b3261e;
+  color: #fff;
+  border-radius: 3px;
+  font-size: 0.7em;
+}
+.qp-item input, .qp-item select, .qp-item textarea {
+  padding: 0.3rem 0.4rem;
+  border: 1px solid #d0d5db;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.qp-item textarea {
+  resize: vertical;
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+.qp-empty {
+  color: #aaa;
+  font-size: 0.85rem;
+}
+.qp-error {
+  background: #fdecea;
+  color: #7a0e08;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+}
+
+/* ─── 監査エージェント (Phase C) ───────────────────── */
+.audit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  color: #444;
+  white-space: nowrap;
+}
+.audit-toggle > input[type="checkbox"] {
+  margin: 0;
+  flex-shrink: 0;
+}
+.audit-report {
+  margin-top: 1rem;
+  padding: 0.8rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+.audit-report.audit-agree { border-left: 5px solid #1a7f3e; background: #e7f5ec; }
+.audit-report.audit-partial { border-left: 5px solid #b8860b; background: #fff8e1; }
+.audit-report.audit-disagree { border-left: 5px solid #b3261e; background: #fdecea; }
+.audit-report.audit-uncertain { border-left: 5px solid #888; background: #f3f4f6; }
+.audit-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.audit-header h4 { margin: 0; font-size: 1rem; }
+.audit-verdict-badge {
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #fff;
+}
+.audit-verdict-badge.audit-agree { background: #1a7f3e; }
+.audit-verdict-badge.audit-partial { background: #b8860b; }
+.audit-verdict-badge.audit-disagree { background: #b3261e; }
+.audit-verdict-badge.audit-uncertain { background: #888; }
+.audit-meta { font-size: 0.78rem; }
+.audit-summary {
+  margin: 0.5rem 0 0.3rem 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.audit-section-title {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #555;
+}
+.audit-concerns, .audit-alternatives {
+  margin: 0.2rem 0 0 1.2rem;
+  padding: 0;
+  font-size: 0.88rem;
+}
+.audit-concerns li { color: #444; }
+.audit-alternatives li { color: #084e96; }
+
+/* ─── ラウンド単位集計 (Phase D) ───────────────────── */
+.round-metrics {
+  margin: 0.8rem 0;
+}
+.round-metrics-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
+}
+.round-metrics-header h4 {
+  margin: 0;
+}
+.round-metrics-totals {
+  font-size: 0.85rem;
+}
+.round-metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.round-metrics-table th, .round-metrics-table td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.round-metrics-table th {
+  background: #f6f7f9;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+.round-metrics-table tr:last-child td {
+  border-bottom: none;
+}
+.round-row.role-orchestrator { background: #fef3c7; }
+.round-row.role-integrator   { background: #fce7f3; }
+.rm-round, .rm-role, .rm-model {
+  white-space: nowrap;
+}
+.rm-model {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.78rem;
+  color: #444;
+}
+.rm-tokens, .rm-latency {
+  min-width: 12rem;
+}
+.rm-bar-cell {
+  position: relative;
+  height: 18px;
+  background: #f1f3f5;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.rm-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border-radius: 3px;
+  opacity: 0.6;
+}
+.rm-bar-tokens { background: #0a5fb7; }
+.rm-bar-latency { background: #1a7f3e; }
+.rm-bar-text {
+  position: relative;
+  z-index: 1;
+  display: block;
+  padding: 0 0.4rem;
+  line-height: 18px;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.78rem;
+  color: #1a1a1a;
+}
+
+/* ─── 表示モード切替 + チャット形式 (Phase E) ─────────── */
+.view-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.8rem;
+  background: linear-gradient(90deg, #eaf3fb 0%, #f6f7f9 100%);
+  border: 1px solid #b6d4f0;
+  border-left: 4px solid #0a5fb7;
+  border-radius: 6px;
+  margin: 0.6rem 0;
+  box-shadow: 0 1px 2px rgba(10, 95, 183, 0.08);
+}
+.view-mode-toggle::before {
+  content: '';
+  width: 4px;
+  height: 1.2rem;
+  background: #0a5fb7;
+  border-radius: 2px;
+  display: inline-block;
+}
+.view-mode-label {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: #084e96;
+}
+.live-chat {
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 0.4rem;
+  background: #fafbfc;
+  border-radius: 4px;
+}
+.live-chat-empty {
+  padding: 1rem;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.5rem 0;
+}
+.chat-message {
+  display: flex;
+  gap: 0.6rem;
+  max-width: 92%;
+}
+.chat-message.chat-human {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+.chat-avatar {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  width: 2.4rem;
+  height: 2.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  flex-shrink: 0;
+  color: #444;
+}
+.chat-message.chat-human .chat-avatar { background: #eaf3fb; color: #0a5fb7; border-color: #b6d4f0; }
+.chat-message.chat-integrator .chat-avatar { background: #fce7f3; color: #be185d; border-color: #f0c0d8; }
+.chat-message.chat-audit .chat-avatar { background: #e7f5ec; color: #1a7f3e; border-color: #b0d4be; }
+.chat-message.chat-system .chat-avatar { background: #f3f4f6; color: #555; }
+.chat-message.chat-agent .chat-avatar { background: #fffaef; color: #92400e; border-color: #f0e0b6; }
+.chat-bubble {
+  flex: 1;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+}
+.chat-message.chat-human .chat-bubble {
+  background: #eaf3fb;
+  border-color: #b6d4f0;
+}
+.chat-message.chat-agent .chat-bubble {
+  background: #fffaef;
+  border-color: #f0e0b6;
+}
+.chat-message.chat-integrator .chat-bubble {
+  background: #fdf2f8;
+  border-color: #f0c0d8;
+}
+.chat-message.chat-audit .chat-bubble {
+  background: #e7f5ec;
+  border-color: #b0d4be;
+}
+.chat-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.3rem;
+}
+.chat-speaker {
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+.chat-tag {
+  background: #e0e3e7;
+  color: #555;
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  font-size: 0.72rem;
+}
+.chat-metric {
+  font-size: 0.74rem;
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+.chat-body {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.chat-body p { margin: 0.3rem 0; }
+.chat-arrow { color: #555; }
+.chat-rationale { color: #1a1a1a; }
+.chat-focus { color: #084e96; }
+.chat-confidence { color: #444; }
+.chat-section-title {
+  margin-top: 0.5rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #555;
+}
+.chat-causes, .chat-actions, .chat-concerns, .chat-alternatives, .chat-qa-list {
+  margin: 0.2rem 0 0 1.2rem;
+  padding: 0;
+}
+.chat-causes li, .chat-actions li, .chat-concerns li, .chat-alternatives li, .chat-qa-list li {
+  margin: 0.2rem 0;
+}
+.chat-qa-list li {
+  font-size: 0.88rem;
+}
+.chat-meta {
+  font-size: 0.74rem;
+  margin-top: 0.4rem;
+}
+
+/* ─── 単一実行タブ: 表示専用構成の誘導ヒント ─── */
+.view-only-hint {
+  background: #fff7ed;
+  border-left: 4px solid #fb923c;
+  color: #7c2d12;
+}
+.link-button {
+  background: none;
+  border: none;
+  color: #0a5fb7;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0 0.2rem;
+  font-size: inherit;
+  font-weight: 700;
+}
+.link-button:hover { color: #084e96; }
+
+/* ─── ChatInput (実行中の介入入力, Phase E 拡張) ─── */
+.chat-section {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8rem;
+  margin: 0.6rem 0;
+}
+.chat-section > h3 {
+  margin: 0 0 0.6rem 0;
+  font-size: 1.05rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3rem;
+}
+.chat-input {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: #eaf3fb;
+  border: 1px solid #b6d4f0;
+  border-radius: 8px;
+}
+.chat-input.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.chat-input-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+.chat-input-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: #084e96;
+}
+.chat-input-hint {
+  font-size: 0.78rem;
+}
+.chat-input-type {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
+}
+.chat-input-type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  background: #fff;
+  border: 1px solid #d0d5db;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.chat-input-type-pill.active {
+  background: #0a5fb7;
+  color: #fff;
+  border-color: #0a5fb7;
+}
+.chat-input-type-pill input { margin: 0; }
+.chat-input-text {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #d0d5db;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.88rem;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.chat-input-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+.chat-input-send {
+  padding: 0.4rem 0.8rem;
+  background: #b8860b;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.chat-input-send:hover:not(:disabled) { background: #9c7209; }
+.chat-input-send:disabled {
+  background: #d0d5db;
+  color: #888;
+  cursor: not-allowed;
+}
+.chat-input-status { font-size: 0.78rem; }
+.chat-input-error {
+  font-size: 0.82rem;
+  color: #b3261e;
+}
+
+/* ─── Terraform 一括取込モーダル ─── */
+.tf-importer-modal {
+  max-width: 920px;
+  width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.tf-importer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tf-importer-header h3 { margin: 0; }
+.btn-close {
+  background: none;
+  border: none;
+  font-size: 1.4rem;
+  cursor: pointer;
+  color: #666;
+  line-height: 1;
+}
+.btn-close:hover { color: #000; }
+.tf-importer-input {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.tf-importer-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.tf-importer-textarea {
+  width: 100%;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.82rem;
+  padding: 0.5rem;
+  border: 1px solid #d0d5db;
+  border-radius: 4px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.tf-importer-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+.tf-importer-error {
+  margin-top: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  background: #fdecea;
+  color: #7a0e08;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+.tf-importer-preview {
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+.tf-importer-preview h4 { margin: 0 0 0.5rem 0; font-size: 0.95rem; }
+.tf-importer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+.tf-importer-table th, .tf-importer-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid #e0e3e7;
+}
+.tf-importer-table th {
+  background: #f6f7f9;
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+.tf-importer-table .tf-row-matched { background: #e7f5ec; }
+.tf-importer-table .tf-row-unmatched { background: #fff8e1; }
+.tf-importer-table code {
+  background: #f3f4f6;
+  padding: 0 0.3em;
+  border-radius: 3px;
+  font-size: 0.88em;
+}
+.tf-importer-table select {
+  font-size: 0.84rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid #d0d5db;
+  border-radius: 3px;
 }

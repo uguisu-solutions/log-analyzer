@@ -18,7 +18,7 @@ def test_minimal_result_serializes():
     )
     payload = result.model_dump_json()
     assert '"config_id":"config1"' in payload
-    assert '"schema_version":"v0.1"' in payload
+    assert '"schema_version":"v0.2"' in payload
 
 
 def test_human_judgment_flag_required():
@@ -32,9 +32,20 @@ def test_human_judgment_flag_required():
 
 def test_root_cause_categories_constrained():
     candidate = RootCauseCandidate(
-        rank=1,
         category=Category.FW,
         summary="firewall rule mismatch",
         evidence=["DENY 10.0.0.1 -> 10.0.0.2"],
     )
+    assert candidate.category == "FW"
+
+
+def test_root_cause_ignores_legacy_rank_field():
+    """schema v0.2 で撤去された rank が旧 JSON に残っていてもデコードできること。"""
+    candidate = RootCauseCandidate.model_validate({
+        "rank": 1,  # 古いデータに残っていても無視される
+        "category": "FW",
+        "summary": "x",
+        "evidence": [],
+    })
+    assert not hasattr(candidate, "rank") or getattr(candidate, "rank", None) is None
     assert candidate.category == "FW"

@@ -31,7 +31,7 @@ SYSTEM_PROMPT = """\
 出力は JSON のみとし、以下の形式に厳密に従うこと。
 {
   "root_cause_candidates": [
-    {"rank": 1, "category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["log line excerpt"]}
+    {"category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["log line excerpt"]}
   ],
   "recommended_actions": [
     {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high"}
@@ -40,7 +40,7 @@ SYSTEM_PROMPT = """\
 }
 
 ルール:
-- 候補は最大 3 件、可能性が高い順にランク付けすること。
+- 候補は最大 3 件まで。配列順は LLM の確信度順でよいが、UI 側では並列として扱われるので「rank 1 が最良」を強く想起させる表現は使わない。
 - ロールバック・再起動・設定変更・データ削除を伴うアクションは、必ず `human_judgment_required: true` とすること。
 - 各候補・各アクションには、根拠となるログ行（または抜粋）を `evidence` に必ず引用すること。
 - JSON をコードフェンスで囲まないこと。

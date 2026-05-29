@@ -38,7 +38,14 @@ class ConfigId(str, Enum):
 
 
 class RootCauseCandidate(BaseModel):
-    rank: int = Field(ge=1)
+    """根本原因候補 1 件。
+
+    schema v0.2 (2026-05-26) から ``rank`` フィールドを撤去。議事録
+    「解析結果は複数（ランキング形式ではなく）表示する」に対応し、
+    候補同士はフラットな並列として扱う。配列順は LLM 出力順を保持するが
+    UI は順位を強調せず、並列カードとして表示する。
+    """
+
     category: Category
     summary: str
     evidence: list[str] = Field(default_factory=list)
@@ -105,17 +112,44 @@ class SuspectedNodeFinding(BaseModel):
     severity: str = ""  # "primary" | "secondary" | "info" | ""
 
 
+class StageOutput(BaseModel):
+    """Config-First 2 段階解析の各 Stage の中間結果 (Phase A 追加)。
+
+    - stage="config": コンフィグ情報のみで形成された仮説 (Stage 1)
+    - stage="log":    ログで事実確認した結果 (Stage 2)
+
+    通常の 1 段階モード / トポロジー解析タブ / config1-3 / config5 では空配列。
+    """
+
+    stage: str  # "config" | "log"
+    stage_label: str = ""
+    confidence: float = 0.0
+    summary: str = ""
+    suspected_node_ids: list[str] = Field(default_factory=list)
+    suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)
+    delegation_rounds: int = 0
+    delegation_history: list["DelegationEventDTO"] = Field(default_factory=list)
+    trace_id: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    latency_ms_total: int = 0
+    root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
+    recommended_actions: list[RecommendedAction] = Field(default_factory=list)
+    round_metrics: list["RoundMetrics"] = Field(default_factory=list)
+
+
 class DelegationEventDTO(BaseModel):
     """構成4 委譲チェーンの 1 ステップを UI に渡すための DTO。
 
     kind の意味:
-        - "orchestrator_initial": オーケストレータが初手の監視を指名
-        - "monitor_delegation":   監視が次の監視に委譲
-        - "monitor_finalize":     監視が integrator を指名（自然終了）
+        - "orchestrator_initial":  オーケストレータが初手の監視を指名 (実行開始時 1 回)
+        - "orchestrator_restart":  ユーザー介入により orchestrator が再選択 (2026-05-26 追加)
+        - "monitor_delegation":    監視が次の監視に委譲
+        - "monitor_finalize":      監視が integrator を指名（自然終了）
         - "routing_violation_fallback": 自己遷移 / ping-pong 違反で integrator に強制
-        - "max_rounds_finalize":  rally_max_rounds 到達による強制 finalize
-        - "user_finalize":        ユーザーが確認モーダルで停止を選択
-        - "user_extend":          ユーザーが確認モーダルで延長を選択（履歴記録用）
+        - "max_rounds_finalize":   rally_max_rounds 到達による強制 finalize
+        - "user_finalize":         ユーザーが確認モーダルで停止を選択
+        - "user_extend":           ユーザーが確認モーダルで延長を選択（履歴記録用）
     """
 
     round: int
@@ -125,6 +159,82 @@ class DelegationEventDTO(BaseModel):
     focus_hint: str = ""
     rationale: str = ""
     confidence: float | None = None  # 監視の confidence（kind="monitor_*" のみ）
+
+
+class RoundMetrics(BaseModel):
+    """構成4 (rally) のラウンド単位集計 (Phase D)。
+
+    議事録「ラウンド履歴、消費トークン、処理時間をラウンド単位で閲覧可能にする」
+    に対応。各ラウンドで動いた監視ノード 1 件分の metrics を 1 行に持つ。
+
+    role:
+        - "orchestrator": round=0 (初手選択)
+        - "<monitor>":    round>=1 (fw/routing/app/dns/sec 等)
+        - "integrator":   round=最終
+    """
+
+    round: int
+    role: str
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    latency_ms: int = 0
+
+
+class AuditReport(BaseModel):
+    """GPT 監査エージェント (Phase C) の所見。
+
+    Claude 系で動いた構成4 (rally) の結果を GPT-4o 系で独立検証する。
+    議事録「監査エージェント (GPT想定)」に対応。
+
+    verdict:
+        - "agree":     Claude の結論に同意
+        - "partial":   一部同意 (主原因は OK だが副次の指摘 / 抜けあり)
+        - "disagree":  別の根本原因を主張
+        - "uncertain": 与えられた情報では判断不能
+    """
+
+    verdict: str = "uncertain"
+    confidence: float = 0.0
+    summary: str = ""
+    concerns: list[str] = Field(default_factory=list)
+    alternative_hypotheses: list[str] = Field(default_factory=list)
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    latency_ms: int = 0
+
+
+class QuestionnaireItem(BaseModel):
+    """問診票の 1 設問 (Phase B)。
+
+    type:
+        - "text":   自由記述 1 行 (placeholder で例文を出せる)
+        - "textarea": 自由記述 複数行
+        - "choice": 選択式 (options 必須)
+    """
+
+    key: str
+    label: str
+    type: str = "text"  # "text" | "textarea" | "choice"
+    options: list[str] = Field(default_factory=list)
+    placeholder: str = ""
+    required: bool = False
+
+
+class QuestionnaireTemplate(BaseModel):
+    """問診票テンプレート (Phase B)。
+
+    SQLite ``questionnaire_templates`` テーブルに保存。デフォルトテンプレ
+    (id=1, name='default') は init_db 時に自動投入する。
+    """
+
+    id: int
+    name: str
+    description: str = ""
+    items: list[QuestionnaireItem] = Field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
 
 
 def _default_trace_id() -> str:
@@ -137,7 +247,7 @@ def _default_trace_id() -> str:
 
 
 class AnalysisResult(BaseModel):
-    schema_version: str = "v0.1"
+    schema_version: str = "v0.2"
     # Langfuse が発行する trace ID（文字列）。UI のリンク生成と Langfuse UI 上の
     # 該当トレースを開く URL に直接使う。
     trace_id: str = Field(default_factory=_default_trace_id)
@@ -163,3 +273,14 @@ class AnalysisResult(BaseModel):
     # 同上。ノード単位の詳細（summary / severity）。UI で各ノードに「ここで何が起こっているか」を
     # 表示するために使う。``suspected_node_ids`` と整合（ID は同じか部分集合）。
     suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)
+    # Config-First 2 段階解析の各 Stage の中間結果。1 段階モードでは空配列。
+    stage_outputs: list[StageOutput] = Field(default_factory=list)
+    # 監査エージェント (Phase C) の所見。実行されなかった場合は None。
+    audit_report: AuditReport | None = None
+    # ラウンド単位集計 (Phase D)。token_log を round 順に並べたもの。
+    # 他構成 (config1-3,5) では空のまま。
+    round_metrics: list[RoundMetrics] = Field(default_factory=list)
+
+
+# 前方参照の解決 (StageOutput が DelegationEventDTO を文字列参照しているため)
+StageOutput.model_rebuild()
