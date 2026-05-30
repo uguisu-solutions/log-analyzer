@@ -22,13 +22,13 @@
 |---|---|---|---|
 | 解析結果は複数（ランキング形式ではなく）表示 | G | ✅ | `RootCauseCandidate.rank` 撤去、UI もグリッド表示に |
 | 問診票を基にエージェントが実行 | B | ✅ | SQLite テンプレ + UI パネル + `_build_topology_log_text` 注入 |
-| **途中での要望差し込みも可能** | — | ⚠ | 単一実行タブのみ実装済。Topology / Config-First タブには未実装（#1） |
+| 途中での要望差し込みも可能 | E 拡張 | ✅ | ChatInput + 介入時 orchestrator 再選択 (config_first_stages §9.11) |
 | コンフィグ利用 ON/OFF 切替 | A.5 | ✅ | Config-First タブ内のラジオで切替 |
 | Config-First 2 段階プロセス | A | ✅ | Stage 1 → 必須承認モーダル → Stage 2 |
 | 構成図上で機器ピン + ログ由来の判別 | A | ✅ | severity 別ハイライト (primary=赤+点滅 / secondary=橙) |
 | ラウンド履歴・tokens・処理時間 per round | D | ✅ | RoundMetrics + UI バー表示 |
 | 監査エージェント (GPT 想定) | C | ✅ | GPT-4o-mini で integrator 後に独立検証 |
-| UI: チャット形式 | E | ✅ | 表示モード切替 + ChatHistoryView |
+| UI: チャット形式 | E + 拡張 | ✅ | デフォルト chat / ChatHistoryView (完了後) / LiveChatView (実行中) / 問診票をチャット内に配置 |
 | 問診票有無の同一シナリオ評価 | F | ✅ | `benchmark_questionnaire.py` CLI |
 | **評価軸: 精度・速度・コスト** | F | ⚠ | 精度 / 速度は OK、**コスト ($/円) 表示が未実装**（#3） |
 | **ラウンドごとの人間体感評価（約3ラウンド）** | — | ❌ | 完全未着手（#2） |
@@ -44,10 +44,15 @@
 
 | # | 項目 | 工数目安 | 議事録該当 |
 |---|---|---|---|
-| 1 | **新タブで実行中の追加メッセージ投入** | 1〜2 日 | 「途中での要望差し込みも可能」 |
 | 2 | **ラウンドごとの人間体感評価** | 2 日 | 「ラウンドごとの人間の体感評価も実施希望（約3ラウンド想定）」 |
 | 3 | **コスト ($/円) 見積もり表示** | 1 日 | 「評価軸: 精度・速度・コスト」 |
 | 4 | **総合レポート雛形整備** | 1 日 (文書) | 「ベンチマーク形式の総合レポートを整備」 |
+
+> ✅ 旧 #1「新タブで実行中の追加メッセージ投入」は **完了**。
+> [ChatInput.tsx](../../apps/ui/src/ChatInput.tsx) で comment / log / config の
+> 3 種類を実行中に送信可能。バックエンドでは [rally_agent.py](../../apps/agents/src/log_analyzer/rally_agent.py)
+> が `_drain_appends` 検出時に `intervention_restart` を emit し、
+> `orchestrator_select_first` を再実行する (詳細は config_first_stages.md §9.11)。
 
 ### 🟡 P1: 設計プランで触れたが見送ったもの
 
@@ -70,17 +75,17 @@
 | # | 項目 | 補足 |
 |---|---|---|
 | 11 | 監査エージェントのモデル選択 UI | 現状は `AUDIT_MODEL` 環境変数のみ |
-| 12 | チャット UI でのリアルタイム追跡 | 現状は完了後 result のみ。実行中 SSE をチャットに逐次追加する案 |
+| 12 | ~~チャット UI でのリアルタイム追跡~~ ✅ 完了 | [LiveChatView.tsx](../../apps/ui/src/LiveChatView.tsx) で SSE → ChatMessage 逐次変換済 |
 | 13 | monitor プロンプトの per-tab 編集 | 回避策として user:N 経由で可能 |
 
 ---
 
 ## 3. 推奨優先順
 
-**P0 を順番に潰す**のが議事録への忠実度が最も高い。各項目はそれぞれ 1〜2 日で完了する。
+**残 P0 (3 件)** を順番に潰すのが議事録への忠実度が最も高い。各項目はそれぞれ 1〜2 日で完了する。
 
 ```
-#1 (追加メッセージ投入) →  #3 (コスト見積もり) → #2 (per-round 体感評価) → #4 (報告書雛形)
+#3 (コスト見積もり) → #2 (per-round 体感評価) → #4 (報告書雛形)
 ```
 
 `#3` を `#2` より先に置く理由: `#2` の per-round 評価で「コストも見たい」となるとリワーク
@@ -88,32 +93,31 @@
 
 P1 はその後、現場フィードバックを見て必要なものから着手。P2/P3 は PM 判断。
 
+> 旧 #1「新タブで実行中の追加メッセージ投入」は完了済み。詳細は §4 直下の
+> 「#1 (完了)」エントリ参照。
+
 ---
 
 ## 4. 各項目の実装メモ
 
 着手単位を見極めるための簡易設計です。実装着手時は別途タスクチケット化してください。
 
-### #1 — 新タブで実行中の追加メッセージ投入 (P0, 1〜2 日)
+### #1 (完了) — 新タブで実行中の追加メッセージ投入
 
-**現状**:
-- 単一実行タブには `AddLogModal` + `POST /api/runs/{run_id}/append-log` が既存
-- トポロジー解析 / Config-First タブには UI 導線なし（バックエンドの append-log は流用可）
+**完了日**: 2026-05-27
+**実装**:
+- `apps/ui/src/ChatInput.tsx`: comment / log / config の 3 タイプ選択 + 送信
+- `POST /api/runs/{run_id}/append-log` に `source: "intervention:{type}:user"` で送信
+- バックエンドは [rally_agent.py](../../apps/agents/src/log_analyzer/rally_agent.py) で
+  `_drain_appends` が空でなければ次の監視を走らせず orchestrator を再呼び出し
+  し、初期ノードを再選択する (詳細は config_first_stages.md §9.11)
+- 新 SSE イベント `intervention_restart` を emit、`LiveChatView` が System
+  メッセージとして表示
 
-**設計**:
-- 両タブの実行中ステータス（`stage1_running` / `stage2_running` / `awaiting_decision`）の間だけ、
-  チャット入力欄を画面下部に出す（Phase E のチャット表示モードに統合するのが自然）
-- 入力欄は 1 行テキスト + 「送信」ボタン
-- 送信時は `POST /api/runs/{run_id}/append-log` に
-  `{content: <ユーザーメッセージ>, source: "inline-comment"}` を送る
-- 既存の `_drain_appends` がメッセージを次ラウンドの監視 / integrator に届ける
-
-**変更ファイル目安**:
-- `apps/ui/src/ChatHistoryView.tsx` or 新 `LiveChatInput.tsx`
-- `apps/ui/src/TopologyAnalysis.tsx` / `ConfigFirstAnalysis.tsx`
-
-**テスト**:
-- 既存 `test_topology_api.py` の append-log エンドポイントは追加分のテストのみ
+**関連変更**:
+- `DelegationEventDTO.kind` に `"orchestrator_restart"` を追加
+- 2026-05-14 で定めた「orchestrator は初回 1 回のみ」不変条件は
+  「初回 + 各介入時」に緩和
 
 ---
 

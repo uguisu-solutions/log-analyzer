@@ -5,6 +5,8 @@
   - 2026-05-26 — A.5 Configs ON/OFF トグル追記
   - 2026-05-26 — Phase G (rank 撤去 + schema v0.2) と Phase B (問診票) を追記
   - 2026-05-26 — Phase C (GPT 監査) / D (ラウンド集計) / E (チャット表示) / F (問診票有無比較) を追記
+  - 2026-05-27 — Phase E 拡張 (デフォルト chat / LiveChatView / ChatInput) と
+                 介入時 orchestrator 再選択 (§9.11) を追記
 **ブランチ**: `feature/config-first-stages`
 **前提**: 既存のトポロジー解析タブ ([feature/topology-analysis](../reports/poc_progress_2026-05-25.md)) が `main` 取り込み待ち。本機能はそこから派生する後続フェーズ。
 
@@ -513,31 +515,128 @@ class StageOutput:
 
 ---
 
-## 9.10. Phase E: チャット形式 結果表示
+## 9.10. Phase E: チャット形式 UI （Phase E + 拡張）
 
 議事録「UI: チャット形式を想定し、問診票の要求や回答結果を表示する」に対応。
-既存の AnalysisResult を「人間 → orchestrator → 各監視 → integrator → 監査」
-の会話スレッドとしてレンダリングする**読み取り専用ビュー**。
+当初は **完了後の結果表示専用** だったが、ユーザー要望を受けて以下を順次追加し、
+現在は実行前 → 実行中 → 完了後 の全フェーズをチャット表示で通せる構成。
 
-### バックエンド
-変更なし。既存の delegation_history + result + audit_report + Phase B の
-問診票回答を UI 側でのみ再構成する。
+### 9.10.1 静的結果ビュー (`ChatHistoryView`)
 
-### UI
-- `ChatHistoryView.tsx` 新規: メッセージ単位レンダラ
-  - sender 別配色 (human=青 / agent=黄 / integrator=ピンク / audit=緑)
-  - 各メッセージに speaker / round タグ / model · tokens · latency メタ
-- `ViewModeToggle.tsx` 新規: 「標準 / チャット表示」のラジオ切替を両タブで共用
-- 結果ペイン上部にトグルを配置、chat 選択時は ChatHistoryView のみ表示
-  標準モードは従来の ResultTabs / Stage 別タブを保持
+- `apps/ui/src/ChatHistoryView.tsx` 新規
+- AnalysisResult を「人間 → orchestrator → 各監視 → integrator → 監査」の
+  会話スレッドにレンダリング
+- メッセージ単位レンダラ `ChatMessage` を `export` し、LiveChatView から再利用
+- sender 別配色 (human=青 / agent=黄 / integrator=ピンク / audit=緑 / system=灰)
+- 各メッセージに speaker / round タグ / model · tokens · latency メタ
+- avatar は絵文字ではなくテキストバッジ (`You` / `INT` / `AUD` / `SYS` / `AGT`)
+  + sender 別配色で識別 (絵文字使用禁止の指摘を受けて全撤去)
 
-### 後続検討
-- 実行中の会話 (SSE 進行中) もチャット表示する案 → 現在は完了後の result のみ対象
-- ユーザーが追加メッセージを送信できる導線 (既存 `append-log` を流用) → 未実装
+### 9.10.2 表示モード切替 (`ViewModeToggle`)
+
+- `apps/ui/src/ViewModeToggle.tsx` 新規
+- 「標準 / チャット表示」のラジオ切替を両タブで共用
+- **デフォルトは chat**（議事録の UI 要求に直接対応）
+- 標準モード時は従来の ResultTabs / Stage 別タブを保持
+
+### 9.10.3 ライブチャット (`LiveChatView`)
+
+- `apps/ui/src/LiveChatView.tsx` 新規
+- SSE で届く実行中ストリームを `ChatMessage` に逐次変換し、リアルタイムで
+  会話形式で表示
+- 主要イベントのレンダリング:
+  - `orchestrator_decision` → エージェント発言 (`オーケストレータ`)
+  - `monitor_start` / `monitor_decision` → 監視ノードの発言
+  - `integrator_start` / `integrator_done` → 統合者の発言
+  - `audit_start` / `audit_done` → 監査エージェントの発言
+  - `log_appended` → 人間オペレータからの介入
+  - `intervention_restart` → System メッセージ (Phase E 拡張、§9.12 参照)
+  - `await_confirmation` / `user_decision` → System / 人間
+- 自動スクロールで最新メッセージを画面内に保持
+
+### 9.10.4 介入入力 (`ChatInput`)
+
+- `apps/ui/src/ChatInput.tsx` 新規
+- 実行中 (running) に画面下部に表示される投稿欄
+- 3 タイプから選択して送信:
+  - `comment`: 自然言語コメント
+  - `log`: 追加ログ行
+  - `config`: 設定ファイル抜粋
+- 送信先は既存 `POST /api/runs/{run_id}/append-log`、source は
+  `intervention:{type}:user` の形式で型タグ化
+- 介入を送信するとバックエンドが **orchestrator を再選択** する (§9.12 参照)
+
+### 9.10.5 問診票のチャット内配置
+
+- 標準モード時は従来通り運転バー手前に `QuestionnairePanel`
+- **chat モード時はチャットセクション内に統合配置**:
+  「会話」セクション内で問診票 → ライブログ → 介入入力 の順に縦に並ぶ
+- 議事録「問診票はチャット形式の中で入力できるように」に対応
 
 ---
 
-## 9.11. Phase F: 問診票あり/なし比較ベンチマーク CLI
+## 9.11. 介入時の orchestrator 再選択（Phase E 拡張）
+
+議事録「処理中にプロンプトで介入があった場合は、一度オーケストレーション
+ノードに戻り、初期ノード選択から再開」に対応した **rally コアの挙動変更**。
+
+### 動機
+
+従来の rally は「orchestrator は初回 1 回のみ実行し、以降は監視が委譲先を
+指名する」シングルアクティブ委譲チェーン (2026-05-14 設計)。ユーザーの追加
+ログは次の監視に流すだけで、ノード選択戦略は変えなかった。
+
+新情報が入ったときに「同じ計画で続行」では損なので、議事録の指示通り
+**orchestrator に戻して初手から戦略を引き直す** ように変更。
+
+### 実装 (`rally_agent.py`)
+
+メイン rally ループ内で、各反復の冒頭に挿入:
+
+```python
+drained = _drain_appends(state, append_queue)
+for record in drained:
+    yield StreamEvent("log_appended", record)
+
+# 介入再起動
+if drained:
+    yield StreamEvent("intervention_restart", {
+        "reason": "...",
+        "added_count": len(drained),
+        "previous_planned_node": current,
+    })
+    orch = await _run_sync(orchestrator_select_first, state)
+    # token_log + delegation_history に "orchestrator_restart" として追加
+    state["current_node"] = orch["first_node"]
+    state["previous_node"] = "orchestrator"
+    continue  # 新しい current_node で次反復
+```
+
+### スキーマへの影響
+
+- `DelegationEventDTO.kind` に `"orchestrator_restart"` を追加
+- 新 SSE イベント `intervention_restart` を emit
+  - `data`: `{reason, added_count, previous_planned_node}`
+- `state["appended_logs"]` (既存) に投入された内容は引き続き次の監視の動的入力
+  ブロックに含まれる (内容自体は失われない)
+
+### 適用範囲
+
+- `run_rally_stream` (構成4 + トポロジー解析タブ)
+- `run_two_stage_stream` 内の Stage 1 / Stage 2 双方
+- 単一実行タブの構成4 ラリー
+- 既存の単一実行タブの「追加ログ投入モーダル」(`AddLogModal`) からも同じ
+  振る舞いになる (互換変更)
+
+### 「orchestrator は初回 1 回のみ」不変条件の修正
+
+2026-05-14 で定めた「orchestrator は初回 1 回のみ」は **「初回 + 各介入時」**
+に緩和された。これは設計プロセスとしての orchestrator (初手選択) ロールの
+拡張であって、監視 → 監視 の自動委譲ループ (旧 fan-out 型) への回帰ではない。
+
+---
+
+## 9.12. Phase F: 問診票あり/なし比較ベンチマーク CLI
 
 議事録「問診票（指標）の有無両条件で同一シナリオを評価し、スコアリング、
 ラウンド数、精度、速度を網羅する」に対応。
@@ -595,11 +694,14 @@ python scripts\benchmark_questionnaire.py `
 
 ## 11. 残作業
 
-Phase A〜F の完了で議事録の主要要求は概ねカバーしているが、まだ未実装の項目が残っている。
-詳細は [remaining_work.md](remaining_work.md) を参照。
+Phase A〜F + Phase E 拡張 (デフォルト chat / LiveChatView / ChatInput /
+介入時 orchestrator 再選択) の完了で議事録の主要要求はカバー済み。
+残る未実装の項目は [remaining_work.md](remaining_work.md) を参照。
 
 優先度 P0 (議事録明記・未実装):
-- 新タブで実行中の追加メッセージ投入
 - ラウンドごとの人間体感評価
 - コスト ($/円) 見積もり表示
 - 総合レポート雛形整備
+
+※ 旧 P0「新タブで実行中の追加メッセージ投入」は ChatInput + 介入時
+   orchestrator 再選択 (§9.10.4 / §9.11) で完了済み。
