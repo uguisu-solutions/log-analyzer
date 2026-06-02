@@ -1,7 +1,7 @@
-"""Config-First 2 段階解析エンドポイントのスモークテスト。
+"""config-log 解析エンドポイントのスモークテスト。
 
-実 LLM 呼び出しはモックして、バリデーション境界 + 仮説ブロック生成 + StageOutput
-構築のみを検証する。
+実 LLM 呼び出しはモックして、バリデーション境界 (1 段階 / 2 段階 × データ種別) +
+仮説ブロック生成 + StageOutput 構築のみを検証する。
 """
 from __future__ import annotations
 
@@ -146,10 +146,10 @@ def test_build_final_result_abort_only_stage_one():
 # ─── エンドポイント側のバリデーション境界 ──────────────────────
 
 
-def test_config_first_rejects_non_config4():
+def test_config_log_rejects_non_config4():
     client = TestClient(api_mod.app)
     r = client.post(
-        "/api/runs/config-first-stream",
+        "/api/runs/config-log-stream",
         json={
             "config": "config1",
             "topology": {"nodes": [{"id": "n1"}], "links": []},
@@ -160,10 +160,10 @@ def test_config_first_rejects_non_config4():
     assert "config4" in r.json()["detail"]
 
 
-def test_config_first_rejects_empty_nodes():
+def test_config_log_rejects_empty_nodes():
     client = TestClient(api_mod.app)
     r = client.post(
-        "/api/runs/config-first-stream",
+        "/api/runs/config-log-stream",
         json={
             "config": "config4",
             "topology": {"nodes": [], "links": []},
@@ -173,53 +173,125 @@ def test_config_first_rejects_empty_nodes():
     assert r.status_code == 400
 
 
-def test_config_first_requires_at_least_one_config():
-    """Config-First では configs が 1 件もなければ実行不可 (Stage 1 で渡せるものが無い)。"""
+def test_config_log_rejects_unknown_mode():
     client = TestClient(api_mod.app)
     r = client.post(
-        "/api/runs/config-first-stream",
+        "/api/runs/config-log-stream",
+        json={
+            "config": "config4",
+            "topology": {"nodes": [{"id": "n1"}], "links": []},
+            "node_configs": {"n1": [{"name": "x.conf", "content": "x"}]},
+            "analysis_mode": "frobnicate",
+        },
+    )
+    assert r.status_code == 400
+    assert "analysis_mode" in r.json()["detail"]
+
+
+def test_single_config_requires_config():
+    """1 段階 config のみ: 設定が無ければ 400。"""
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-log-stream",
         json={
             "config": "config4",
             "topology": {"nodes": [{"id": "fw-01"}], "links": []},
             "node_logs": {"fw-01": [{"name": "fw.log", "content": "deny ..."}]},
             "node_configs": {},  # 空
+            "analysis_mode": "single",
+            "single_source": "config",
         },
     )
     assert r.status_code == 400
-    assert "Config" in r.json()["detail"] or "config" in r.json()["detail"].lower()
+    assert "config" in r.json()["detail"].lower() or "設定" in r.json()["detail"]
 
 
-def test_skip_config_stage_accepts_logs_only():
-    """skip_config_stage=True 時は configs 不要、logs が 1 件以上あれば実行可能。
+def test_single_log_requires_log():
+    """1 段階 log のみ: ログが無ければ 400 (設定があっても不可)。"""
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-log-stream",
+        json={
+            "config": "config4",
+            "topology": {"nodes": [{"id": "fw-01"}], "links": []},
+            "node_logs": {},
+            "node_configs": {"fw-01": [{"name": "x.conf", "content": "x"}]},
+            "analysis_mode": "single",
+            "single_source": "log",
+        },
+    )
+    assert r.status_code == 400
+    assert "ログ" in r.json()["detail"]
+
+
+def test_single_log_accepts_logs_only():
+    """1 段階 log のみ: ログがあれば設定不要で経路バリデーションを通過。
 
     実 LLM 呼び出しの手前まで進ませる: 不正な saved_config を指定して 404 で止まる
-    ことを確認 (通常モードと同様の経路バリデーション通過)。
+    ことを確認。
     """
     client = TestClient(api_mod.app)
     r = client.post(
-        "/api/runs/config-first-stream",
+        "/api/runs/config-log-stream",
         json={
             "config": "user:99999",  # 存在しない
             "topology": {"nodes": [{"id": "fw-01"}], "links": []},
             "node_logs": {"fw-01": [{"name": "fw.log", "content": "deny ..."}]},
             "node_configs": {},  # 空でも OK
-            "skip_config_stage": True,
+            "analysis_mode": "single",
+            "single_source": "log",
         },
     )
-    assert r.status_code == 404  # saved_config 未登録、ログ・config 不在の 400 ではない
+    assert r.status_code == 404  # saved_config 未登録。入力不足の 400 ではない
 
 
-def test_skip_config_stage_still_requires_at_least_one_log():
-    """skip 時は configs 不要だが、代わりに logs が 1 件以上必須。"""
+def test_single_both_requires_either():
+    """1 段階 config+log: 設定もログも無ければ 400。"""
     client = TestClient(api_mod.app)
     r = client.post(
-        "/api/runs/config-first-stream",
+        "/api/runs/config-log-stream",
         json={
             "config": "config4",
             "topology": {"nodes": [{"id": "fw-01"}], "links": []},
             "node_logs": {},
-            "node_configs": {"fw-01": [{"name": "x.conf", "content": "x"}]},  # configs はあるが skip
-            "skip_config_stage": True,
+            "node_configs": {},
+            "analysis_mode": "single",
+            "single_source": "both",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_two_stage_config_log_requires_config():
+    """2 段階 config→log: Stage 1 用の設定が無ければ 400 (ログがあっても不可)。"""
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-log-stream",
+        json={
+            "config": "config4",
+            "topology": {"nodes": [{"id": "fw-01"}], "links": []},
+            "node_logs": {"fw-01": [{"name": "fw.log", "content": "deny ..."}]},
+            "node_configs": {},
+            "analysis_mode": "two_stage",
+            "stage_order": "config_log",
+        },
+    )
+    assert r.status_code == 400
+    assert "config" in r.json()["detail"].lower() or "設定" in r.json()["detail"]
+
+
+def test_two_stage_log_config_requires_log():
+    """2 段階 log→config: Stage 1 用のログが無ければ 400 (設定があっても不可)。"""
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-log-stream",
+        json={
+            "config": "config4",
+            "topology": {"nodes": [{"id": "fw-01"}], "links": []},
+            "node_logs": {},
+            "node_configs": {"fw-01": [{"name": "x.conf", "content": "x"}]},
+            "analysis_mode": "two_stage",
+            "stage_order": "log_config",
         },
     )
     assert r.status_code == 400
@@ -292,7 +364,7 @@ async def _collect_events(gen):
 
 
 def test_run_two_stage_stream_abort_emits_stage_one_only(monkeypatch):
-    """Stage 1 完了直後に abort を選んだら final が emit され、stage_outputs は 1 件のみ。"""
+    """require_approval=True かつ abort を選んだら final が emit され、stage_outputs は 1 件のみ。"""
     import asyncio
     from log_analyzer.rally_two_stage import run_two_stage_stream
 
@@ -312,6 +384,7 @@ def test_run_two_stage_stream_abort_emits_stage_one_only(monkeypatch):
             log_ref="test",
             topology_context={"nodes": [{"id": "fw-01"}], "links": []},
             decision_waiter=abort_decision,
+            require_approval=True,
         )
     ))
 
@@ -326,6 +399,39 @@ def test_run_two_stage_stream_abort_emits_stage_one_only(monkeypatch):
     assert len(result["stage_outputs"]) == 1
     assert result["stage_outputs"][0]["stage"] == "config"
     assert call_count["n"] == 1  # Stage 1 のみ走った
+
+
+def test_run_two_stage_stream_auto_advances_without_approval(monkeypatch):
+    """require_approval=False (既定) では承認を待たず自動で Stage 2 まで進む。"""
+    import asyncio
+    from log_analyzer.rally_two_stage import run_two_stage_stream
+
+    call_count: dict = {}
+    monkeypatch.setattr(
+        "log_analyzer.rally_two_stage.run_rally_stream",
+        _make_fake_rally(call_count, distinguish_stage_two=True),
+    )
+
+    # decision_waiter を渡さなくても (承認を待たないので) 自動進行する
+    events = asyncio.run(_collect_events(
+        run_two_stage_stream(
+            stage_one_log_text="cfgs only",
+            stage_two_log_text_template=lambda so: _build_stage_one_hypothesis_block(so) + "logs",
+            log_ref="test",
+            topology_context={"nodes": [{"id": "fw-01"}], "links": []},
+        )
+    ))
+
+    kinds = [e.kind for e in events]
+    assert "stage_one_complete" in kinds
+    assert "stage_two_start" in kinds  # 承認なしで Stage 2 へ進んだ
+    assert "final" in kinds
+    assert call_count["n"] == 2  # 両 Stage 走った
+    # 自動進行の user_decision に auto フラグが立つ
+    ud = next(e for e in events if e.kind == "user_decision")
+    assert ud.data.get("auto") is True
+    final = next(e for e in events if e.kind == "final")
+    assert len(final.data["result"]["stage_outputs"]) == 2  # Stage 1 結果も最終に残る
 
 
 def test_run_two_stage_stream_advance_emits_both_stages(monkeypatch):
@@ -364,3 +470,41 @@ def test_run_two_stage_stream_advance_emits_both_stages(monkeypatch):
     assert stages == ["config", "log"]
     assert result["confidence"] == 0.85
     assert result["metrics"]["tokens_in"] == 800
+
+
+def test_run_two_stage_stream_log_config_order(monkeypatch):
+    """log→config の順序指定時、stage_outputs が ["log", "config"] になる。"""
+    import asyncio
+    from log_analyzer.rally_two_stage import run_two_stage_stream
+
+    call_count: dict = {}
+    monkeypatch.setattr(
+        "log_analyzer.rally_two_stage.run_rally_stream",
+        _make_fake_rally(call_count, distinguish_stage_two=True),
+    )
+
+    async def advance_decision() -> dict:
+        return {"action": "advance"}
+
+    events = asyncio.run(_collect_events(
+        run_two_stage_stream(
+            stage_one_log_text="logs only here",
+            stage_two_log_text_template=lambda so: _build_stage_one_hypothesis_block(
+                so, source_kind="log", target_kind="config"
+            ) + "configs here",
+            log_ref="test",
+            topology_context={"nodes": [{"id": "fw-01"}], "links": []},
+            stage_one_kind="log",
+            stage_two_kind="config",
+            decision_waiter=advance_decision,
+        )
+    ))
+
+    final = next(e for e in events if e.kind == "final")
+    result = final.data["result"]
+    stages = [s["stage"] for s in result["stage_outputs"]]
+    assert stages == ["log", "config"]
+    # Stage 1 (log) 完了イベントに stage_ordinal=1 が乗ること
+    s1_complete = next(e for e in events if e.kind == "stage_one_complete")
+    assert s1_complete.data["stage"] == "log"
+    assert s1_complete.data["stage_ordinal"] == 1

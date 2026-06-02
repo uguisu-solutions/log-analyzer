@@ -2,7 +2,7 @@
  * 結果ペインの表示モード切替 (Phase E)。
  *
  * 「標準」(従来のセクション分割表示) と「チャット」(会話スレッド表示) を切り替える。
- * TopologyAnalysis / ConfigFirstAnalysis 両タブで共用。
+ * TopologyAnalysis / ConfigLogAnalysis 両タブで共用。
  */
 interface Props {
   mode: 'standard' | 'chat'

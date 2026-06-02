@@ -1,8 +1,9 @@
 # テストシナリオ 2 — FW ACL コメントアウト漏れによる API サーバ片肺
 
-**Config-First 解析タブの動作確認用**サンプル一式。
-Stage 1 (Configs のみ) で原因の当たりがつき、Stage 2 (Logs) で事実確認できる
-設計になっている。
+**config-log 解析タブの動作確認用**サンプル一式。
+2 段階 (config → log) では Stage 1 (Configs のみ) で原因の当たりがつき、
+Stage 2 (Logs) で事実確認できる設計になっている。1 段階モードや log → config 順でも
+同じ素材で挙動を確かめられる。
 
 ---
 
@@ -99,30 +100,34 @@ uvicorn log_analyzer.api:app --port 8000 --reload
 
 ### UI 上の操作
 
-1. ブラウザで http://localhost:5173 → **「Config-First 解析」タブ**
+1. ブラウザで http://localhost:5173 → **「config-log 解析」タブ**
 2. 「画像を選択」で [diagram.svg](./diagram.svg) をアップロード
+   （または diagram.svg をキャンバスに**ドラッグ＆ドロップ**）
 3. 「ノード追加（ドラッグで矩形描画）」モードで、画像上の 4 ボックスに矩形を重ねて描画
 4. 各矩形を選択し、サイドパネルで:
    - **id** を `fw-01` / `lb-01` / `web-01` / `api-01` に
    - **type** を `FW` / `LB` / `Server` / `Server` に
    - **ip** を `10.1.1.1` / `10.1.1.10` / `10.1.2.20` / `10.1.2.21` に
-   - **設定ファイル (Config) — Stage 1 で使用** の `＋ 追加` をクリックし、対応する
-     `<id>.conf` の中身をコピペ
-   - **ログファイル** は `＋ samples/logs/ から追加...` ドロップダウンから
-     `scenario2_<id>.log` を選択
-5. 実行バーで「解析を開始」
-6. **Stage 1 完了 → 必須承認モーダル** が表示されるので内容を確認
-   - 仮説が「fw-01 = primary / api-01 = secondary」になっていれば期待どおり
-   - 「ログ検証に進む」を押して Stage 2 へ
+   - **設定ファイル (Config)** に対応する `<id>.conf` を**ドラッグ＆ドロップ**（または
+     `＋ 追加` で貼り付け）
+   - **ログファイル** は `scenario2_<id>.log` を**ドラッグ＆ドロップ**（または
+     `＋ samples/logs/ から追加...` ドロップダウンから選択）
+   - ※ モードで「config のみ」「log のみ」を選ぶと、不要な入力欄は自動的に隠れる
+   - ※ 構成は config4 固定のためセレクタはありません
+5. 解析段階で **2 段階（config → log）** を選び、実行バーで「解析を開始」
+6. Stage 1 (configs) が終わると **人間承認なしで自動的に Stage 2 (logs) へ進む**
+   - 期待される Stage 1 仮説は「fw-01 = primary / api-01 = secondary」
 7. Stage 2 完了で結果ペインを確認
    - 「統合」「Stage 1」「Stage 2」タブで Stage 別の結果を比較できる
+     （Stage 1 のコンフィグ解析結果も最終結果に保持される）
    - 構成図の `fw-01` 矩形が赤系で点滅、`api-01` が橙でハイライトされる想定
 
 ### 比較したい場合
 
-「ここで終了」 (abort) を選んで Stage 1 のみで打ち切ると、 confidence が低めで
-suspected_nodes も保守的な結果になる。これと Stage 2 まで進めた結果を比較することで
-**「ログによる裏付け」が確信度をどれだけ上げるか**を体感できる。
+- 1 段階モードで「config のみ」「log のみ」「config + log 同時」を順に実行し、
+  精度・トークン・レイテンシを突き合わせると、各データ種別の寄与を定量比較できる。
+- 2 段階の Stage 1（configs のみ）の確信度と、Stage 2（logs で検証後）の確信度を比べると
+  **「ログによる裏付け」が確信度をどれだけ上げるか**を体感できる。
 
 ---
 
@@ -139,22 +144,13 @@ suspected_nodes も保守的な結果になる。これと Stage 2 まで進め�
 | [web-01.log](./web-01.log) | 正常運用 (web 経路は影響なし) |
 | [api-01.conf](./api-01.conf) | gunicorn systemd unit + api.yaml |
 | [api-01.log](./api-01.log) | プロセス健全だが `requests_last_60s=0` (沈黙) |
-| [terraform/](./terraform/) | **Terraform 一括取込用**: 同じ障害を AWS Security Group コメントアウトで表現 |
 
 ログファイルは UI のドロップダウンから直接ロードできるよう、`samples/logs/scenario2_*.log`
 にも同内容コピーが置かれている。
-
-## Terraform 取込での代替フロー
-
-「設定ファイルをノード毎に貼り付け」の代わりに、UI ツールバーの
-「**Terraform 一括取込**」ボタンから [terraform/bundled.tf](./terraform/bundled.tf)
-を選択すると、`fw-01` / `lb-01` / `web-01` / `api-01` の 4 ノードに対応する
-HCL リソースが自動マッチして一括投入されます。詳細は
-[terraform/README.md](./terraform/README.md)。
 
 ---
 
 ## 関連
 
-- [docs/plan/config_first_stages.md](../../../docs/plan/config_first_stages.md) — Config-First Phase A 設計書
-- [samples/topology/scenario1_lb_fw_denial/](../scenario1_lb_fw_denial/) — シナリオ 1 (通常 1 段階モード用)
+- [docs/plan/config_log_stages.md](../../../docs/plan/config_log_stages.md) — config-log 解析 設計書
+- [samples/topology/scenario1_lb_fw_denial/](../scenario1_lb_fw_denial/) — シナリオ 1 (トポロジー解析タブ用)

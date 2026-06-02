@@ -1,14 +1,20 @@
 /**
- * Config-First 2 段階解析タブ (Phase A)。
+ * config-log 解析タブ。
  *
- * 議事録 (2026-05-26) の決定に基づく:
- *   Stage 1: コンフィグ情報のみで原因の当たりをつける
- *      ↓ 必須モーダル承認 (advance / abort)
- *   Stage 2: ログで事実確認する
+ * 構成図 + ノード別の Config / Log を入力に、rally (config4) で根本原因を解析する。
+ * 解析モードを 2 軸で選べる:
+ *
+ *   1) 1 段階 (single): rally を 1 回だけ実行
+ *        - config のみ  … ログ入力フォームを隠す
+ *        - log のみ     … 設定入力フォームを隠す
+ *        - config + log … 両方を同時に投入 (既定)
+ *   2) 2 段階 (two_stage): Stage 1 で当たりをつけ、人間承認なしで自動的に Stage 2 で検証
+ *        - config → log … コンフィグで仮説 → ログで検証
+ *        - log → config … ログで仮説 → コンフィグで裏取り
  *
  * 既存のトポロジー解析タブ ([TopologyAnalysis.tsx](./TopologyAnalysis.tsx)) と
- * 同じ画像 + 矩形描画 + ノード別添付の UX を踏襲する。差分は **2 段階フロー** と
- * Stage 別の状態管理。設計詳細は [docs/plan/config_first_stages.md](../../docs/plan/config_first_stages.md)。
+ * 同じ画像 + 矩形描画 + ノード別添付の UX を踏襲する。設計詳細は
+ * [docs/plan/config_log_stages.md](../../docs/plan/config_log_stages.md)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
@@ -21,7 +27,6 @@ import { LiveChatView } from './LiveChatView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
-import { TerraformImporter } from './TerraformImporter'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -39,8 +44,13 @@ import type {
 
 const API_BASE = 'http://localhost:8000'
 // トポロジー解析タブとは別キーで保存 (誤共有を防ぐ)
-const STORAGE_KEY = 'log-analyzer.config-first-topology-v1'
+const STORAGE_KEY = 'log-analyzer.config-log-topology-v1'
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+// 解析モード
+type AnalysisMode = 'single' | 'two_stage'
+type SingleSource = 'config' | 'log' | 'both'
+type StageOrder = 'config_log' | 'log_config'
 
 interface Props {
   configList: ConfigEntry[]
@@ -97,9 +107,16 @@ function toNormalized(px: number, py: number, rect: DOMRect): { x: number; y: nu
 }
 
 // 進行中の Stage ステータス
-type StageStatus = 'idle' | 'stage1_running' | 'awaiting_decision' | 'stage2_running' | 'completed' | 'aborted' | 'error'
+type StageStatus =
+  | 'idle'
+  | 'single_running'
+  | 'stage1_running'
+  | 'stage2_running'
+  | 'completed'
+  | 'aborted'
+  | 'error'
 
-export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSummary, langfuseHost }: Props) {
+export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSummary, langfuseHost }: Props) {
   // ─── トポロジー (永続化) ──────────────────────────────────────
   const [topology, setTopology] = useState<TopologyDef>(() => loadTopology())
   useEffect(() => { saveTopology(topology) }, [topology])
@@ -112,6 +129,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [editMode, setEditMode] = useState<'select' | 'add'>('select')
   const [drawing, setDrawing] = useState<{ startX: number; startY: number; curX: number; curY: number } | null>(null)
+  // 構成図画像のファイル D&D 用
+  const [canvasDragOver, setCanvasDragOver] = useState(false)
 
   // ─── 実行構成 ────────────────────────────────────────────────
   const rallyConfigs = useMemo(() => configList.filter(isRallyConfig), [configList])
@@ -120,19 +139,18 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
     if (!selectedConfig && rallyConfigs.length > 0) setSelectedConfig(rallyConfigs[0].id)
   }, [rallyConfigs, selectedConfig])
   const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
-  // 議事録「Configs 利用 ON/OFF」: true なら Stage 1 と人間承認をスキップして
-  // Logs のみで 1 段階 rally する。同タブ内で「Configs あり vs なし」の比較評価を可能にする。
-  const [skipConfigStage, setSkipConfigStage] = useState<boolean>(false)
+  // 解析モード (既定: 1 段階 config + log 同時)
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('single')
+  const [singleSource, setSingleSource] = useState<SingleSource>('both')
+  const [stageOrder, setStageOrder] = useState<StageOrder>('config_log')
   // 問診票回答 (Phase B、揮発)
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
-  // 監査エージェント (Phase C): Stage 2 の integrator 後 (または abort 時は Stage 1) に GPT で独立検証
+  // 監査エージェント (Phase C): integrator 後に GPT で独立検証
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
   // 表示モード (Phase E): デフォルトをチャットに (議事録の UI 要求)
   const [viewMode, setViewMode] = useState<'standard' | 'chat'>('chat')
-  // Terraform 一括取込モーダルの開閉
-  const [tfImporterOpen, setTfImporterOpen] = useState(false)
 
-  // ─── 2 段階実行状態 ──────────────────────────────────────────
+  // ─── 実行状態 ────────────────────────────────────────────────
   const [stageStatus, setStageStatus] = useState<StageStatus>('idle')
   const [streamEvents, setStreamEvents] = useState<SSEEvent[]>([])
   const [runId, setRunId] = useState<string | null>(null)
@@ -154,18 +172,31 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
 
+  // ─── モードから導出するフラグ ────────────────────────────────
+  const isTwoStage = analysisMode === 'two_stage'
+  // 入力フォームの表示制御:
+  //   1 段階 config のみ → ログ入力フォーム非表示
+  //   1 段階 log のみ    → 設定入力フォーム非表示
+  //   それ以外 (both / 2 段階) → 両方表示
+  const showConfigForm = !(analysisMode === 'single' && singleSource === 'log')
+  const showLogForm = !(analysisMode === 'single' && singleSource === 'config')
+  const isRunning =
+    stageStatus === 'single_running' || stageStatus === 'stage1_running' ||
+    stageStatus === 'stage2_running'
+  // 2 段階の Stage 1/2 のデータ種別 (live ラベルや結果表示に使う)
+  const stageKinds = useMemo<[string, string]>(
+    () => (stageOrder === 'config_log' ? ['config', 'log'] : ['log', 'config']),
+    [stageOrder],
+  )
+
   // 「現在ハイライト対象」: 実行中の stage に応じて切り替える
-  // stage1_running 中 → Stage 1 完了時に stageOneOutput が埋まる前なので空
-  // awaiting_decision → Stage 1 結果
-  // stage2_running    → Stage 1 結果 (Stage 2 進行中の暫定表示)
-  // completed/aborted → 結果タブの選択に従う
   const currentHighlightFindings = useMemo<SuspectedNodeFinding[]>(() => {
     if (stageStatus === 'completed' || stageStatus === 'aborted') {
       if (resultTab === 'stage1') return stageOneOutput?.suspected_node_findings ?? []
       if (resultTab === 'stage2') return stageTwoOutput?.suspected_node_findings ?? []
       return finalResult?.suspected_node_findings ?? []
     }
-    if (stageStatus === 'awaiting_decision' || stageStatus === 'stage2_running') {
+    if (stageStatus === 'stage2_running') {
       return stageOneOutput?.suspected_node_findings ?? []
     }
     return []
@@ -210,6 +241,30 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   }, [])
   const onImageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]; if (f) handleImageFile(f); e.target.value = ''
+  }
+  // ─── ファイル D&D ────────────────────────────────────────────
+  const onCanvasDragOver = (e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); setCanvasDragOver(true) }
+  }
+  const onCanvasDragLeave = (e: React.DragEvent) => {
+    // 子要素へ移動しただけの dragleave は無視
+    if (e.currentTarget === e.target) setCanvasDragOver(false)
+  }
+  const onCanvasDrop = (e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return
+    e.preventDefault(); setCanvasDragOver(false)
+    const img = Array.from(e.dataTransfer.files).find(f => f.type.startsWith('image/'))
+    if (img) handleImageFile(img)
+    else setError('構成図には画像ファイル (PNG / JPEG / SVG) をドロップしてください')
+  }
+  // ログ / config をファイルごと (複数可) ノードに追加
+  const addFilesToNode = (setter: Dispatch<SetStateAction<NodeAttachments>>, nodeId: string, files: FileList) => {
+    for (const file of Array.from(files)) {
+      const reader = new FileReader()
+      reader.onload = () => addAttachment(setter, nodeId, { name: file.name, content: String(reader.result ?? '') })
+      reader.onerror = () => setError(`ファイル読み込みに失敗: ${file.name}`)
+      reader.readAsText(file)
+    }
   }
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if (editMode !== 'add' || !topology.image) return
@@ -318,17 +373,26 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
     }
     return out
   }, [])
+  const hasConfig = useMemo(
+    () => Object.values(nodeConfigs).some(list => list.some(a => a.content.trim().length > 0)),
+    [nodeConfigs],
+  )
+  const hasLog = useMemo(
+    () => Object.values(nodeLogs).some(list => list.some(a => a.content.trim().length > 0)),
+    [nodeLogs],
+  )
   const canRun = useMemo(() => {
-    if (stageStatus !== 'idle' && stageStatus !== 'completed' && stageStatus !== 'aborted' && stageStatus !== 'error') return false
+    if (isRunning) return false
     if (!selectedConfig) return false
     if (topology.nodes.length === 0) return false
-    // 通常モード: Stage 1 用に Config が 1 件以上必要
-    // skip モード:   Stage 2 単段相当のため Log が 1 件以上必要
-    if (skipConfigStage) {
-      return Object.values(nodeLogs).some(list => list.some(a => a.content.trim().length > 0))
+    if (analysisMode === 'single') {
+      if (singleSource === 'config') return hasConfig
+      if (singleSource === 'log') return hasLog
+      return hasConfig || hasLog
     }
-    return Object.values(nodeConfigs).some(list => list.some(a => a.content.trim().length > 0))
-  }, [stageStatus, selectedConfig, topology.nodes, nodeConfigs, nodeLogs, skipConfigStage])
+    // 2 段階: Stage 1 の始動データ種別が揃っていること
+    return stageKinds[0] === 'config' ? hasConfig : hasLog
+  }, [isRunning, selectedConfig, topology.nodes, analysisMode, singleSource, stageKinds, hasConfig, hasLog])
 
   // ─── 実行 ────────────────────────────────────────────────────
   const run = async () => {
@@ -336,7 +400,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
     setError(null)
     setStreamEvents([])
     setStageOneOutput(null); setStageTwoOutput(null); setFinalResult(null)
-    setStageStatus('stage1_running'); setResultTab('combined')
+    setStageStatus(isTwoStage ? 'stage1_running' : 'single_running')
+    setResultTab('combined')
     const ctrl = new AbortController(); abortRef.current = ctrl
     try {
       const body = {
@@ -346,13 +411,16 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           nodes: topology.nodes.map(n => ({ id: n.id, type: n.type, label: n.label, ip: n.ip })),
           links: topology.links,
         },
-        node_logs: filteredAttachments(nodeLogs),
-        node_configs: filteredAttachments(nodeConfigs),
-        skip_config_stage: skipConfigStage,
+        // フォーム非表示の種別は送らない (意図に忠実 + 無駄なトークン削減)
+        node_logs: showLogForm ? filteredAttachments(nodeLogs) : {},
+        node_configs: showConfigForm ? filteredAttachments(nodeConfigs) : {},
+        analysis_mode: analysisMode,
+        single_source: singleSource,
+        stage_order: stageOrder,
         questionnaire_answers: questionnaireAnswers,
         audit_after_integrator: auditAfterIntegrator,
       }
-      const r = await fetch(`${API_BASE}/api/runs/config-first-stream`, {
+      const r = await fetch(`${API_BASE}/api/runs/config-log-stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -366,13 +434,13 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         setStreamEvents(prev => [...prev, ev])
         if (ev.kind === 'run_id_assigned') {
           setRunId(String(ev.data.run_id ?? ''))
-        } else if (ev.kind === 'stage_one_skipped') {
-          // skip モード: Stage 1 と人間承認を飛ばして直接 Stage 2 (単段) へ
-          setStageStatus('stage2_running')
+        } else if (ev.kind === 'single_stage_start') {
+          setStageStatus('single_running')
         } else if (ev.kind === 'stage_one_complete') {
+          // 人間承認は廃止。Stage 1 結果を取り込み、バックエンドの自動進行に任せる
+          // (最終結果には stage_outputs[0] として Stage 1 が残る)。
           const so = ev.data.stage_output as StageOutput | undefined
           if (so) setStageOneOutput(so)
-          setStageStatus('awaiting_decision')
         } else if (ev.kind === 'stage_two_start') {
           setStageStatus('stage2_running')
         } else if (ev.kind === 'await_confirmation') {
@@ -383,8 +451,6 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
             delegation_history: (ev.data.delegation_history as DelegationEvent[]) ?? [],
           })
         } else if (ev.kind === 'user_decision') {
-          // 自身からの応答 (continue/stop) を受領 → モーダルを閉じる
-          // advance/abort は Stage 遷移の方なのでここでは触らない
           const action = String(ev.data.action ?? '')
           if (action === 'continue' || action === 'stop') {
             setPendingConfirmation(null)
@@ -393,12 +459,13 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           const res = ev.data.result as AnalysisResult | undefined
           if (res) {
             setFinalResult(res)
-            // stage_outputs から各 stage を抽出
-            const s1 = res.stage_outputs.find(s => s.stage === 'config') ?? null
-            const s2 = res.stage_outputs.find(s => s.stage === 'log') ?? null
+            // stage_outputs は配列順に Stage 1 / Stage 2 (順序非依存で位置参照)
+            const s1 = res.stage_outputs[0] ?? null
+            const s2 = res.stage_outputs.length > 1 ? res.stage_outputs[1] : null
             if (s1) setStageOneOutput(s1)
             if (s2) setStageTwoOutput(s2)
-            setStageStatus(s2 ? 'completed' : 'aborted')
+            // 2 段階で Stage 2 が無い = abort、それ以外は完了
+            setStageStatus(isTwoStage && !s2 ? 'aborted' : 'completed')
           }
         } else if (ev.kind === 'error') {
           setError(String(ev.data.message ?? 'unknown stream error'))
@@ -417,9 +484,9 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const cancel = () => { abortRef.current?.abort() }
 
   // ─── decision API 呼び出し ────────────────────────────────────
-  // advance/abort: Stage 1 → Stage 2 遷移用 (Config-First タブ固有)
   // continue/stop: rally_max_rounds 到達時の継続/停止用 (Stage 内部から発火)
-  const submitDecision = async (action: 'advance' | 'abort' | 'continue' | 'stop', extendBy?: number) => {
+  // ※ Stage 1→2 の人間承認 (advance/abort) は廃止し、バックエンドが自動進行する。
+  const submitDecision = async (action: 'continue' | 'stop', extendBy?: number) => {
     if (!runId) return
     setDecisionBusy(true)
     try {
@@ -444,16 +511,16 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
   const selectedNode = topology.nodes.find(n => n.id === selectedNodeId) ?? null
 
   return (
-    <section className="topology-mode config-first-mode">
+    <section className="topology-mode config-log-mode">
       <div className="topology-header">
-        <h2>Config-First 解析（2 段階モード）</h2>
+        <h2>config-log 解析</h2>
         <p className="muted">
-          まず構成図とコンフィグだけで原因の当たりをつけ、人間承認の後にログで事実確認する 2 段階解析。
-          設計詳細は [docs/plan/config_first_stages.md] 参照。
+          構成図と Config / Log を入力に rally で根本原因を解析します。1 段階（config のみ / log のみ /
+          config + log 同時）と 2 段階（config → log / log → config）を選べます。
         </p>
       </div>
 
-      <StageIndicator status={stageStatus} skipConfigStage={skipConfigStage} />
+      <StageIndicator status={stageStatus} analysisMode={analysisMode} stageKinds={stageKinds} singleSource={singleSource} />
 
       <div className="topology-toolbar">
         <label className="btn-file">
@@ -464,23 +531,16 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           <button className={editMode === 'select' ? 'tab active' : 'tab'} onClick={() => setEditMode('select')} disabled={!topology.image}>選択・編集</button>
           <button className={editMode === 'add' ? 'tab active' : 'tab'} onClick={() => setEditMode('add')} disabled={!topology.image}>ノード追加（ドラッグで矩形描画）</button>
         </div>
-        <button
-          className="btn-secondary"
-          onClick={() => setTfImporterOpen(true)}
-          disabled={topology.nodes.length === 0}
-          title={topology.nodes.length === 0 ? 'ノードを先に作成してください' : ''}
-        >
-          Terraform 一括取込
-        </button>
         <button className="btn-secondary" onClick={clearAll} disabled={!topology.image && topology.nodes.length === 0}>すべてクリア</button>
       </div>
 
       <div className="topology-canvas-row">
         <div
           ref={containerRef}
-          className={`topology-canvas mode-${editMode}`}
+          className={`topology-canvas mode-${editMode}${canvasDragOver ? ' drag-over' : ''}`}
           onMouseDown={onCanvasMouseDown} onMouseMove={onCanvasMouseMove}
           onMouseUp={onCanvasMouseUp} onMouseLeave={() => setDrawing(null)}
+          onDragOver={onCanvasDragOver} onDragLeave={onCanvasDragLeave} onDrop={onCanvasDrop}
         >
           {topology.image ? (
             <>
@@ -513,7 +573,10 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
               </svg>
             </>
           ) : (
-            <div className="topology-empty">画像を選択してください（PNG / JPEG / SVG, 最大 5MB）</div>
+            <div className="topology-empty">
+              画像を選択、またはここに構成図ファイルをドラッグ＆ドロップ<br />
+              （PNG / JPEG / SVG, 最大 5MB）
+            </div>
           )}
         </div>
         <aside className="topology-sidebar">
@@ -523,6 +586,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
               logs={nodeLogs[selectedNode.id] ?? []}
               configs={nodeConfigs[selectedNode.id] ?? []}
               sampleLogs={logs}
+              showConfigForm={showConfigForm}
+              showLogForm={showLogForm}
               onUpdate={(patch) => updateNode(selectedNode.id, patch)}
               onRename={(newId) => renameNode(selectedNode.id, newId)}
               onAddLog={() => addAttachment(setNodeLogs, selectedNode.id, { name: '', content: '' })}
@@ -531,6 +596,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
               onAddConfig={() => addAttachment(setNodeConfigs, selectedNode.id, { name: '', content: '' })}
               onUpdateConfig={(i, patch) => updateAttachment(setNodeConfigs, selectedNode.id, i, patch)}
               onRemoveConfig={(i) => removeAttachment(setNodeConfigs, selectedNode.id, i)}
+              onDropLogFiles={(files) => addFilesToNode(setNodeLogs, selectedNode.id, files)}
+              onDropConfigFiles={(files) => addFilesToNode(setNodeConfigs, selectedNode.id, files)}
               onLoadSample={(name) => loadSampleIntoNode(selectedNode.id, name)}
               onDelete={() => deleteNode(selectedNode.id)}
               isSuspected={suspectedSet.has(selectedNode.id)}
@@ -539,7 +606,8 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           ) : (
             <div className="sidebar-hint">
               {editMode === 'add' ? '画像上でドラッグしてノード矩形を描画' : 'ノード矩形をクリックして編集'}
-              <CfNodeList nodes={topology.nodes} nodeLogs={nodeLogs} nodeConfigs={nodeConfigs} severityById={severityById} onSelect={setSelectedNodeId} />
+              <CfNodeList nodes={topology.nodes} nodeLogs={nodeLogs} nodeConfigs={nodeConfigs} severityById={severityById}
+                showConfigForm={showConfigForm} showLogForm={showLogForm} onSelect={setSelectedNodeId} />
             </div>
           )}
         </aside>
@@ -550,59 +618,38 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
         <QuestionnairePanel
           answers={questionnaireAnswers}
           onAnswersChange={setQuestionnaireAnswers}
-          disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'}
+          disabled={isRunning}
         />
       )}
 
-      <div className="topology-mode-bar">
-        <div className="mode-toggle">
-          <span className="mode-toggle-label">Configs 利用:</span>
-          <label className="radio-pill">
-            <input type="radio" name="cf-mode" checked={!skipConfigStage}
-              onChange={() => setSkipConfigStage(false)}
-              disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'} />
-            <span>ON — 2 段階 (Configs → 承認 → Logs)</span>
-          </label>
-          <label className="radio-pill">
-            <input type="radio" name="cf-mode" checked={skipConfigStage}
-              onChange={() => setSkipConfigStage(true)}
-              disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'} />
-            <span>OFF — Logs のみ 1 段階 (Configs スキップ)</span>
-          </label>
-        </div>
-        <p className="mode-toggle-hint muted">
-          {skipConfigStage
-            ? 'Stage 1 と人間承認をスキップし、Logs のみで rally を 1 回実行します。Configs 利用ありとの比較評価用。'
-            : '議事録の標準モード。Configs で当たりをつけ、人間承認の後にログで事実確認します。'}
-        </p>
-      </div>
+      <ModeSelector
+        analysisMode={analysisMode} singleSource={singleSource} stageOrder={stageOrder}
+        disabled={isRunning}
+        onAnalysisMode={setAnalysisMode}
+        onSingleSource={setSingleSource}
+        onStageOrder={setStageOrder}
+      />
 
       <div className="topology-run-bar">
         <label>
-          構成:
-          <select value={selectedConfig} onChange={e => setSelectedConfig(e.target.value)} disabled={stageStatus !== 'idle' && stageStatus !== 'completed' && stageStatus !== 'aborted' && stageStatus !== 'error'}>
-            {rallyConfigs.length === 0 ? <option value="">（config4 系の構成がありません）</option> : rallyConfigs.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-          </select>
-        </label>
-        <label>
-          rally_max_rounds (Stage 毎):
+          rally_max_rounds {isTwoStage ? '(Stage 毎)' : ''}:
           <input type="number" min={1} max={20} value={rallyMaxRounds}
             onChange={e => setRallyMaxRounds(Math.max(1, Math.min(20, Number(e.target.value) || 3)))}
-            disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running'} />
+            disabled={isRunning} />
         </label>
         <label className="audit-toggle">
           <input type="checkbox" checked={auditAfterIntegrator}
             onChange={e => setAuditAfterIntegrator(e.target.checked)}
-            disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running'} />
+            disabled={isRunning} />
           <span>GPT 監査も実行</span>
         </label>
         <button onClick={run} disabled={!canRun} className="run-button">
-          {stageStatus === 'stage1_running' ? 'Stage 1 実行中…'
-            : stageStatus === 'stage2_running' ? (skipConfigStage ? 'Logs 解析中…' : 'Stage 2 実行中…')
-            : stageStatus === 'awaiting_decision' ? '人間承認待ち'
-            : skipConfigStage ? 'Logs のみで解析' : '解析を開始'}
+          {stageStatus === 'single_running' ? '解析中…'
+            : stageStatus === 'stage1_running' ? 'Stage 1 実行中…'
+            : stageStatus === 'stage2_running' ? 'Stage 2 実行中…'
+            : '解析を開始'}
         </button>
-        {(stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision') && (
+        {isRunning && (
           <button onClick={cancel} className="btn-secondary">中止</button>
         )}
       </div>
@@ -623,7 +670,7 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           <QuestionnairePanel
             answers={questionnaireAnswers}
             onAnswersChange={setQuestionnaireAnswers}
-            disabled={stageStatus === 'stage1_running' || stageStatus === 'stage2_running' || stageStatus === 'awaiting_decision'}
+            disabled={isRunning}
           />
           {streamEvents.length > 0 ? (
             <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} />
@@ -632,7 +679,7 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           )}
           <ChatInput
             runId={runId}
-            disabled={stageStatus !== 'stage1_running' && stageStatus !== 'stage2_running'}
+            disabled={stageStatus !== 'single_running' && stageStatus !== 'stage1_running' && stageStatus !== 'stage2_running'}
           />
         </section>
       )}
@@ -646,10 +693,11 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
           </h3>
           <ol className="stream-events">
             {streamEvents.map((ev, i) => {
+              const ord = (ev.data as { stage_ordinal?: number }).stage_ordinal
               const stage = (ev.data as { stage?: string }).stage
               return (
                 <li key={i} className={`stream-event kind-${ev.kind} ${stage ? `stg-${stage}` : ''}`}>
-                  {stage && <span className={`stage-tag stage-${stage}`}>{stage === 'config' ? 'Stage 1' : 'Stage 2'}</span>}
+                  {ord && <span className={`stage-tag stage-${stage}`}>Stage {ord}</span>}
                   <span className="stream-kind">{ev.kind}</span>
                   <span className="stream-body">{renderEventSummary(ev)}</span>
                 </li>
@@ -657,33 +705,6 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
             })}
           </ol>
         </section>
-      )}
-
-      {/* Stage 1 → Stage 2 移行用 必須承認モーダル (Config-First タブ固有) */}
-      {stageStatus === 'awaiting_decision' && stageOneOutput && (
-        <StageOneApprovalModal
-          stageOneOutput={stageOneOutput}
-          busy={decisionBusy}
-          onAdvance={() => submitDecision('advance')}
-          onAbort={() => submitDecision('abort')}
-        />
-      )}
-
-      {/* Terraform 一括取込モーダル */}
-      {tfImporterOpen && (
-        <TerraformImporter
-          nodes={topology.nodes}
-          onApply={(additions) => {
-            setNodeConfigs(prev => {
-              const next: NodeAttachments = { ...prev }
-              for (const [nodeId, attaches] of Object.entries(additions)) {
-                next[nodeId] = [...(next[nodeId] ?? []), ...attaches]
-              }
-              return next
-            })
-          }}
-          onClose={() => setTfImporterOpen(false)}
-        />
       )}
 
       {/* rally_max_rounds 到達時の継続/停止モーダル (Stage 内部から発火) */}
@@ -709,12 +730,12 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
               <ResultTabs
                 current={resultTab}
                 onChange={setResultTab}
-                hasStage2={!!stageTwoOutput}
+                isTwoStage={isTwoStage}
                 stageOneOutput={stageOneOutput}
                 stageTwoOutput={stageTwoOutput}
               />
               {resultTab === 'combined' && (
-                <CombinedResultView result={finalResult} stageOneOutput={stageOneOutput} stageTwoOutput={stageTwoOutput} topology={topology} langfuseHost={langfuseHost} />
+                <CombinedResultView result={finalResult} isTwoStage={isTwoStage} stageOneOutput={stageOneOutput} stageTwoOutput={stageTwoOutput} topology={topology} langfuseHost={langfuseHost} />
               )}
               {resultTab === 'stage1' && stageOneOutput && (
                 <StageResultView stage={stageOneOutput} topology={topology} />
@@ -732,34 +753,130 @@ export function ConfigFirstAnalysis({ configList, logs, parseSSE, renderEventSum
 
 // ─── サブコンポーネント ──────────────────────────────────────
 
-function StageIndicator({ status, skipConfigStage }: { status: StageStatus; skipConfigStage: boolean }) {
-  const stage1Done = status === 'awaiting_decision' || status === 'stage2_running' || status === 'completed' || status === 'aborted'
+interface ModeSelectorProps {
+  analysisMode: AnalysisMode
+  singleSource: SingleSource
+  stageOrder: StageOrder
+  disabled: boolean
+  onAnalysisMode: (m: AnalysisMode) => void
+  onSingleSource: (s: SingleSource) => void
+  onStageOrder: (o: StageOrder) => void
+}
+
+function ModeSelector({ analysisMode, singleSource, stageOrder, disabled, onAnalysisMode, onSingleSource, onStageOrder }: ModeSelectorProps) {
+  return (
+    <div className="topology-mode-bar">
+      <div className="mode-toggle">
+        <span className="mode-toggle-label">解析段階:</span>
+        <label className="radio-pill">
+          <input type="radio" name="cl-stage" checked={analysisMode === 'single'}
+            onChange={() => onAnalysisMode('single')} disabled={disabled} />
+          <span>1 段階</span>
+        </label>
+        <label className="radio-pill">
+          <input type="radio" name="cl-stage" checked={analysisMode === 'two_stage'}
+            onChange={() => onAnalysisMode('two_stage')} disabled={disabled} />
+          <span>2 段階（自動進行）</span>
+        </label>
+      </div>
+
+      {analysisMode === 'single' ? (
+        <div className="mode-toggle">
+          <span className="mode-toggle-label">使用データ:</span>
+          <label className="radio-pill">
+            <input type="radio" name="cl-source" checked={singleSource === 'config'}
+              onChange={() => onSingleSource('config')} disabled={disabled} />
+            <span>config のみ</span>
+          </label>
+          <label className="radio-pill">
+            <input type="radio" name="cl-source" checked={singleSource === 'log'}
+              onChange={() => onSingleSource('log')} disabled={disabled} />
+            <span>log のみ</span>
+          </label>
+          <label className="radio-pill">
+            <input type="radio" name="cl-source" checked={singleSource === 'both'}
+              onChange={() => onSingleSource('both')} disabled={disabled} />
+            <span>config + log 同時</span>
+          </label>
+        </div>
+      ) : (
+        <div className="mode-toggle">
+          <span className="mode-toggle-label">順序:</span>
+          <label className="radio-pill">
+            <input type="radio" name="cl-order" checked={stageOrder === 'config_log'}
+              onChange={() => onStageOrder('config_log')} disabled={disabled} />
+            <span>config → log</span>
+          </label>
+          <label className="radio-pill">
+            <input type="radio" name="cl-order" checked={stageOrder === 'log_config'}
+              onChange={() => onStageOrder('log_config')} disabled={disabled} />
+            <span>log → config</span>
+          </label>
+        </div>
+      )}
+
+      <p className="mode-toggle-hint muted">
+        {analysisMode === 'single'
+          ? (singleSource === 'config'
+              ? 'config のみで rally を 1 回実行します（ログ入力欄は非表示）。'
+              : singleSource === 'log'
+              ? 'log のみで rally を 1 回実行します（設定入力欄は非表示）。'
+              : 'config と log を同時に投入し rally を 1 回実行します。')
+          : (stageOrder === 'config_log'
+              ? 'コンフィグで当たりをつけ、そのまま自動でログ検証へ進む 2 段階です（人間承認なし）。'
+              : 'ログで当たりをつけ、そのまま自動でコンフィグ裏取りへ進む 2 段階です（人間承認なし）。')}
+      </p>
+    </div>
+  )
+}
+
+interface StageIndicatorProps {
+  status: StageStatus
+  analysisMode: AnalysisMode
+  stageKinds: [string, string]
+  singleSource: SingleSource
+}
+
+function kindLabel(kind: string): string {
+  if (kind === 'config') return 'コンフィグ'
+  if (kind === 'log') return 'ログ'
+  if (kind === 'both') return 'コンフィグ + ログ'
+  return kind
+}
+
+function StageIndicator({ status, analysisMode, stageKinds, singleSource }: StageIndicatorProps) {
+  if (analysisMode === 'single') {
+    const running = status === 'single_running'
+    const done = status === 'completed'
+    return (
+      <div className="stage-indicator">
+        <div className={['stage-step', running ? 'active' : '', done ? 'done' : ''].filter(Boolean).join(' ')}>
+          <span className="stage-num">1</span>
+          <span className="stage-name">{kindLabel(singleSource)}解析</span>
+        </div>
+        <div className="stage-arrow">→</div>
+        <div className={['stage-step', done ? 'done' : ''].filter(Boolean).join(' ')}>
+          <span className="stage-num">★</span>
+          <span className="stage-name">完了</span>
+        </div>
+      </div>
+    )
+  }
+  // 2 段階 (人間承認は廃止 = 自動進行)
+  const stage1Done = status === 'stage2_running' || status === 'completed' || status === 'aborted'
   const stage2Done = status === 'completed'
   const stage1Active = status === 'stage1_running'
   const stage2Active = status === 'stage2_running'
-  const awaiting = status === 'awaiting_decision'
-  // skip モード: Stage 1 と人間承認ステップは「skipped」表示にする
-  const stage1Class = skipConfigStage
-    ? 'skipped'
-    : [stage1Active ? 'active' : '', stage1Done ? 'done' : ''].filter(Boolean).join(' ')
-  const approvalClass = skipConfigStage
-    ? 'skipped'
-    : [awaiting ? 'active' : '', stage1Done && status !== 'awaiting_decision' ? 'done' : ''].filter(Boolean).join(' ')
   return (
     <div className="stage-indicator">
-      <div className={['stage-step', stage1Class].filter(Boolean).join(' ')}>
+      <div className={['stage-step', stage1Active ? 'active' : '', stage1Done ? 'done' : ''].filter(Boolean).join(' ')}>
         <span className="stage-num">1</span>
-        <span className="stage-name">Configs 解析{skipConfigStage && ' (skip)'}</span>
+        <span className="stage-name">{kindLabel(stageKinds[0])}解析</span>
       </div>
       <div className="stage-arrow">→</div>
-      <div className={['stage-step', approvalClass].filter(Boolean).join(' ')}>
-        <span className="stage-num">✓</span>
-        <span className="stage-name">人間承認{skipConfigStage && ' (skip)'}</span>
-      </div>
-      <div className="stage-arrow">→</div>
-      <div className={['stage-step', stage2Active ? 'active' : '', stage2Done ? 'done' : '', !skipConfigStage && status === 'aborted' ? 'skipped' : ''].filter(Boolean).join(' ')}>
-        <span className="stage-num">{skipConfigStage ? '1' : '2'}</span>
-        <span className="stage-name">Logs 解析</span>
+      <div className={['stage-step', stage2Active ? 'active' : '', stage2Done ? 'done' : '', status === 'aborted' ? 'skipped' : ''].filter(Boolean).join(' ')}>
+        <span className="stage-num">2</span>
+        <span className="stage-name">{kindLabel(stageKinds[1])}検証</span>
       </div>
       <div className="stage-arrow">→</div>
       <div className={['stage-step', status === 'completed' || status === 'aborted' ? 'done' : ''].filter(Boolean).join(' ')}>
@@ -770,63 +887,25 @@ function StageIndicator({ status, skipConfigStage }: { status: StageStatus; skip
   )
 }
 
-interface StageOneApprovalModalProps {
-  stageOneOutput: StageOutput
-  busy: boolean
-  onAdvance: () => void
-  onAbort: () => void
-}
-
-function StageOneApprovalModal({ stageOneOutput, busy, onAdvance, onAbort }: StageOneApprovalModalProps) {
-  return (
-    <div className="modal-overlay">
-      <div className="modal stage-approval-modal">
-        <h3>Stage 1 完了 — コンフィグからの仮説</h3>
-        <p className="modal-summary">{stageOneOutput.summary || '(integrator から要約が返りませんでした)'}</p>
-        <div className="modal-meta">
-          確信度: <strong>{stageOneOutput.confidence.toFixed(2)}</strong> /
-          {' '}障害候補ノード: <strong>{stageOneOutput.suspected_node_findings.length}</strong> /
-          {' '}トークン: <strong>{stageOneOutput.tokens_in.toLocaleString()} / {stageOneOutput.tokens_out.toLocaleString()}</strong>
-        </div>
-        {stageOneOutput.suspected_node_findings.length > 0 && (
-          <ul className="suspected-detail-list" style={{ marginTop: '0.6rem' }}>
-            {stageOneOutput.suspected_node_findings.map(f => (
-              <li key={f.node_id} className={`suspected-detail sev-${f.severity || 'unknown'}`}>
-                <div className="suspected-detail-header">
-                  <span className="suspected-id">{f.node_id}</span>
-                  {f.severity && <span className={`severity-badge sev-${f.severity}`}>{f.severity === 'primary' ? '直接原因' : f.severity === 'secondary' ? '影響を受けた側' : '参考'}</span>}
-                </div>
-                <div className="suspected-detail-summary">{f.summary || '(詳細未記載)'}</div>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="modal-actions" style={{ marginTop: '1rem' }}>
-          <button onClick={onAdvance} disabled={busy}>ログ検証に進む</button>
-          <button onClick={onAbort} disabled={busy} className="btn-secondary">ここで終了</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 interface ResultTabsProps {
   current: 'combined' | 'stage1' | 'stage2'
   onChange: (t: 'combined' | 'stage1' | 'stage2') => void
-  hasStage2: boolean
+  isTwoStage: boolean
   stageOneOutput: StageOutput | null
   stageTwoOutput: StageOutput | null
 }
 
-function ResultTabs({ current, onChange, hasStage2, stageOneOutput, stageTwoOutput }: ResultTabsProps) {
+function ResultTabs({ current, onChange, isTwoStage, stageOneOutput, stageTwoOutput }: ResultTabsProps) {
+  // 1 段階モードでは Stage タブを出さない (統合のみ)
+  if (!isTwoStage) return null
   return (
     <div className="result-tabs">
       <button className={current === 'combined' ? 'tab active' : 'tab'} onClick={() => onChange('combined')}>統合</button>
       <button className={current === 'stage1' ? 'tab active' : 'tab'} onClick={() => onChange('stage1')} disabled={!stageOneOutput}>
-        Stage 1 (Configs)
+        {stageOneOutput?.stage_label || 'Stage 1'}
       </button>
       <button className={current === 'stage2' ? 'tab active' : 'tab'} onClick={() => onChange('stage2')} disabled={!stageTwoOutput}>
-        Stage 2 (Logs) {hasStage2 ? '' : '— 未実行 (abort)'}
+        {stageTwoOutput?.stage_label || 'Stage 2'} {stageTwoOutput ? '' : '— 未実行'}
       </button>
     </div>
   )
@@ -834,13 +913,14 @@ function ResultTabs({ current, onChange, hasStage2, stageOneOutput, stageTwoOutp
 
 interface CombinedResultViewProps {
   result: AnalysisResult
+  isTwoStage: boolean
   stageOneOutput: StageOutput | null
   stageTwoOutput: StageOutput | null
   topology: TopologyDef
   langfuseHost: string | null
 }
 
-function CombinedResultView({ result, stageOneOutput, stageTwoOutput, topology, langfuseHost }: CombinedResultViewProps) {
+function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTwoOutput, topology, langfuseHost }: CombinedResultViewProps) {
   const traceUrl = langfuseHost ? `${langfuseHost}/trace/${result.trace_id}` : null
   return (
     <>
@@ -865,31 +945,36 @@ function CombinedResultView({ result, stageOneOutput, stageTwoOutput, topology, 
         </div>
       </div>
 
-      <h4>Stage 別サマリ</h4>
-      <div className="stage-summary-grid">
-        {stageOneOutput && (
-          <div className="stage-summary-card stage-config">
-            <div className="stage-summary-head">Stage 1: Configs 解析</div>
-            <div>確信度: <strong>{stageOneOutput.confidence.toFixed(2)}</strong></div>
-            <div>候補ノード: {stageOneOutput.suspected_node_ids.join(', ') || '(なし)'}</div>
-            <div className="stage-summary-text">{stageOneOutput.summary || '(要約なし)'}</div>
-            <div className="muted small">tokens {stageOneOutput.tokens_in.toLocaleString()} / {stageOneOutput.tokens_out.toLocaleString()} · {(stageOneOutput.latency_ms_total / 1000).toFixed(1)}s · {stageOneOutput.delegation_rounds} rounds</div>
+      {/* 2 段階モードのときだけ Stage 別サマリを出す */}
+      {isTwoStage && (
+        <>
+          <h4>Stage 別サマリ</h4>
+          <div className="stage-summary-grid">
+            {stageOneOutput && (
+              <div className="stage-summary-card stage-config">
+                <div className="stage-summary-head">{stageOneOutput.stage_label || 'Stage 1'}</div>
+                <div>確信度: <strong>{stageOneOutput.confidence.toFixed(2)}</strong></div>
+                <div>候補ノード: {stageOneOutput.suspected_node_ids.join(', ') || '(なし)'}</div>
+                <div className="stage-summary-text">{stageOneOutput.summary || '(要約なし)'}</div>
+                <div className="muted small">tokens {stageOneOutput.tokens_in.toLocaleString()} / {stageOneOutput.tokens_out.toLocaleString()} · {(stageOneOutput.latency_ms_total / 1000).toFixed(1)}s · {stageOneOutput.delegation_rounds} rounds</div>
+              </div>
+            )}
+            {stageTwoOutput ? (
+              <div className="stage-summary-card stage-log">
+                <div className="stage-summary-head">{stageTwoOutput.stage_label || 'Stage 2'}</div>
+                <div>確信度: <strong>{stageTwoOutput.confidence.toFixed(2)}</strong></div>
+                <div>候補ノード: {stageTwoOutput.suspected_node_ids.join(', ') || '(なし)'}</div>
+                <div className="stage-summary-text">{stageTwoOutput.summary || '(要約なし)'}</div>
+                <div className="muted small">tokens {stageTwoOutput.tokens_in.toLocaleString()} / {stageTwoOutput.tokens_out.toLocaleString()} · {(stageTwoOutput.latency_ms_total / 1000).toFixed(1)}s · {stageTwoOutput.delegation_rounds} rounds</div>
+              </div>
+            ) : (
+              <div className="stage-summary-card stage-log muted">
+                Stage 2 の結果がありません。
+              </div>
+            )}
           </div>
-        )}
-        {stageTwoOutput ? (
-          <div className="stage-summary-card stage-log">
-            <div className="stage-summary-head">Stage 2: Logs 検証</div>
-            <div>確信度: <strong>{stageTwoOutput.confidence.toFixed(2)}</strong></div>
-            <div>候補ノード: {stageTwoOutput.suspected_node_ids.join(', ') || '(なし)'}</div>
-            <div className="stage-summary-text">{stageTwoOutput.summary || '(要約なし)'}</div>
-            <div className="muted small">tokens {stageTwoOutput.tokens_in.toLocaleString()} / {stageTwoOutput.tokens_out.toLocaleString()} · {(stageTwoOutput.latency_ms_total / 1000).toFixed(1)}s · {stageTwoOutput.delegation_rounds} rounds</div>
-          </div>
-        ) : (
-          <div className="stage-summary-card stage-log muted">
-            Stage 2 は実行されませんでした (abort 選択)。
-          </div>
-        )}
-      </div>
+        </>
+      )}
 
       <h4>最終 障害候補ノード（{result.suspected_node_findings.length}）</h4>
       <ul className="suspected-detail-list">
@@ -1006,6 +1091,8 @@ interface CfNodeEditorProps {
   logs: NodeAttachment[]
   configs: NodeAttachment[]
   sampleLogs: LogEntry[]
+  showConfigForm: boolean
+  showLogForm: boolean
   onUpdate: (patch: Partial<TopologyNode>) => void
   onRename: (newId: string) => void
   onAddLog: () => void
@@ -1014,14 +1101,16 @@ interface CfNodeEditorProps {
   onAddConfig: () => void
   onUpdateConfig: (i: number, patch: Partial<NodeAttachment>) => void
   onRemoveConfig: (i: number) => void
+  onDropLogFiles: (files: FileList) => void
+  onDropConfigFiles: (files: FileList) => void
   onLoadSample: (name: string) => void
   onDelete: () => void
   isSuspected: boolean
   allNodes: TopologyNode[]
 }
 function CfNodeEditor(props: CfNodeEditorProps) {
-  const { node, logs, configs, sampleLogs, onUpdate, onRename, onAddLog, onUpdateLog, onRemoveLog,
-          onAddConfig, onUpdateConfig, onRemoveConfig, onLoadSample, onDelete, isSuspected, allNodes } = props
+  const { node, logs, configs, sampleLogs, showConfigForm, showLogForm, onUpdate, onRename, onAddLog, onUpdateLog, onRemoveLog,
+          onAddConfig, onUpdateConfig, onRemoveConfig, onDropLogFiles, onDropConfigFiles, onLoadSample, onDelete, isSuspected, allNodes } = props
   const [idDraft, setIdDraft] = useState(node.id)
   useEffect(() => setIdDraft(node.id), [node.id])
   const idTaken = idDraft !== node.id && allNodes.some(n => n.id === idDraft)
@@ -1041,17 +1130,21 @@ function CfNodeEditor(props: CfNodeEditorProps) {
       <label className="field"><span>label</span><input type="text" value={node.label} onChange={e => onUpdate({ label: e.target.value })} /></label>
       <label className="field"><span>ip</span><input type="text" value={node.ip} onChange={e => onUpdate({ ip: e.target.value })} /></label>
 
-      <CfAttachmentSection title="ログファイル" kind="log" items={logs}
-        onAdd={onAddLog} onUpdate={onUpdateLog} onRemove={onRemoveLog}
-        extraTopRow={
-          <select defaultValue="" onChange={e => { if (e.target.value) { onLoadSample(e.target.value); e.target.value = '' } }}>
-            <option value="">＋ samples/logs/ から追加...</option>
-            {sampleLogs.map(l => <option key={l.name} value={l.name}>{l.name} ({l.lines} 行)</option>)}
-          </select>
-        } />
+      {showLogForm && (
+        <CfAttachmentSection title="ログファイル" kind="log" items={logs}
+          onAdd={onAddLog} onUpdate={onUpdateLog} onRemove={onRemoveLog} onDropFiles={onDropLogFiles}
+          extraTopRow={
+            <select defaultValue="" onChange={e => { if (e.target.value) { onLoadSample(e.target.value); e.target.value = '' } }}>
+              <option value="">＋ samples/logs/ から追加...</option>
+              {sampleLogs.map(l => <option key={l.name} value={l.name}>{l.name} ({l.lines} 行)</option>)}
+            </select>
+          } />
+      )}
 
-      <CfAttachmentSection title="設定ファイル (Config)" kind="config" items={configs}
-        onAdd={onAddConfig} onUpdate={onUpdateConfig} onRemove={onRemoveConfig} />
+      {showConfigForm && (
+        <CfAttachmentSection title="設定ファイル (Config)" kind="config" items={configs}
+          onAdd={onAddConfig} onUpdate={onUpdateConfig} onRemove={onRemoveConfig} onDropFiles={onDropConfigFiles} />
+      )}
     </div>
   )
 }
@@ -1063,16 +1156,30 @@ interface CfAttachmentSectionProps {
   onAdd: () => void
   onUpdate: (i: number, patch: Partial<NodeAttachment>) => void
   onRemove: (i: number) => void
+  onDropFiles?: (files: FileList) => void
   extraTopRow?: React.ReactNode
 }
-function CfAttachmentSection({ title, kind, items, onAdd, onUpdate, onRemove, extraTopRow }: CfAttachmentSectionProps) {
+function CfAttachmentSection({ title, kind, items, onAdd, onUpdate, onRemove, onDropFiles, extraTopRow }: CfAttachmentSectionProps) {
+  const [dragOver, setDragOver] = useState(false)
+  const dndProps = onDropFiles ? {
+    onDragOver: (e: React.DragEvent) => {
+      if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); setDragOver(true) }
+    },
+    onDragLeave: (e: React.DragEvent) => { if (e.currentTarget === e.target) setDragOver(false) },
+    onDrop: (e: React.DragEvent) => {
+      if (!Array.from(e.dataTransfer.types).includes('Files')) return
+      e.preventDefault(); setDragOver(false)
+      if (e.dataTransfer.files.length > 0) onDropFiles(e.dataTransfer.files)
+    },
+  } : {}
   return (
-    <div className={`attach-section attach-${kind}`}>
+    <div className={`attach-section attach-${kind}${dragOver ? ' drag-over' : ''}`} {...dndProps}>
       <div className="attach-header">
         <h4>{title} <span className="attach-count">({items.length})</span></h4>
         <button type="button" className="btn-add-attach" onClick={onAdd}>＋ 追加</button>
       </div>
       {extraTopRow && <div className="attach-extra-row">{extraTopRow}</div>}
+      {onDropFiles && <div className="attach-dnd-hint muted">ファイルをここにドラッグ＆ドロップで追加</div>}
       {items.length === 0 && <div className="attach-empty">（未設定）</div>}
       {items.map((a, i) => (
         <div key={i} className="attach-item">
@@ -1096,9 +1203,11 @@ interface CfNodeListProps {
   nodeLogs: NodeAttachments
   nodeConfigs: NodeAttachments
   severityById: Map<string, string>
+  showConfigForm: boolean
+  showLogForm: boolean
   onSelect: (id: string) => void
 }
-function CfNodeList({ nodes, nodeLogs, nodeConfigs, severityById, onSelect }: CfNodeListProps) {
+function CfNodeList({ nodes, nodeLogs, nodeConfigs, severityById, showConfigForm, showLogForm, onSelect }: CfNodeListProps) {
   if (nodes.length === 0) return null
   const cf = (list: NodeAttachment[] | undefined) => (list ?? []).reduce((n, a) => a.content.trim().length > 0 ? n + 1 : n, 0)
   return (
@@ -1112,9 +1221,9 @@ function CfNodeList({ nodes, nodeLogs, nodeConfigs, severityById, onSelect }: Cf
             <span className="node-list-id">{n.id}</span>
             {n.type && <span className="node-list-type">[{n.type}]</span>}
             <span className="node-list-counts">
-              {lc > 0 ? <span className="cnt-log">log×{lc}</span> : null}
-              {cc > 0 ? <span className="cnt-cfg">cfg×{cc}</span> : null}
-              {lc === 0 && cc === 0 && <span className="cnt-empty">○</span>}
+              {showLogForm && lc > 0 ? <span className="cnt-log">log×{lc}</span> : null}
+              {showConfigForm && cc > 0 ? <span className="cnt-cfg">cfg×{cc}</span> : null}
+              {(!showLogForm || lc === 0) && (!showConfigForm || cc === 0) && <span className="cnt-empty">○</span>}
             </span>
           </li>
         )

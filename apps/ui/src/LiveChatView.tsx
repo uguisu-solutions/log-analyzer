@@ -55,38 +55,40 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
 
   events.forEach((ev, i) => {
     const d = ev.data
-    const stageTag = d.stage === 'config' ? 'Stage 1' : d.stage === 'log' ? 'Stage 2' : undefined
+    // stage_ordinal はバックエンドが各イベントに注入する (1 / 2)。順序に依らず正しい Stage 番号を出す。
+    const ord = (d as { stage_ordinal?: number }).stage_ordinal
+    const stageTag = ord ? `Stage ${ord}` : undefined
 
     switch (ev.kind) {
       case 'run_id_assigned':
       case 'run_started':
         // 技術メタ。チャットには出さない
         return
-      case 'stage_one_start':
+      case 'single_stage_start':
         messages.push(
-          <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="Stage 1 開始">
-            <p>Configs 解析を開始します（人間承認モーダルが Stage 1 完了時に表示されます）。</p>
+          <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="1 段階解析 開始">
+            <p>{String(d.message ?? `${String(d.stage_label ?? '1 段階解析')} を開始します。`)}</p>
           </ChatMessage>
         )
         return
-      case 'stage_one_skipped':
+      case 'stage_one_start':
         messages.push(
-          <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="Stage 1 skip">
-            <p>{String(d.message ?? 'Configs 解析をスキップし、Logs のみで実行します。')}</p>
+          <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="Stage 1 開始">
+            <p>{String(d.stage_label ?? 'Stage 1')} を開始します。</p>
           </ChatMessage>
         )
         return
       case 'stage_one_complete':
         messages.push(
           <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="Stage 1 完了">
-            <p>{String(d.message ?? 'Stage 1 が完了しました。承認モーダルを確認してください。')}</p>
+            <p>{String(d.message ?? 'Stage 1 が完了しました。そのまま Stage 2 へ進みます。')}</p>
           </ChatMessage>
         )
         return
       case 'stage_two_start':
         messages.push(
           <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="Stage 2 開始">
-            <p>Logs での事実確認 (Stage 2) を開始します。</p>
+            <p>{String(d.stage_label ?? 'Stage 2')}（事実確認）を開始します。</p>
             {d.prior_hypothesis_summary && (
               <p className="chat-rationale">前提仮説: {String(d.prior_hypothesis_summary)}</p>
             )}
@@ -188,11 +190,18 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
         return
       case 'user_decision': {
         const action = String(d.action ?? '')
+        // 自動進行 (advance + auto) は人間の操作ではないので System メッセージで表示
+        if (action === 'advance' && d.auto) {
+          messages.push(
+            <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="自動進行">
+              <p>Stage 1 完了。人間承認なしで自動的に Stage 2 へ進みます。</p>
+            </ChatMessage>
+          )
+          return
+        }
         const labelMap: Record<string, string> = {
           continue: '継続を選択',
           stop: '停止を選択',
-          advance: 'Stage 2 に進む',
-          abort: 'Stage 1 で終了',
         }
         messages.push(
           <ChatMessage key={`ev-${i}`} sender="human" speaker="人間オペレータ" tag="決定">

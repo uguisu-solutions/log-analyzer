@@ -2,7 +2,7 @@
  * 確認モーダル: rally_max_rounds 到達時の継続/停止選択。
  *
  * SSE で ``await_confirmation`` イベントを受けたタブが表示する。
- * App.tsx / TopologyAnalysis.tsx / ConfigFirstAnalysis.tsx 3 タブで共用。
+ * App.tsx / TopologyAnalysis.tsx / ConfigLogAnalysis.tsx 3 タブで共用。
  *
  * 応答: POST /api/runs/{run_id}/decision
  *   {action: "continue", extend_by: N}   → rally_max_rounds を +N 延長して再開

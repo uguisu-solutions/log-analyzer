@@ -1,9 +1,9 @@
 # 未実装バックログ — 議事録要求と現状の差分
 
 **作成日**: 2026-05-26
-**ブランチ**: `feature/config-first-stages`
+**ブランチ**: `feature/config-log-analysis`
 **関連**:
-  - [config_first_stages.md](config_first_stages.md) — Phase A〜F の設計書
+  - [config_log_stages.md](config_log_stages.md) — Phase A〜F の設計書
   - [implementation_plan.md](implementation_plan.md) — 全体実装計画
   - 議事録 (2026-05-26 「トラブルシューティングにおける参照情報の範囲と検証方法」)
 
@@ -22,9 +22,9 @@
 |---|---|---|---|
 | 解析結果は複数（ランキング形式ではなく）表示 | G | ✅ | `RootCauseCandidate.rank` 撤去、UI もグリッド表示に |
 | 問診票を基にエージェントが実行 | B | ✅ | SQLite テンプレ + UI パネル + `_build_topology_log_text` 注入 |
-| 途中での要望差し込みも可能 | E 拡張 | ✅ | ChatInput + 介入時 orchestrator 再選択 (config_first_stages §9.11) |
-| コンフィグ利用 ON/OFF 切替 | A.5 | ✅ | Config-First タブ内のラジオで切替 |
-| Config-First 2 段階プロセス | A | ✅ | Stage 1 → 必須承認モーダル → Stage 2 |
+| 途中での要望差し込みも可能 | E 拡張 | ✅ | ChatInput + 介入時 orchestrator 再選択 (config_log_stages §9.11) |
+| コンフィグ利用 ON/OFF 切替 | A.5 → 刷新 | ✅ | config-log タブの「1 段階 / 2 段階 × データ種別」モード選択に発展 (旧 skip トグルは廃止) |
+| config-log 2 段階プロセス | A | ✅ | Stage 1 → 必須承認モーダル → Stage 2 (config→log / log→config 両順) |
 | 構成図上で機器ピン + ログ由来の判別 | A | ✅ | severity 別ハイライト (primary=赤+点滅 / secondary=橙) |
 | ラウンド履歴・tokens・処理時間 per round | D | ✅ | RoundMetrics + UI バー表示 |
 | 監査エージェント (GPT 想定) | C | ✅ | GPT-4o-mini で integrator 後に独立検証 |
@@ -52,7 +52,7 @@
 > [ChatInput.tsx](../../apps/ui/src/ChatInput.tsx) で comment / log / config の
 > 3 種類を実行中に送信可能。バックエンドでは [rally_agent.py](../../apps/agents/src/log_analyzer/rally_agent.py)
 > が `_drain_appends` 検出時に `intervention_restart` を emit し、
-> `orchestrator_select_first` を再実行する (詳細は config_first_stages.md §9.11)。
+> `orchestrator_select_first` を再実行する (詳細は config_log_stages.md §9.11)。
 
 ### 🟡 P1: 設計プランで触れたが見送ったもの
 
@@ -61,7 +61,7 @@
 | 5 | 問診票テンプレートの編集 UI | 1 日 | 現状は CRUD API のみ。PoC 中の項目調整が手間 |
 | 6 | 構成図/トポロジー定義の SQLite 永続化 | 1〜2 日 | 現状 localStorage 1 件。複数構成図切替不可 |
 | 7 | ノード矩形のドラッグ移動 / リサイズ | 1〜2 日 | 現状「削除→再描画」のみ |
-| 8 | トポロジー / Config-First タブからの実行履歴アクセス | 0.5 日 | run_history は記録済、UI 導線が薄い |
+| 8 | トポロジー / config-log タブからの実行履歴アクセス | 0.5 日 | run_history は記録済、UI 導線が薄い |
 
 ### 🟢 P2: 議事録で deferred と明記
 
@@ -110,7 +110,7 @@ P1 はその後、現場フィードバックを見て必要なものから着�
 - `POST /api/runs/{run_id}/append-log` に `source: "intervention:{type}:user"` で送信
 - バックエンドは [rally_agent.py](../../apps/agents/src/log_analyzer/rally_agent.py) で
   `_drain_appends` が空でなければ次の監視を走らせず orchestrator を再呼び出し
-  し、初期ノードを再選択する (詳細は config_first_stages.md §9.11)
+  し、初期ノードを再選択する (詳細は config_log_stages.md §9.11)
 - 新 SSE イベント `intervention_restart` を emit、`LiveChatView` が System
   メッセージとして表示
 
@@ -200,7 +200,7 @@ P1 はその後、現場フィードバックを見て必要なものから着�
     # PoC 最終評価レポート (テンプレート)
     ## 1. エグゼクティブサマリ
     ## 2. 評価対象
-       - 構成 1〜5 + Config-First
+       - 構成 1〜5 + config-log
        - シナリオ 10 件
        - 問診票あり/なし
     ## 3. 評価結果
@@ -209,7 +209,7 @@ P1 はその後、現場フィードバックを見て必要なものから着�
        ### 3.3 コスト (USD / JPY)
        ### 3.4 主観評価集計 (per-round)
     ## 4. 構成別考察
-    ## 5. Config-First 効果
+    ## 5. config-log 効果
     ## 6. 監査エージェントの有用性
     ## 7. 問診票の効果
     ## 8. 環境仕様書
@@ -243,7 +243,7 @@ P1 はその後、現場フィードバックを見て必要なものから着�
 ### #6 — 構成図 / トポロジー定義の SQLite 永続化 (P1, 1〜2 日)
 
 **現状**:
-- 1 件のトポロジー定義のみ localStorage (`log-analyzer.topology-v1` / `log-analyzer.config-first-topology-v1`)
+- 1 件のトポロジー定義のみ localStorage (`log-analyzer.topology-v1` / `log-analyzer.config-log-topology-v1`)
 
 **設計**:
 - 新テーブル `topologies(id, name, image_data_url, nodes_json, links_json, created_at, updated_at)`
@@ -265,10 +265,10 @@ P1 はその後、現場フィードバックを見て必要なものから着�
 
 ---
 
-### #8 — トポロジー / Config-First タブからの実行履歴アクセス (P1, 0.5 日)
+### #8 — トポロジー / config-log タブからの実行履歴アクセス (P1, 0.5 日)
 
 **現状**:
-- run_history は `topology-run:<short>` / `config-first-run:<short>` で記録
+- run_history は `topology-run:<short>` / `config-log-run:<short>` で記録
 - 閲覧は「実行履歴」タブのみ
 
 **設計**:
@@ -303,7 +303,7 @@ P1 はその後、現場フィードバックを見て必要なものから着�
 
 ## 5. 次セッション開始時のチェックリスト
 
-1. PoC の現状サマリは [config_first_stages.md](config_first_stages.md) の冒頭を参照
+1. PoC の現状サマリは [config_log_stages.md](config_log_stages.md) の冒頭を参照
 2. 着手項目は本ドキュメントの **§3 推奨優先順** からピック
 3. 各項目の「変更ファイル目安」を参照して影響範囲を把握
 4. 着手前にこの doc にチケット番号 (項目 #) と着手者 / 期日を追記すると良い
@@ -313,6 +313,6 @@ P1 はその後、現場フィードバックを見て必要なものから着�
 ## 6. 関連リンク
 
 - 議事録 (2026-05-26)
-- [config_first_stages.md](config_first_stages.md) — Phase A〜F の完了済機能の設計書
+- [config_log_stages.md](config_log_stages.md) — Phase A〜F の完了済機能の設計書
 - [implementation_plan.md](implementation_plan.md) — PoC 全体計画
 - [../reports/poc_progress_2026-05-25.md](../reports/poc_progress_2026-05-25.md) — 直近進捗（トポロジー解析タブ）

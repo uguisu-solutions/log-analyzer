@@ -113,15 +113,17 @@ class SuspectedNodeFinding(BaseModel):
 
 
 class StageOutput(BaseModel):
-    """Config-First 2 段階解析の各 Stage の中間結果 (Phase A 追加)。
+    """config-log 解析の各 Stage の中間結果。
 
-    - stage="config": コンフィグ情報のみで形成された仮説 (Stage 1)
-    - stage="log":    ログで事実確認した結果 (Stage 2)
+    - stage="config": コンフィグ情報で形成された仮説 / 結果
+    - stage="log":    ログで形成された仮説 / 結果
+    - stage="both":   1 段階モードで config + log を同時に投入した結果
 
-    通常の 1 段階モード / トポロジー解析タブ / config1-3 / config5 では空配列。
+    2 段階モードでは 2 件、1 段階モードでは 1 件。トポロジー解析タブ /
+    config1-3 / config5 では空配列。
     """
 
-    stage: str  # "config" | "log"
+    stage: str  # "config" | "log" | "both"
     stage_label: str = ""
     confidence: float = 0.0
     summary: str = ""
@@ -273,7 +275,7 @@ class AnalysisResult(BaseModel):
     # 同上。ノード単位の詳細（summary / severity）。UI で各ノードに「ここで何が起こっているか」を
     # 表示するために使う。``suspected_node_ids`` と整合（ID は同じか部分集合）。
     suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)
-    # Config-First 2 段階解析の各 Stage の中間結果。1 段階モードでは空配列。
+    # config-log 解析の各 Stage の中間結果。2 段階=2 件 / 1 段階=1 件 / 他構成=空配列。
     stage_outputs: list[StageOutput] = Field(default_factory=list)
     # 監査エージェント (Phase C) の所見。実行されなかった場合は None。
     audit_report: AuditReport | None = None

@@ -7,7 +7,7 @@ export interface SlotInfo {
 }
 
 export interface ConfigEntry {
-  id: string  // "config1" / "user:<id>" / "config-first"
+  id: string  // "config1" / "user:<id>" / "config-log"
   label: string
   // "builtin":           単一実行 / 比較タブから実行可
   // "user":              saved_configs から作成されたユーザー定義
@@ -207,7 +207,7 @@ export interface AnalysisResult {
   // トポロジー解析タブ専用（他経路では空配列）
   suspected_node_ids: string[]
   suspected_node_findings: SuspectedNodeFinding[]
-  // Config-First 2 段階解析専用（他経路では空配列）
+  // config-log 解析専用（他経路では空配列）
   stage_outputs: StageOutput[]
   // 監査エージェント (Phase C) の所見。実行しなければ null
   audit_report: AuditReport | null
@@ -244,9 +244,9 @@ export interface AuditReport {
   latency_ms: number
 }
 
-// Config-First 2 段階解析の各 Stage 出力 ─────────────────────
+// config-log 解析の各 Stage 出力 ─────────────────────
 export interface StageOutput {
-  stage: string  // "config" | "log"
+  stage: string  // "config" | "log" | "both"
   stage_label: string
   confidence: number
   summary: string

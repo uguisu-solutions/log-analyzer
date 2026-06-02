@@ -15,7 +15,7 @@
     POST   /api/runs                          指定構成を指定ログに当て、AnalysisResult を返す
     POST   /api/runs/stream                   構成4 (rally) を SSE でストリーミング実行
     POST   /api/runs/topology-stream          トポロジー + ノード別ログを構成4 で SSE 実行
-    POST   /api/runs/config-first-stream      Config-First 2 段階 (Configs → 人間承認 → Logs) で SSE 実行
+    POST   /api/runs/config-log-stream        config-log 解析 (1 段階 / 2 段階) を SSE 実行
     POST   /api/runs/{run_id}/decision        確認モーダルからの継続 / 停止 / 進む / 中止指示を送る
     GET    /api/questionnaires                問診票テンプレート一覧 (Phase B)
     POST   /api/questionnaires                問診票テンプレート新規作成
@@ -72,7 +72,7 @@ BUILTIN_CONFIG_LABELS: dict[str, str] = {
     "config3": "config3 — マルチモデル並列（3 モデル並列 → 統合）",
     "config4": "config4 — オーケストレータ駆動（LangGraph orchestrator が監視を再評価しながらラリー）",
     "config5": "config5 — ユーザー定義パイプライン（DAG 自由設計）",
-    "config-first": "config-first — Config-First 2 段階解析（表示専用 / 実行は専用タブから）",
+    "config-log": "config-log — config-log 解析（1 段階 / 2 段階。表示専用 / 実行は専用タブから）",
 }
 
 # 選択 UI から除外する builtin。config5 は pipeline_def 必須なので、
@@ -183,11 +183,13 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"source": "sec_monitor", "target": "fw_monitor", "kind": "feedback", "label": "委譲"},
         ],
     },
-    # Config-First 2 段階解析の **メタ構造**（単一実行タブで表示専用に出す）。
+    # config-log 解析の **メタ構造**（単一実行タブで表示専用に出す）。
     # 各 Stage の内部 rally は config4 と同じ構造なので、ここでは Stage を 1 ノード
-    # にまとめ「2 段階 + 人間承認 + (任意) GPT 監査」のフローを高レベルに示す。
-    # 実行は専用「Config-First 解析」タブから (executable_from_single=false)。
-    "config-first": {
+    # にまとめ「2 段階 + 人間承認 + (任意) GPT 監査」のフローを高レベルに示す
+    # (2 段階モード config→log を代表例として描画。1 段階モードや log→config 順も
+    #  同じ部品の組み替えで表現される)。
+    # 実行は専用「config-log 解析」タブから (executable_from_single=false)。
+    "config-log": {
         "nodes": [
             # 入力レイヤ (横並びの 4 つ)
             {"id": "input_topology", "type": "input", "label": "構成図\n(画像 + ノード矩形)"},
@@ -196,11 +198,11 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
             {"id": "input_questionnaire", "type": "input", "label": "問診票回答\n(Phase B)"},
             # メタフロー本体
             {"id": "stage_one", "type": "static",
-             "label": "Stage 1: Configs 解析\n(rally on configs only)\n→ suspected_nodes 仮説"},
+             "label": "Stage 1: 一方で解析\n(例: rally on configs only)\n→ suspected_nodes 仮説"},
             {"id": "human_approval", "type": "static",
              "label": "人間承認モーダル\n(advance / abort)"},
             {"id": "stage_two", "type": "static",
-             "label": "Stage 2: Logs 検証\n(rally on logs + Stage 1 仮説)"},
+             "label": "Stage 2: もう一方で検証\n(例: rally on logs + Stage 1 仮説)"},
             {"id": "audit", "type": "static",
              "label": "GPT 監査\n(Phase C, 任意)"},
             {"id": "final", "type": "static",
@@ -237,13 +239,13 @@ _executor = ThreadPoolExecutor(max_workers=4)
 
 
 class ConfigEntry(BaseModel):
-    id: str  # "config1" / "user:<id>" / "config-first"
+    id: str  # "config1" / "user:<id>" / "config-log"
     label: str
     # "builtin": 単一実行/比較タブから実行可
     # "user":    saved_configs から作成されたユーザー定義
-    # "builtin_view_only": 構成図表示のみ。実行は専用タブから (config-first 等)
+    # "builtin_view_only": 構成図表示のみ。実行は専用タブから (config-log 等)
     type: str
-    base_config: str  # "config1" .. "config4" / "config-first"
+    base_config: str  # "config1" .. "config4" / "config-log"
 
 
 class ConfigsResponse(BaseModel):
@@ -324,8 +326,8 @@ class DecisionRequest(BaseModel):
         - "continue" (+ extend_by): rally_max_rounds を延長して再開
         - "stop": 即時 integrator 直行
 
-    Config-First 2 段階解析の Stage 1 → Stage 2 遷移時 (Phase A 追加):
-        - "advance": ログ検証 (Stage 2) に進む
+    config-log 解析の 2 段階モードで Stage 1 → Stage 2 遷移時:
+        - "advance": Stage 2 (検証) に進む
         - "abort":   Stage 1 で打ち切り、Stage 1 結果のみを最終とする
     """
 
@@ -723,14 +725,14 @@ def list_configs() -> ConfigsResponse:
         for cid in CONFIG_RUNNERS.keys()
         if cid not in HIDDEN_BUILTIN_CONFIGS
     ]
-    # 表示専用メタ構成 (例: Config-First の 2 段階フロー)。
+    # 表示専用メタ構成 (例: config-log 解析のフロー)。
     # 単一実行タブで「構成図だけ確認したい」用途。実行ボタンは UI 側で無効化。
     view_only: list[ConfigEntry] = [
         ConfigEntry(
-            id="config-first",
-            label=BUILTIN_CONFIG_LABELS["config-first"],
+            id="config-log",
+            label=BUILTIN_CONFIG_LABELS["config-log"],
             type="builtin_view_only",
-            base_config="config-first",
+            base_config="config-log",
         ),
     ]
     user_configs: list[ConfigEntry] = []
@@ -889,8 +891,8 @@ def get_builtin_structure(base_config: str) -> BuiltinStructureResponse:
 
 @app.get("/api/prompt-slots/{base_config}", response_model=PromptSlotsResponse)
 def get_prompt_slots(base_config: str) -> PromptSlotsResponse:
-    # view-only メタ構造 (例: config-first) は編集可能 slot を持たない
-    if base_config == "config-first":
+    # view-only メタ構造 (例: config-log) は編集可能 slot を持たない
+    if base_config == "config-log":
         return PromptSlotsResponse(base_config=base_config, slots=[])
     if base_config not in prompt_slots.VALID_BASE_CONFIGS:
         raise HTTPException(status_code=400, detail=f"unknown base_config: {base_config}")
@@ -1345,17 +1347,23 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
     )
 
 
-class ConfigFirstRunRequest(BaseModel):
-    """``POST /api/runs/config-first-stream`` のリクエスト。
+class ConfigLogRunRequest(BaseModel):
+    """``POST /api/runs/config-log-stream`` のリクエスト。
 
-    トポロジー + ノード別ログ + 設定ファイルを受け、Config-First 2 段階解析を実行する。
-    Stage 1 では configs のみ、Stage 2 では logs + Stage 1 仮説 を rally に渡す。
+    トポロジー + ノード別ログ + 設定ファイルを受け、config-log 解析を実行する。
     config4 (rally) ベースのみ対応。
 
-    議事録 2026-05-26 §「コンフィグファーストシナリオの検証」より:
-    `skip_config_stage=True` を指定すると Stage 1 (Configs 解析) と人間承認をスキップし、
-    Stage 2 相当 (logs のみで rally 実行) を 1 回だけ走らせる。Configs 利用 有/無 を
-    同条件で比較するための「OFF」モード。
+    解析モードは ``analysis_mode`` で選ぶ:
+
+    - ``"single"`` (1 段階): rally を 1 回だけ実行する。``single_source`` で
+      どのデータを使うか選ぶ:
+        - ``"config"``: 設定ファイルのみ (ログ不要)
+        - ``"log"``:    ログのみ (設定不要)
+        - ``"both"``:   設定 + ログを同時に投入 (既定)
+    - ``"two_stage"`` (2 段階): Stage 1 で当たりをつけ、人間承認後に Stage 2 で
+      検証する。``stage_order`` で順序を選ぶ:
+        - ``"config_log"``: コンフィグ → (承認) → ログ
+        - ``"log_config"``: ログ → (承認) → コンフィグ
     """
 
     config: str
@@ -1367,16 +1375,23 @@ class ConfigFirstRunRequest(BaseModel):
     rally_max_rounds: int | None = None
     overrides: dict[str, str] | None = None
     model_overrides: dict[str, str] | None = None
-    skip_config_stage: bool = False
+    # 解析モード
+    analysis_mode: str = "single"          # "single" | "two_stage"
+    single_source: str = "both"            # "config" | "log" | "both"  (analysis_mode=="single")
+    stage_order: str = "config_log"        # "config_log" | "log_config" (analysis_mode=="two_stage")
 
 
-@app.post("/api/runs/config-first-stream")
-async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingResponse:
-    """Config-First 2 段階解析を SSE で実行する。
+_VALID_ANALYSIS_MODES = {"single", "two_stage"}
+_VALID_SINGLE_SOURCES = {"config", "log", "both"}
+_VALID_STAGE_ORDERS = {"config_log", "log_config"}
 
-    Stage 1: 構成図 + configs のみで rally 実行 → suspected_nodes 仮説
-    人間承認モーダル (advance / abort)
-    Stage 2 (advance 時): Stage 1 仮説を冒頭に置いた合成ログ (logs 込み) で rally 実行 → 検証
+
+@app.post("/api/runs/config-log-stream")
+async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
+    """config-log 解析を SSE で実行する。
+
+    1 段階モード (analysis_mode="single"): single_source に応じた合成ログで rally を 1 回。
+    2 段階モード (analysis_mode="two_stage"): stage_order の順に Stage 1 → 人間承認 → Stage 2。
     """
     base_config, p_overrides, m_overrides, _pipeline = _resolve_run_target(
         req.config, req.overrides, req.model_overrides, None
@@ -1384,48 +1399,52 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
     if base_config != "config4":
         raise HTTPException(
             status_code=400,
-            detail="Config-First 解析は config4 (rally) ベースの構成のみ対応",
+            detail="config-log 解析は config4 (rally) ベースの構成のみ対応",
         )
     if p_overrides or m_overrides:
         _validate_overrides(base_config, p_overrides, m_overrides)
 
-    # トポロジーの妥当性チェック (どちらの Stage でも共通)
+    # モード値の検証
+    if req.analysis_mode not in _VALID_ANALYSIS_MODES:
+        raise HTTPException(status_code=400, detail=f"analysis_mode は {_VALID_ANALYSIS_MODES} のいずれか")
+    if req.analysis_mode == "single" and req.single_source not in _VALID_SINGLE_SOURCES:
+        raise HTTPException(status_code=400, detail=f"single_source は {_VALID_SINGLE_SOURCES} のいずれか")
+    if req.analysis_mode == "two_stage" and req.stage_order not in _VALID_STAGE_ORDERS:
+        raise HTTPException(status_code=400, detail=f"stage_order は {_VALID_STAGE_ORDERS} のいずれか")
+
+    # トポロジーの妥当性チェック (全モード共通)
     _, normalized_nodes = _build_topology_log_text(req.topology, {}, {})
     if not normalized_nodes:
         raise HTTPException(status_code=400, detail="topology.nodes が空")
 
-    # 入力検証 (モードで要求するものが変わる):
-    #   通常モード: 少なくとも 1 ノードに Config が必要 (Stage 1 用)
-    #   skip モード: 少なくとも 1 ノードに Log が必要 (Logs only 単段で走る)
     def _has_any_content(bucket) -> bool:
         if not bucket:
             return False
         return any((a.content or "").strip() for a in bucket)
-    if req.skip_config_stage:
-        has_any_log = any(
-            _has_any_content(req.node_logs.get(n["id"])) for n in normalized_nodes
-        )
-        if not has_any_log:
-            raise HTTPException(
-                status_code=400,
-                detail="Configs スキップモードでは少なくとも 1 ノードにログが必要です",
-            )
-    else:
-        has_any_config = any(
-            _has_any_content(req.node_configs.get(n["id"])) for n in normalized_nodes
-        )
-        if not has_any_config:
-            raise HTTPException(
-                status_code=400,
-                detail="Config-First 解析には少なくとも 1 ノードに設定ファイル (Config) が必要です",
-            )
-
-    # 合成: Stage 1 (configs のみ) — skip 時は不要だが両モードで topology_context は共通
-    # 問診票回答は Stage 1 にも入れる (configs だけでなく人間の一次申告も読ませる)
-    stage_one_log_text, _ = _build_topology_log_text(
-        req.topology, {}, req.node_configs,
-        questionnaire_answers=req.questionnaire_answers,
+    has_any_config = any(
+        _has_any_content(req.node_configs.get(n["id"])) for n in normalized_nodes
     )
+    has_any_log = any(
+        _has_any_content(req.node_logs.get(n["id"])) for n in normalized_nodes
+    )
+
+    # 入力検証 (モードが要求するデータ種別が揃っているか):
+    #   single+config / 2段階 config 始動 → Config が 1 件以上必要
+    #   single+log    / 2段階 log 始動    → Log が 1 件以上必要
+    #   single+both                       → Config または Log のいずれかが 1 件以上
+    if req.analysis_mode == "single":
+        if req.single_source == "config" and not has_any_config:
+            raise HTTPException(status_code=400, detail="config のみモードでは少なくとも 1 ノードに設定ファイル (Config) が必要です")
+        if req.single_source == "log" and not has_any_log:
+            raise HTTPException(status_code=400, detail="log のみモードでは少なくとも 1 ノードにログが必要です")
+        if req.single_source == "both" and not (has_any_config or has_any_log):
+            raise HTTPException(status_code=400, detail="config+log モードでは少なくとも 1 ノードに設定ファイルまたはログが必要です")
+    else:  # two_stage
+        stage_one_kind = "config" if req.stage_order == "config_log" else "log"
+        if stage_one_kind == "config" and not has_any_config:
+            raise HTTPException(status_code=400, detail="config→log の 2 段階では Stage 1 用に少なくとも 1 ノードに設定ファイル (Config) が必要です")
+        if stage_one_kind == "log" and not has_any_log:
+            raise HTTPException(status_code=400, detail="log→config の 2 段階では Stage 1 用に少なくとも 1 ノードにログが必要です")
 
     # topology_context 共通
     topology_context = {
@@ -1442,7 +1461,7 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
     }
 
     run_id = uuid4().hex
-    log_ref = f"config-first-run:{run_id[:8]}"
+    log_ref = f"config-log-run:{run_id[:8]}"
 
     async def _wait_for_decision() -> dict:
         loop = asyncio.get_running_loop()
@@ -1453,78 +1472,8 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
         finally:
             _PENDING_DECISIONS.pop(run_id, None)
 
-    # Stage 2 用ログ合成は Stage 1 結果を見てから組み立てるためテンプレ関数化
-    def _stage_two_log_text(stage_one_output: StageOutput) -> str:
-        from log_analyzer.rally_two_stage import _build_stage_one_hypothesis_block
-        hypothesis_block = _build_stage_one_hypothesis_block(stage_one_output)
-        stage_two_body, _ = _build_topology_log_text(
-            req.topology, req.node_logs, req.node_configs,
-            questionnaire_answers=req.questionnaire_answers,
-        )
-        return hypothesis_block + stage_two_body
-
-    # Configs スキップ時: Stage 2 相当 (logs のみ) を 1 回だけ rally する経路
-    async def _gen_skip_mode() -> AsyncIterator[bytes]:
-        from log_analyzer.rally_two_stage import _result_to_stage_output, _build_final_result
-        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
-        yield _sse_bytes(
-            "stage_one_skipped",
-            {
-                "stage": "config",
-                "reason": "user opted out (skip_config_stage=true)",
-                "message": "Configs 解析と人間承認をスキップし、Logs のみで 1 段階解析を実行します。",
-            },
-        )
-        # log_text は logs のみ (configs を含めない — Configs 利用 OFF の意図に合わせる)
-        skip_log_text, _ = _build_topology_log_text(
-            req.topology, req.node_logs, {},
-            questionnaire_answers=req.questionnaire_answers,
-        )
-        yield _sse_bytes(
-            "stage_two_start",
-            {"stage": "log", "stage_label": "Logs のみ単段解析 (skip mode)"},
-        )
-        final_result: AnalysisResult | None = None
-        try:
-            async for ev in run_rally_stream(
-                skip_log_text,
-                f"{log_ref}::skip",
-                prompt_overrides=p_overrides,
-                model_overrides=m_overrides,
-                rally_max_rounds=req.rally_max_rounds or 3,
-                decision_waiter=_wait_for_decision,
-                topology_context={**topology_context, "stage": "log"},
-                audit_after_integrator=req.audit_after_integrator,
-            ):
-                # stage タグを注入して UI 側で識別可能にする (Stage 2 単独相当)
-                if "stage" not in ev.data:
-                    ev.data["stage"] = "log"
-                if ev.kind == "final":
-                    payload = ev.data.get("result")
-                    if isinstance(payload, dict):
-                        final_result = AnalysisResult.model_validate(payload)
-                    # 上層には統合済 final を流すのでここでは流さない
-                    continue
-                yield _sse_bytes(ev.kind, ev.data)
-        except Exception as e:
-            yield _sse_bytes("error", {"message": str(e), "stage": "config-first-stream"})
-            return
-
-        if final_result is None:
-            yield _sse_bytes("error", {"message": "skip-mode rally が結果を返しませんでした", "stage": "log"})
-            return
-
-        # 通常モードと同じ AnalysisResult 形式に寄せる (stage_outputs に 1 件のみ)
-        stage_output = _result_to_stage_output("log", final_result)
-        final = _build_final_result(
-            stage_outputs=[stage_output],
-            trace_id=final_result.trace_id,
-            log_ref=log_ref,
-        )
-        final_dict = final.model_dump(mode="json")
-        yield _sse_bytes("final", {"result": final_dict})
-
-        # 履歴記録 (best-effort)
+    def _record_history(final_dict: dict) -> None:
+        """最終 AnalysisResult を実行履歴へ記録する (best-effort)。"""
         try:
             cands = final_dict.get("root_cause_candidates") or []
             top = cands[0] if cands else None
@@ -1544,7 +1493,101 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
         except Exception:
             pass
 
-    async def gen() -> AsyncIterator[bytes]:
+    # 各データ種別に対応する node_logs / node_configs を返すヘルパ
+    #   "config" → configs のみ / "log" → logs のみ / "both" → 両方
+    def _attachments_for(source: str) -> tuple[dict, dict]:
+        logs = req.node_logs if source in ("log", "both") else {}
+        configs = req.node_configs if source in ("config", "both") else {}
+        return logs, configs
+
+    # ─── 1 段階モード ───────────────────────────────────────────
+    async def _gen_single() -> AsyncIterator[bytes]:
+        from log_analyzer.rally_two_stage import (
+            _result_to_stage_output, _build_final_result, _stage_label,
+        )
+        source = req.single_source
+        logs, configs = _attachments_for(source)
+        single_log_text, _ = _build_topology_log_text(
+            req.topology, logs, configs,
+            questionnaire_answers=req.questionnaire_answers,
+        )
+        stage_label = _stage_label(1, source)
+        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
+        yield _sse_bytes(
+            "single_stage_start",
+            {
+                "stage": source,
+                "stage_ordinal": 1,
+                "stage_label": stage_label,
+                "source": source,
+                "message": f"1 段階モード ({stage_label}) で rally を 1 回実行します。",
+            },
+        )
+        final_result: AnalysisResult | None = None
+        try:
+            async for ev in run_rally_stream(
+                single_log_text,
+                f"{log_ref}::single",
+                prompt_overrides=p_overrides,
+                model_overrides=m_overrides,
+                rally_max_rounds=req.rally_max_rounds or 3,
+                decision_waiter=_wait_for_decision,
+                topology_context={**topology_context, "stage": source},
+                audit_after_integrator=req.audit_after_integrator,
+            ):
+                if "stage" not in ev.data:
+                    ev.data["stage"] = source
+                ev.data.setdefault("stage_ordinal", 1)
+                if ev.kind == "final":
+                    payload = ev.data.get("result")
+                    if isinstance(payload, dict):
+                        final_result = AnalysisResult.model_validate(payload)
+                    # 上層には統合済 final を流すのでここでは流さない
+                    continue
+                yield _sse_bytes(ev.kind, ev.data)
+        except Exception as e:
+            yield _sse_bytes("error", {"message": str(e), "stage": "config-log-stream"})
+            return
+
+        if final_result is None:
+            yield _sse_bytes("error", {"message": "1 段階 rally が結果を返しませんでした", "stage": source})
+            return
+
+        # 2 段階モードと同じ AnalysisResult 形式に寄せる (stage_outputs に 1 件のみ)
+        stage_output = _result_to_stage_output(source, final_result, stage_label=stage_label)
+        final = _build_final_result(
+            stage_outputs=[stage_output],
+            trace_id=final_result.trace_id,
+            log_ref=log_ref,
+        )
+        final_dict = final.model_dump(mode="json")
+        yield _sse_bytes("final", {"result": final_dict})
+        _record_history(final_dict)
+
+    # ─── 2 段階モード ───────────────────────────────────────────
+    async def _gen_two_stage() -> AsyncIterator[bytes]:
+        stage_one_kind = "config" if req.stage_order == "config_log" else "log"
+        stage_two_kind = "log" if stage_one_kind == "config" else "config"
+
+        # Stage 1: 始動データ種別だけで合成
+        s1_logs, s1_configs = _attachments_for(stage_one_kind)
+        stage_one_log_text, _ = _build_topology_log_text(
+            req.topology, s1_logs, s1_configs,
+            questionnaire_answers=req.questionnaire_answers,
+        )
+
+        # Stage 2: Stage 1 仮説を冒頭に置き、両データ種別を投入して検証
+        def _stage_two_log_text(stage_one_output: StageOutput) -> str:
+            from log_analyzer.rally_two_stage import _build_stage_one_hypothesis_block
+            hypothesis_block = _build_stage_one_hypothesis_block(
+                stage_one_output, source_kind=stage_one_kind, target_kind=stage_two_kind,
+            )
+            stage_two_body, _ = _build_topology_log_text(
+                req.topology, req.node_logs, req.node_configs,
+                questionnaire_answers=req.questionnaire_answers,
+            )
+            return hypothesis_block + stage_two_body
+
         yield _sse_bytes("run_id_assigned", {"run_id": run_id})
         final_data: dict | None = None
         try:
@@ -1553,6 +1596,8 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
                 stage_two_log_text_template=_stage_two_log_text,
                 log_ref=log_ref,
                 topology_context=topology_context,
+                stage_one_kind=stage_one_kind,
+                stage_two_kind=stage_two_kind,
                 prompt_overrides=p_overrides,
                 model_overrides=m_overrides,
                 rally_max_rounds=req.rally_max_rounds or 3,
@@ -1563,30 +1608,13 @@ async def runs_config_first_stream(req: ConfigFirstRunRequest) -> StreamingRespo
                 if ev.kind == "final":
                     final_data = ev.data.get("result")
         except Exception as e:
-            yield _sse_bytes("error", {"message": str(e), "stage": "config-first-stream"})
+            yield _sse_bytes("error", {"message": str(e), "stage": "config-log-stream"})
             return
 
         if final_data is not None:
-            try:
-                cands = final_data.get("root_cause_candidates") or []
-                top = cands[0] if cands else None
-                metrics = final_data.get("metrics") or {}
-                storage.insert_run_history(
-                    log_name=log_ref,
-                    config_id=req.config,
-                    base_config=base_config,
-                    confidence=float(final_data.get("confidence", 0.0)),
-                    tokens_in=int(metrics.get("tokens_in", 0)),
-                    tokens_out=int(metrics.get("tokens_out", 0)),
-                    latency_ms=int(metrics.get("latency_ms_total", 0)),
-                    trace_id=str(final_data.get("trace_id") or ""),
-                    top_category=(top or {}).get("category"),
-                    top_summary=(top or {}).get("summary"),
-                )
-            except Exception:
-                pass
+            _record_history(final_data)
 
-    chosen_gen = _gen_skip_mode if req.skip_config_stage else gen
+    chosen_gen = _gen_single if req.analysis_mode == "single" else _gen_two_stage
     return StreamingResponse(
         chosen_gen(),
         media_type="text/event-stream",
@@ -1648,8 +1676,8 @@ async def runs_decision(run_id: str, req: DecisionRequest) -> dict:
         - action="continue" (+ extend_by): rally_max_rounds を延長して再開
         - action="stop": 次ラウンドに進まず integrator にフォールバック
 
-    Config-First 2 段階解析の Stage 1 → Stage 2 遷移時:
-        - action="advance": Stage 2 (ログ検証) に進む
+    config-log 解析の 2 段階モードで Stage 1 → Stage 2 遷移時:
+        - action="advance": Stage 2 (検証) に進む
         - action="abort":   Stage 1 で打ち切り、Stage 1 結果のみを最終とする
     """
     # action の妥当性を先にチェック (pending decision の有無に依らず弾く)
