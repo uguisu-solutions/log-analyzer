@@ -345,6 +345,7 @@ async def run_rally_stream(
     append_queue: "asyncio.Queue[dict] | None" = None,
     topology_context: dict | None = None,
     audit_after_integrator: bool = False,
+    audit_system_prompt: str | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """委譲チェーンを 1 ステップずつ実行しながら ``StreamEvent`` を yield する。
 
@@ -718,7 +719,7 @@ async def run_rally_stream(
         yield StreamEvent("audit_start", {"model_hint": "gpt-4o-mini"})
         try:
             audit = await _run_sync(
-                run_audit, log_text, topology_context, result
+                lambda: run_audit(log_text, topology_context, result, system_prompt=audit_system_prompt)
             )
         except Exception as e:
             yield StreamEvent("error", {"stage": "audit", "message": str(e)})

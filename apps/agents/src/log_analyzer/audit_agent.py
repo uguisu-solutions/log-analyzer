@@ -101,14 +101,19 @@ def run_audit(
     analysis_result: AnalysisResult,
     *,
     model: str | None = None,
+    system_prompt: str | None = None,
 ) -> AuditReport:
     """同期的に GPT 監査を 1 回実行し、AuditReport を返す。
+
+    ``system_prompt`` を渡すと既定の :data:`SYSTEM_PROMPT` の代わりに使う
+    (UI から監査プロンプトを編集する用途)。空文字 / None なら既定にフォールバック。
 
     API キーが無い等で例外が出た場合は ``verdict='uncertain'`` の
     フォールバック AuditReport を返し、上層には伝播させない。監査は
     補助情報であり、本流の AnalysisResult を壊さない方針。
     """
     chosen_model = model or os.environ.get("AUDIT_MODEL") or _DEFAULT_AUDIT_MODEL
+    sys_prompt = (system_prompt or "").strip() or SYSTEM_PROMPT
     if not os.environ.get("OPENAI_API_KEY"):
         return AuditReport(
             verdict="uncertain",
@@ -124,7 +129,7 @@ def run_audit(
             model=chosen_model,
             max_tokens=1500,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": _build_user_input(log_text, topology_context, analysis_result)},
             ],
             temperature=0.1,

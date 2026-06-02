@@ -245,6 +245,7 @@ async def run_two_stage_stream(
     rally_max_rounds: int = 3,
     decision_waiter: TwoStageDecisionWaiter | None = None,
     audit_after_integrator: bool = False,
+    audit_system_prompt: str | None = None,
     require_approval: bool = False,
 ) -> AsyncIterator[StreamEvent]:
     """config-log 解析の 2 段階 SSE ストリーミング実行。
@@ -346,7 +347,7 @@ async def run_two_stage_stream(
                 log_ref=log_ref,
             )
             if audit_after_integrator:
-                async for ev in _attach_audit(final, stage_one_log_text, topology_context):
+                async for ev in _attach_audit(final, stage_one_log_text, topology_context, audit_system_prompt):
                     yield ev
             yield StreamEvent("final", {"result": final.model_dump(mode="json")})
             return
@@ -414,7 +415,7 @@ async def run_two_stage_stream(
     )
     if audit_after_integrator:
         # Stage 2 まで進んだ場合は Stage 2 のログテキストで監査
-        async for ev in _attach_audit(final, stage_two_log_text, topology_context):
+        async for ev in _attach_audit(final, stage_two_log_text, topology_context, audit_system_prompt):
             yield ev
     yield StreamEvent("final", {"result": final.model_dump(mode="json")})
 
@@ -423,6 +424,7 @@ async def _attach_audit(
     final: AnalysisResult,
     log_text_for_audit: str,
     topology_context: dict,
+    audit_system_prompt: str | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """最終 AnalysisResult に対して監査 (Phase C) を 1 回実行する補助関数。
 
@@ -437,7 +439,7 @@ async def _attach_audit(
     loop = _aio.get_running_loop()
     try:
         audit = await loop.run_in_executor(
-            None, lambda: run_audit(log_text_for_audit, topology_context, final)
+            None, lambda: run_audit(log_text_for_audit, topology_context, final, system_prompt=audit_system_prompt)
         )
     except Exception as e:
         yield StreamEvent("error", {"stage": "audit", "message": str(e)})

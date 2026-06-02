@@ -12,11 +12,22 @@
  * - result.root_cause_candidates / recommended_actions: 最終結論
  * - result.audit_report: GPT 監査 (Phase C)
  */
-import type { AnalysisResult, DelegationEvent, QuestionnaireAnswers, RoundMetrics } from './types'
+import type {
+  AnalysisResult,
+  AuditReport,
+  DelegationEvent,
+  QuestionnaireAnswers,
+  RecommendedAction,
+  RootCauseCandidate,
+  RoundMetrics,
+} from './types'
 
 interface Props {
   result: AnalysisResult
   questionnaireAnswers: QuestionnaireAnswers
+  // 2 段階解析では stage_outputs を Stage ごとに展開する (既定 true)。
+  // 単一 Stage を埋め込み描画する用途では false にして問診票ブロックを抑制できる。
+  showQuestionnaire?: boolean
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -41,36 +52,23 @@ function findMetricForRole(metrics: RoundMetrics[], role: string, round?: number
   return metrics.find(m => m.role === role) ?? null
 }
 
-export function ChatHistoryView({ result, questionnaireAnswers }: Props) {
-  const messages: React.ReactNode[] = []
-  const metrics = result.round_metrics
+// 1 つの委譲チェーン + その最終結論を messages に積む。
+// 2 段階解析では Stage ごとに呼び、key 衝突を避けるため keyPrefix を変える。
+interface ConversationArgs {
+  history: DelegationEvent[]
+  metrics: RoundMetrics[]
+  confidence: number
+  candidates: RootCauseCandidate[]
+  actions: RecommendedAction[]
+  keyPrefix: string
+}
 
-  // 1. 問診票回答 (人間メッセージ)
-  const answerEntries = Object.entries(questionnaireAnswers).filter(([_, v]) => v.trim().length > 0)
-  if (answerEntries.length > 0) {
-    messages.push(
-      <ChatMessage key="qa" sender="human" speaker="人間オペレータ" tag="問診票">
-        <ul className="chat-qa-list">
-          {answerEntries.map(([k, v]) => (
-            <li key={k}><strong>{k}:</strong> {v}</li>
-          ))}
-        </ul>
-      </ChatMessage>
-    )
-  } else {
-    messages.push(
-      <ChatMessage key="qa-skip" sender="human" speaker="人間オペレータ" tag="開始">
-        <p className="muted">問診票未記入のまま解析を開始しました。</p>
-      </ChatMessage>
-    )
-  }
-
-  // 2. 委譲チェーン (orchestrator → 各監視 → integrator)
-  const history: DelegationEvent[] = result.delegation_history ?? []
-  history.forEach((d, i) => {
+function buildConversation(messages: React.ReactNode[], a: ConversationArgs): void {
+  // 委譲チェーン (orchestrator → 各監視 → integrator)
+  a.history.forEach((d, i) => {
     if (d.kind === 'user_extend' || d.kind === 'user_finalize') {
       messages.push(
-        <ChatMessage key={`ev-${i}`} sender="human" speaker="人間オペレータ" tag={d.kind === 'user_extend' ? '延長' : '停止'}>
+        <ChatMessage key={`${a.keyPrefix}-ev-${i}`} sender="human" speaker="人間オペレータ" tag={d.kind === 'user_extend' ? '延長' : '停止'}>
           <p>{d.rationale}</p>
         </ChatMessage>
       )
@@ -80,9 +78,9 @@ export function ChatHistoryView({ result, questionnaireAnswers }: Props) {
     const toRole = d.to_node ?? 'integrator'
     const speakerRole = d.kind === 'orchestrator_initial' ? 'orchestrator' : fromRole
     const speaker = roleLabel(speakerRole)
-    const m = findMetricForRole(metrics, speakerRole, d.round)
+    const m = findMetricForRole(a.metrics, speakerRole, d.round)
     messages.push(
-      <ChatMessage key={`ev-${i}`} sender={speakerRole === 'integrator' ? 'integrator' : 'agent'} speaker={speaker} tag={`round ${d.round}`} metric={m}>
+      <ChatMessage key={`${a.keyPrefix}-ev-${i}`} sender={speakerRole === 'integrator' ? 'integrator' : 'agent'} speaker={speaker} tag={`round ${d.round}`} metric={m}>
         <p className="chat-arrow"><strong>{roleLabel(fromRole)}</strong> → <strong>{roleLabel(toRole)}</strong></p>
         {d.rationale && <p className="chat-rationale">{d.rationale}</p>}
         {d.focus_hint && <p className="chat-focus"><em>次への観点: {d.focus_hint}</em></p>}
@@ -93,22 +91,22 @@ export function ChatHistoryView({ result, questionnaireAnswers }: Props) {
     )
   })
 
-  // 3. integrator の最終結論
-  const integratorMetric = findMetricForRole(metrics, 'integrator')
+  // integrator の最終結論
+  const integratorMetric = findMetricForRole(a.metrics, 'integrator')
   messages.push(
     <ChatMessage
-      key="integrator-final"
+      key={`${a.keyPrefix}-integrator-final`}
       sender="integrator"
       speaker="統合 (integrator)"
       tag="最終回答"
       metric={integratorMetric}
     >
-      <p className="chat-confidence">確信度: <strong>{result.confidence.toFixed(2)}</strong></p>
-      {result.root_cause_candidates.length > 0 && (
+      <p className="chat-confidence">確信度: <strong>{a.confidence.toFixed(2)}</strong></p>
+      {a.candidates.length > 0 && (
         <>
           <p className="chat-section-title">根本原因候補</p>
           <ul className="chat-causes">
-            {result.root_cause_candidates.map((c, i) => (
+            {a.candidates.map((c, i) => (
               <li key={i}>
                 <span className={`badge cat-${c.category}`}>{c.category}</span>
                 {c.summary}
@@ -117,15 +115,15 @@ export function ChatHistoryView({ result, questionnaireAnswers }: Props) {
           </ul>
         </>
       )}
-      {result.recommended_actions.length > 0 && (
+      {a.actions.length > 0 && (
         <>
           <p className="chat-section-title">推奨アクション</p>
           <ul className="chat-actions">
-            {result.recommended_actions.map((a, i) => (
+            {a.actions.map((act, i) => (
               <li key={i}>
-                <span className={`risk risk-${a.risk_level}`}>{a.risk_level}</span>
-                {a.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
-                {a.action}
+                <span className={`risk risk-${act.risk_level}`}>{act.risk_level}</span>
+                {act.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
+                {act.action}
               </li>
             ))}
           </ul>
@@ -133,42 +131,94 @@ export function ChatHistoryView({ result, questionnaireAnswers }: Props) {
       )}
     </ChatMessage>
   )
+}
 
-  // 4. 監査エージェント (任意)
-  if (result.audit_report) {
-    const ar = result.audit_report
-    messages.push(
-      <ChatMessage
-        key="audit"
-        sender="audit"
-        speaker="監査エージェント (GPT)"
-        tag={`所見: ${ar.verdict}`}
-      >
-        {ar.summary && <p className="chat-rationale">{ar.summary}</p>}
-        {ar.concerns.length > 0 && (
-          <>
-            <p className="chat-section-title">指摘事項</p>
-            <ul className="chat-concerns">
-              {ar.concerns.map((c, i) => <li key={i}>{c}</li>)}
-            </ul>
-          </>
-        )}
-        {ar.alternative_hypotheses.length > 0 && (
-          <>
-            <p className="chat-section-title">別の仮説</p>
-            <ul className="chat-alternatives">
-              {ar.alternative_hypotheses.map((h, i) => <li key={i}>{h}</li>)}
-            </ul>
-          </>
-        )}
-        <p className="muted chat-meta">
-          model: {ar.model || 'gpt-4o-mini'} · confidence {ar.confidence.toFixed(2)} ·
-          {' '}{ar.tokens_in.toLocaleString()}/{ar.tokens_out.toLocaleString()} tok ·
-          {(ar.latency_ms / 1000).toFixed(1)}s
-        </p>
-      </ChatMessage>
-    )
+function buildAudit(messages: React.ReactNode[], ar: AuditReport): void {
+  messages.push(
+    <ChatMessage key="audit" sender="audit" speaker="監査エージェント (GPT)" tag={`所見: ${ar.verdict}`}>
+      {ar.summary && <p className="chat-rationale">{ar.summary}</p>}
+      {ar.concerns.length > 0 && (
+        <>
+          <p className="chat-section-title">指摘事項</p>
+          <ul className="chat-concerns">
+            {ar.concerns.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        </>
+      )}
+      {ar.alternative_hypotheses.length > 0 && (
+        <>
+          <p className="chat-section-title">別の仮説</p>
+          <ul className="chat-alternatives">
+            {ar.alternative_hypotheses.map((h, i) => <li key={i}>{h}</li>)}
+          </ul>
+        </>
+      )}
+      <p className="muted chat-meta">
+        model: {ar.model || 'gpt-4o-mini'} · confidence {ar.confidence.toFixed(2)} ·
+        {' '}{ar.tokens_in.toLocaleString()}/{ar.tokens_out.toLocaleString()} tok ·
+        {(ar.latency_ms / 1000).toFixed(1)}s
+      </p>
+    </ChatMessage>
+  )
+}
+
+export function ChatHistoryView({ result, questionnaireAnswers, showQuestionnaire = true }: Props) {
+  const messages: React.ReactNode[] = []
+
+  // 1. 問診票回答 (人間メッセージ)
+  if (showQuestionnaire) {
+    const answerEntries = Object.entries(questionnaireAnswers).filter(([_, v]) => v.trim().length > 0)
+    if (answerEntries.length > 0) {
+      messages.push(
+        <ChatMessage key="qa" sender="human" speaker="人間オペレータ" tag="問診票">
+          <ul className="chat-qa-list">
+            {answerEntries.map(([k, v]) => (
+              <li key={k}><strong>{k}:</strong> {v}</li>
+            ))}
+          </ul>
+        </ChatMessage>
+      )
+    } else {
+      messages.push(
+        <ChatMessage key="qa-skip" sender="human" speaker="人間オペレータ" tag="開始">
+          <p className="muted">問診票未記入のまま解析を開始しました。</p>
+        </ChatMessage>
+      )
+    }
   }
+
+  const stages = result.stage_outputs ?? []
+  if (stages.length >= 2) {
+    // 2 段階解析: Stage ごとに推論過程 + その Stage の結論を展開する
+    stages.forEach((st, si) => {
+      messages.push(
+        <div key={`stage-div-${si}`} className="chat-stage-divider">
+          {st.stage_label || `Stage ${si + 1}`}
+        </div>
+      )
+      buildConversation(messages, {
+        history: st.delegation_history ?? [],
+        metrics: st.round_metrics ?? [],
+        confidence: st.confidence,
+        candidates: st.root_cause_candidates ?? [],
+        actions: st.recommended_actions ?? [],
+        keyPrefix: `s${si}`,
+      })
+    })
+  } else {
+    // 単一 Stage / 1 段階モード: 従来どおり最終結果のチェーンを展開
+    buildConversation(messages, {
+      history: result.delegation_history ?? [],
+      metrics: result.round_metrics,
+      confidence: result.confidence,
+      candidates: result.root_cause_candidates,
+      actions: result.recommended_actions,
+      keyPrefix: 'top',
+    })
+  }
+
+  // 監査エージェント (任意。全体に対して 1 回)
+  if (result.audit_report) buildAudit(messages, result.audit_report)
 
   return <div className="chat-thread">{messages}</div>
 }

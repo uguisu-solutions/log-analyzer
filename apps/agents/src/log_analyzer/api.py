@@ -16,6 +16,11 @@
     POST   /api/runs/stream                   構成4 (rally) を SSE でストリーミング実行
     POST   /api/runs/topology-stream          トポロジー + ノード別ログを構成4 で SSE 実行
     POST   /api/runs/config-log-stream        config-log 解析 (1 段階 / 2 段階) を SSE 実行
+    GET    /api/audit-prompt                  GPT 監査の既定システムプロンプト (編集欄の初期値)
+    POST   /api/analysis-history              解析履歴を保存 (完全再現用、config-log 完了時)
+    GET    /api/analysis-history              解析履歴一覧 (サマリ)
+    GET    /api/analysis-history/{id}         解析履歴 個別取得 (request/result 込み)
+    DELETE /api/analysis-history/{id}         解析履歴 削除
     POST   /api/runs/{run_id}/decision        確認モーダルからの継続 / 停止 / 進む / 中止指示を送る
     GET    /api/questionnaires                問診票テンプレート一覧 (Phase B)
     POST   /api/questionnaires                問診票テンプレート新規作成
@@ -700,6 +705,157 @@ def delete_run_history_endpoint(run_id: int) -> dict:
     return {"deleted": run_id}
 
 
+# ─── 解析履歴 (完全再現用) ──────────────────────────────────────
+# 設計: docs/plan/analysis_history.md
+
+
+class AnalysisHistorySaveRequest(BaseModel):
+    """``POST /api/analysis-history`` のリクエスト (config-log 解析完了時にフロントが送る)。"""
+
+    run_id: str
+    kind: str = "config-log"
+    config_id: str
+    analysis_mode: str | None = None
+    single_source: str | None = None
+    stage_order: str | None = None
+    rally_max_rounds: int | None = None
+    view_mode: str | None = None
+    questionnaire_answers: dict[str, str] = {}
+    topology: dict = {}
+    result: dict
+
+
+class AnalysisHistorySummary(BaseModel):
+    """一覧用サマリ (重い request/result JSON は含まない)。"""
+
+    id: int
+    run_id: str
+    created_at: str
+    kind: str
+    config_id: str
+    analysis_mode: str | None = None
+    single_source: str | None = None
+    stage_order: str | None = None
+    title: str | None = None
+    confidence: float | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    latency_ms: int | None = None
+    top_category: str | None = None
+    top_summary: str | None = None
+    trace_id: str | None = None
+
+
+class AnalysisHistoryListResponse(BaseModel):
+    entries: list[AnalysisHistorySummary]
+    total: int
+    limit: int
+    offset: int
+
+
+def _summarize_analysis_result(result: dict) -> dict:
+    """AnalysisResult dict から一覧用サマリ列を抽出する。"""
+    cands = result.get("root_cause_candidates") or []
+    top = cands[0] if cands else {}
+    metrics = result.get("metrics") or {}
+    top_summary = top.get("summary")
+    return {
+        "title": top_summary or None,
+        "confidence": float(result.get("confidence", 0.0) or 0.0),
+        "tokens_in": int(metrics.get("tokens_in", 0) or 0),
+        "tokens_out": int(metrics.get("tokens_out", 0) or 0),
+        "latency_ms": int(metrics.get("latency_ms_total", 0) or 0),
+        "top_category": top.get("category"),
+        "top_summary": top_summary,
+        "trace_id": result.get("trace_id"),
+    }
+
+
+@app.post("/api/analysis-history")
+def create_analysis_history_endpoint(req: AnalysisHistorySaveRequest) -> dict:
+    """解析完了時の状態を 1 件保存する。同一 run_id は no-op (created=false)。"""
+    summary = _summarize_analysis_result(req.result)
+    request_payload = {
+        "config_id": req.config_id,
+        "analysis_mode": req.analysis_mode,
+        "single_source": req.single_source,
+        "stage_order": req.stage_order,
+        "rally_max_rounds": req.rally_max_rounds,
+        "view_mode": req.view_mode,
+        "questionnaire_answers": req.questionnaire_answers,
+        "topology": req.topology,
+    }
+    entry_id, created = storage.insert_analysis_history(
+        run_id=req.run_id,
+        kind=req.kind,
+        config_id=req.config_id,
+        analysis_mode=req.analysis_mode,
+        single_source=req.single_source,
+        stage_order=req.stage_order,
+        title=summary["title"],
+        confidence=summary["confidence"],
+        tokens_in=summary["tokens_in"],
+        tokens_out=summary["tokens_out"],
+        latency_ms=summary["latency_ms"],
+        top_category=summary["top_category"],
+        top_summary=summary["top_summary"],
+        trace_id=summary["trace_id"],
+        request_json=json.dumps(request_payload, ensure_ascii=False),
+        result_json=json.dumps(req.result, ensure_ascii=False),
+    )
+    return {"id": entry_id, "created": created}
+
+
+@app.get("/api/analysis-history", response_model=AnalysisHistoryListResponse)
+def list_analysis_history_endpoint(
+    kind: str | None = None,
+    analysis_mode: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> AnalysisHistoryListResponse:
+    rows, total = storage.list_analysis_history(
+        kind=kind, analysis_mode=analysis_mode, q=q, limit=limit, offset=offset
+    )
+    return AnalysisHistoryListResponse(
+        entries=[AnalysisHistorySummary(**r) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/analysis-history/{entry_id}")
+def get_analysis_history_endpoint(entry_id: int) -> dict:
+    """個別取得 (request / result の完全 JSON 込み)。解析後画面の再現に使う。"""
+    row = storage.get_analysis_history(entry_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"analysis-history id={entry_id} not found")
+    return row
+
+
+@app.delete("/api/analysis-history/{entry_id}")
+def delete_analysis_history_endpoint(entry_id: int) -> dict:
+    if not storage.delete_analysis_history(entry_id):
+        raise HTTPException(status_code=404, detail=f"analysis-history id={entry_id} not found")
+    return {"deleted": entry_id}
+
+
+class AuditPromptResponse(BaseModel):
+    prompt: str
+    model: str
+
+
+@app.get("/api/audit-prompt", response_model=AuditPromptResponse)
+def get_audit_prompt() -> AuditPromptResponse:
+    """GPT 監査エージェントの既定システムプロンプトを返す (UI の編集欄の初期値用)。"""
+    from log_analyzer.audit_agent import SYSTEM_PROMPT, _DEFAULT_AUDIT_MODEL
+    return AuditPromptResponse(
+        prompt=SYSTEM_PROMPT,
+        model=os.environ.get("AUDIT_MODEL") or _DEFAULT_AUDIT_MODEL,
+    )
+
+
 @app.get("/api/runtime-config", response_model=RuntimeConfigResponse)
 def get_runtime_config() -> RuntimeConfigResponse:
     """ブラウザ UI が trace_id から Langfuse UI 直リンクを生成するのに使う。
@@ -1372,6 +1528,7 @@ class ConfigLogRunRequest(BaseModel):
     node_configs: dict[str, list[NodeAttachmentDTO]] = {}
     questionnaire_answers: dict[str, str] = {}
     audit_after_integrator: bool = False
+    audit_system_prompt: str | None = None  # GPT 監査プロンプトの上書き (空/None なら既定)
     rally_max_rounds: int | None = None
     overrides: dict[str, str] | None = None
     model_overrides: dict[str, str] | None = None
@@ -1534,6 +1691,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 decision_waiter=_wait_for_decision,
                 topology_context={**topology_context, "stage": source},
                 audit_after_integrator=req.audit_after_integrator,
+                audit_system_prompt=req.audit_system_prompt,
             ):
                 if "stage" not in ev.data:
                     ev.data["stage"] = source
@@ -1603,6 +1761,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 rally_max_rounds=req.rally_max_rounds or 3,
                 decision_waiter=_wait_for_decision,
                 audit_after_integrator=req.audit_after_integrator,
+                audit_system_prompt=req.audit_system_prompt,
             ):
                 yield _sse_bytes(ev.kind, ev.data)
                 if ev.kind == "final":

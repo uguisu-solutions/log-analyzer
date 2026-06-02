@@ -1929,6 +1929,7 @@ code {
   display: flex;
   gap: 0.375rem;
   white-space: nowrap;
+  align-items: center;  /* 行が高くてもボタンが縦に伸びないように */
 }
 
 /* 構成 ID 別のピル色（base_config 毎に分ける） */
@@ -2730,6 +2731,118 @@ code {
   height: 320px;
 }
 
+/* ─── 解析履歴タブ ──────────────────────── */
+.run-history-table tr.clickable { cursor: pointer; }
+.run-history-table tr.clickable:hover td { background: #eff6ff; }
+.ah-summary-cell {
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ah-mode-cell { white-space: nowrap; }
+/* 操作セルは table-cell のまま (vertical-align: middle を効かせ、他カラムと縦位置を揃える)。
+   ボタンの横並びは内側の inline-flex で行う。 */
+.run-history-table td.ah-actions {
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.ah-actions-inner {
+  display: inline-flex;
+  gap: 0.375rem;
+  align-items: center;
+}
+/* 2 段階解析の会話を Stage ごとに区切る見出し */
+.chat-stage-divider {
+  margin: 1rem 0 0.5rem;
+  padding: 0.3rem 0.7rem;
+  background: #e0e7ff;
+  color: #1e3a8a;
+  border-left: 4px solid #2563eb;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.ah-stage-heading {
+  margin: 1.2rem 0 0.4rem;
+  padding: 0.3rem 0.6rem;
+  background: #1e3a8a;
+  color: #fff;
+  border-radius: 4px;
+  font-size: 0.95rem;
+}
+.analysis-history-detail .ah-detail-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
+}
+.analysis-history-detail .ah-detail-bar h2 { margin: 0; flex-grow: 1; font-size: 1.2rem; }
+.ah-detail-meta {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 1rem;
+}
+.ah-readonly-canvas {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  margin-bottom: 1rem;
+  cursor: default;
+}
+
+/* ─── GPT 監査プロンプト編集 (折りたたみ) ──────────────── */
+.audit-prompt-details {
+  margin-bottom: 0.6rem;
+  border: 1px solid #e0e3e7;
+  border-radius: 6px;
+  background: #fff;
+}
+.audit-prompt-details > summary {
+  list-style: none;        /* 既定の三角マーカーを消す (▸ を自前で出す) */
+  cursor: pointer;
+  padding: 0.5rem 0.8rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #1e40af;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  user-select: none;
+}
+.audit-prompt-details > summary::-webkit-details-marker { display: none; }
+.audit-prompt-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  color: #2563eb;
+}
+.audit-prompt-details[open] > summary > .audit-prompt-caret { transform: rotate(90deg); }
+.audit-prompt-hint {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+.audit-prompt-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  padding: 0.6rem 0.8rem;
+  border: none;
+  border-top: 1px solid #e0e3e7;
+  resize: vertical;
+  background: #f8fafc;
+}
+.audit-prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.4rem 0.8rem 0.6rem;
+}
+
 /* ─── config-log: ファイル D&D ──────────────────────── */
 .topology-canvas.drag-over {
   outline: 3px dashed #2563eb;
@@ -2909,6 +3022,10 @@ code {
   border: 1px solid #e0e3e7;
   border-radius: 6px;
   margin-bottom: 0.6rem;
+  /* 解析段階 / 使用データ / ヒント の各行に縦の隙間を空ける */
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
 }
 .mode-toggle {
   display: flex;
@@ -2945,7 +3062,7 @@ code {
   color: #084e96;
 }
 .mode-toggle-hint {
-  margin: 0.35rem 0 0 0;
+  margin: 0;  /* 行間は .topology-mode-bar の gap で管理 */
   font-size: 0.8rem;
 }
 
