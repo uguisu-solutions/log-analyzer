@@ -776,7 +776,7 @@ function ModeSelector({ analysisMode, singleSource, stageOrder, disabled, onAnal
         <label className="radio-pill">
           <input type="radio" name="cl-stage" checked={analysisMode === 'two_stage'}
             onChange={() => onAnalysisMode('two_stage')} disabled={disabled} />
-          <span>2 段階（自動進行）</span>
+          <span>2 段階</span>
         </label>
       </div>
 
