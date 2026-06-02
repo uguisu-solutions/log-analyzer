@@ -147,8 +147,24 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
   // 監査エージェント (Phase C): integrator 後に GPT で独立検証
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
+  // GPT 監査プロンプト (編集可能。既定はバックエンドから取得して初期表示)
+  const [auditPrompt, setAuditPrompt] = useState<string>('')
+  const [auditPromptLoaded, setAuditPromptLoaded] = useState(false)
   // 表示モード (Phase E): デフォルトをチャットに (議事録の UI 要求)
   const [viewMode, setViewMode] = useState<'standard' | 'chat'>('chat')
+
+  // 監査を有効化したら既定プロンプトを 1 度だけ取得して編集欄に初期表示する
+  useEffect(() => {
+    if (!auditAfterIntegrator || auditPromptLoaded) return
+    let cancelled = false
+    fetch(`${API_BASE}/api/audit-prompt`)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d: { prompt?: string }) => {
+        if (!cancelled) { setAuditPrompt(d.prompt ?? ''); setAuditPromptLoaded(true) }
+      })
+      .catch(() => { /* 取得失敗時は空のまま (バックエンド既定が使われる) */ })
+    return () => { cancelled = true }
+  }, [auditAfterIntegrator, auditPromptLoaded])
 
   // ─── 実行状態 ────────────────────────────────────────────────
   const [stageStatus, setStageStatus] = useState<StageStatus>('idle')
@@ -395,6 +411,33 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   }, [isRunning, selectedConfig, topology.nodes, analysisMode, singleSource, stageKinds, hasConfig, hasLog])
 
   // ─── 実行 ────────────────────────────────────────────────────
+  // 解析完了時に「解析履歴」へ保存する (best-effort、本流は壊さない)
+  // 構成図画像を含む完全な状態を送り、後で解析後画面を再現できるようにする。
+  const saveAnalysisHistory = async (rid: string | null, res: AnalysisResult) => {
+    if (!rid) return
+    try {
+      await fetch(`${API_BASE}/api/analysis-history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          run_id: rid,
+          kind: 'config-log',
+          config_id: selectedConfig,
+          analysis_mode: analysisMode,
+          single_source: singleSource,
+          stage_order: stageOrder,
+          rally_max_rounds: rallyMaxRounds,
+          view_mode: viewMode,
+          questionnaire_answers: questionnaireAnswers,
+          topology,  // image / nodes / links を含む完全なトポロジー (再現用)
+          result: res,
+        }),
+      })
+    } catch (e) {
+      console.warn('解析履歴の保存に失敗しました:', e)
+    }
+  }
+
   const run = async () => {
     if (!canRun) return
     setError(null)
@@ -403,6 +446,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     setStageStatus(isTwoStage ? 'stage1_running' : 'single_running')
     setResultTab('combined')
     const ctrl = new AbortController(); abortRef.current = ctrl
+    // run_id_assigned から取得した実際の run_id を保持 (state の runId は本クロージャでは
+    // 古い値のため、ローカル変数で確実に追跡する)
+    let currentRunId: string | null = null
     try {
       const body = {
         config: selectedConfig,
@@ -419,6 +465,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         stage_order: stageOrder,
         questionnaire_answers: questionnaireAnswers,
         audit_after_integrator: auditAfterIntegrator,
+        // 監査有効時のみプロンプト上書きを送る (空ならバックエンド既定)
+        audit_system_prompt: auditAfterIntegrator ? auditPrompt : undefined,
       }
       const r = await fetch(`${API_BASE}/api/runs/config-log-stream`, {
         method: 'POST',
@@ -433,7 +481,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       for await (const ev of parseSSE(r)) {
         setStreamEvents(prev => [...prev, ev])
         if (ev.kind === 'run_id_assigned') {
-          setRunId(String(ev.data.run_id ?? ''))
+          currentRunId = String(ev.data.run_id ?? '')
+          setRunId(currentRunId)
         } else if (ev.kind === 'single_stage_start') {
           setStageStatus('single_running')
         } else if (ev.kind === 'stage_one_complete') {
@@ -466,6 +515,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
             if (s2) setStageTwoOutput(s2)
             // 2 段階で Stage 2 が無い = abort、それ以外は完了
             setStageStatus(isTwoStage && !s2 ? 'aborted' : 'completed')
+            // 解析履歴に保存 (完了した解析のみ。best-effort)
+            void saveAnalysisHistory(currentRunId, res)
           }
         } else if (ev.kind === 'error') {
           setError(String(ev.data.message ?? 'unknown stream error'))
@@ -654,6 +705,32 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         )}
       </div>
 
+      {/* GPT 監査プロンプト編集 (監査有効時のみ。既定は閉じていてクリックで展開) */}
+      {auditAfterIntegrator && (
+        <details className="audit-prompt-details">
+          <summary>
+            <span className="audit-prompt-caret">▸</span>
+            GPT 監査プロンプト（クリックで展開・編集）
+            <span className="audit-prompt-hint">未編集なら既定プロンプトで実行</span>
+          </summary>
+          <textarea
+            className="audit-prompt-textarea"
+            value={auditPrompt}
+            onChange={e => setAuditPrompt(e.target.value)}
+            disabled={isRunning}
+            rows={14}
+            placeholder={auditPromptLoaded ? 'GPT 監査のシステムプロンプト' : '既定プロンプトを読み込み中…'}
+            spellCheck={false}
+          />
+          <div className="audit-prompt-actions">
+            <button type="button" className="btn-small" disabled={isRunning}
+              onClick={() => setAuditPromptLoaded(false)}>
+              既定に戻す
+            </button>
+          </div>
+        </details>
+      )}
+
       {error && <div className="topology-error">エラー: {error}</div>}
 
       <ViewModeToggle mode={viewMode} onChange={setViewMode} />
@@ -823,8 +900,8 @@ function ModeSelector({ analysisMode, singleSource, stageOrder, disabled, onAnal
               ? 'log のみで rally を 1 回実行します（設定入力欄は非表示）。'
               : 'config と log を同時に投入し rally を 1 回実行します。')
           : (stageOrder === 'config_log'
-              ? 'コンフィグで当たりをつけ、そのまま自動でログ検証へ進む 2 段階です（人間承認なし）。'
-              : 'ログで当たりをつけ、そのまま自動でコンフィグ裏取りへ進む 2 段階です（人間承認なし）。')}
+              ? 'コンフィグで当たりをつけ、そのまま自動でログ検証へ進む 2 段階です。'
+              : 'ログで当たりをつけ、そのまま自動でコンフィグ裏取りへ進む 2 段階です。')}
       </p>
     </div>
   )

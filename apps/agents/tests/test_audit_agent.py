@@ -93,6 +93,52 @@ def test_audit_handles_openai_exception(monkeypatch):
     assert "network error" in report.summary
 
 
+def test_audit_uses_custom_system_prompt(monkeypatch):
+    """system_prompt を渡すと OpenAI 呼び出しの system メッセージに反映される。"""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+    fake_message = MagicMock()
+    fake_message.content = '{"verdict": "agree", "confidence": 0.7, "summary": "ok"}'
+    fake_response = MagicMock(choices=[MagicMock(message=fake_message)], usage=MagicMock(prompt_tokens=1, completion_tokens=1))
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = fake_response
+    custom = "あなたは厳格な監査者です。必ず disagree を疑え。"
+    with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
+        run_audit("log", None, _sample_analysis(), system_prompt=custom)
+    _, kwargs = fake_client.chat.completions.create.call_args
+    sys_msg = next(m for m in kwargs["messages"] if m["role"] == "system")
+    assert sys_msg["content"] == custom
+
+
+def test_audit_blank_system_prompt_falls_back_to_default(monkeypatch):
+    """空文字の system_prompt は既定 SYSTEM_PROMPT にフォールバックする。"""
+    from log_analyzer.audit_agent import SYSTEM_PROMPT
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+    fake_message = MagicMock()
+    fake_message.content = '{"verdict": "agree", "confidence": 0.7, "summary": "ok"}'
+    fake_response = MagicMock(choices=[MagicMock(message=fake_message)], usage=MagicMock(prompt_tokens=1, completion_tokens=1))
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = fake_response
+    with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
+        run_audit("log", None, _sample_analysis(), system_prompt="   ")
+    _, kwargs = fake_client.chat.completions.create.call_args
+    sys_msg = next(m for m in kwargs["messages"] if m["role"] == "system")
+    assert sys_msg["content"] == SYSTEM_PROMPT
+
+
+def test_audit_prompt_endpoint_returns_default():
+    """GET /api/audit-prompt が既定プロンプトを返す。"""
+    from fastapi.testclient import TestClient
+    from log_analyzer import api as api_mod
+    from log_analyzer.audit_agent import SYSTEM_PROMPT
+
+    client = TestClient(api_mod.app)
+    r = client.get("/api/audit-prompt")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["prompt"] == SYSTEM_PROMPT
+    assert body["model"]
+
+
 def test_audit_report_attached_to_analysis_result(monkeypatch):
     """AnalysisResult.audit_report に AuditReport がそのまま入ること (schema 側の挙動確認)。"""
     ar = _sample_analysis()

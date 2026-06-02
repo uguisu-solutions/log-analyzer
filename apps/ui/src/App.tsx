@@ -8,6 +8,7 @@ import { PipelineBuilder } from './PipelineBuilder'
 import { RunHistoryView } from './RunHistoryView'
 import { TopologyAnalysis } from './TopologyAnalysis'
 import { ConfigLogAnalysis } from './ConfigLogAnalysis'
+import { AnalysisHistoryView } from './AnalysisHistoryView'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -21,7 +22,7 @@ import './App.css'
 
 const API_BASE = 'http://localhost:8000'
 
-type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-log'
+type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-log' | 'analysis-history'
 
 function ResultDetails({ result }: { result: AnalysisResult }) {
   return (
@@ -816,7 +817,7 @@ function App() {
   return (
     <div className="container">
       <header>
-        <h1>log-analyzer 管理 UI<span className="version">MVP / Phase 2 W6</span></h1>
+        <h1>log-analyzer 管理 UI</h1>
         <p className="subtitle">
           ログを選び、構成（builtin / ユーザー定義）で分析を実行する。エージェント組織図 + 比較表 + 段階別プロンプト編集対応。
         </p>
@@ -852,6 +853,13 @@ function App() {
           disabled={singleRunning || isCompareRunning}
         >
           config-log 解析
+        </button>
+        <button
+          onClick={() => setMode('analysis-history')}
+          className={mode === 'analysis-history' ? 'tab active' : 'tab'}
+          disabled={singleRunning || isCompareRunning}
+        >
+          解析履歴
         </button>
       </div>
 
@@ -897,6 +905,10 @@ function App() {
           renderEventSummary={renderEventSummary}
           langfuseHost={langfuseHost}
         />
+      )}
+
+      {mode === 'analysis-history' && (
+        <AnalysisHistoryView langfuseHost={langfuseHost} />
       )}
 
       {mode === 'single' && (

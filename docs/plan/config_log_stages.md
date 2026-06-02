@@ -47,6 +47,10 @@
   添付セクションへファイル (複数可) をドロップして追加できる。
 - **タブ非表示**: アプリの「構成比較 / 構成設計(pipeline) / トポロジー解析」タブを UI 非表示
   (コードは残置)。
+- **GPT 監査プロンプトの編集**: 「GPT 監査も実行」を有効にすると、監査の system プロンプトを
+  折りたたみ入力欄 (`<details>`、既定は閉) で確認・編集できる。既定値は `GET /api/audit-prompt`
+  から取得し、実行時は `ConfigLogRunRequest.audit_system_prompt` で上書き送信する
+  (空なら [audit_agent.py](../../apps/agents/src/log_analyzer/audit_agent.py) の既定 `SYSTEM_PROMPT`)。
 
 | 項目 | 変更後 |
 |---|---|

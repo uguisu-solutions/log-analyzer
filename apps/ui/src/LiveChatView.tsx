@@ -194,7 +194,7 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
         if (action === 'advance' && d.auto) {
           messages.push(
             <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="自動進行">
-              <p>Stage 1 完了。人間承認なしで自動的に Stage 2 へ進みます。</p>
+              <p>Stage 1 完了。 Stage 2 へ進みます。</p>
             </ChatMessage>
           )
           return

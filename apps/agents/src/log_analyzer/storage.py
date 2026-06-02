@@ -116,6 +116,42 @@ def init_db() -> None:
             )
             """
         )
+
+        # analysis_history テーブル (解析履歴: 完全再現用)
+        # 入力 (request_json) + 結果 (result_json) を丸ごと保存し、解析後画面を再現する。
+        # 設計: docs/plan/analysis_history.md
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'config-log',
+                config_id TEXT NOT NULL,
+                analysis_mode TEXT,
+                single_source TEXT,
+                stage_order TEXT,
+                title TEXT,
+                confidence REAL,
+                tokens_in INTEGER,
+                tokens_out INTEGER,
+                latency_ms INTEGER,
+                top_category TEXT,
+                top_summary TEXT,
+                trace_id TEXT,
+                request_json TEXT NOT NULL,
+                result_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_history_run "
+            "ON analysis_history(run_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_analysis_history_created "
+            "ON analysis_history(created_at DESC)"
+        )
         conn.commit()
 
         # デフォルトテンプレを idempotent に投入 (初回起動時のみ)
@@ -358,6 +394,119 @@ def get_run_history(run_id: int) -> dict | None:
 def delete_run_history(run_id: int) -> bool:
     with _connect() as conn:
         cursor = conn.execute("DELETE FROM run_history WHERE id = ?", (run_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+# ─── analysis_history (解析履歴: 完全再現用) ──────────────────────
+
+# 一覧で返すサマリ列 (重い JSON は含めない)
+_ANALYSIS_SUMMARY_COLS = (
+    "id, run_id, created_at, kind, config_id, analysis_mode, single_source, stage_order, "
+    "title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary, trace_id"
+)
+
+
+def insert_analysis_history(
+    *,
+    run_id: str,
+    kind: str,
+    config_id: str,
+    analysis_mode: str | None,
+    single_source: str | None,
+    stage_order: str | None,
+    title: str | None,
+    confidence: float | None,
+    tokens_in: int | None,
+    tokens_out: int | None,
+    latency_ms: int | None,
+    top_category: str | None,
+    top_summary: str | None,
+    trace_id: str | None,
+    request_json: str,
+    result_json: str,
+    created_at: str | None = None,
+) -> tuple[int, bool]:
+    """解析履歴を 1 件保存し、``(id, created)`` を返す。
+
+    同一 ``run_id`` が既にあれば挿入せず ``created=False`` と既存 id を返す (no-op)。
+    """
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM analysis_history WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if existing is not None:
+            return int(existing[0]), False
+        when = created_at or _now_iso()
+        cur = conn.execute(
+            "INSERT INTO analysis_history "
+            "(run_id, created_at, kind, config_id, analysis_mode, single_source, stage_order, "
+            " title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary, "
+            " trace_id, request_json, result_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id, when, kind, config_id, analysis_mode, single_source, stage_order,
+                title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary,
+                trace_id, request_json, result_json,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0), True
+
+
+def list_analysis_history(
+    *,
+    kind: str | None = None,
+    analysis_mode: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """フィルタ付きで一覧（サマリのみ）を返す。``(rows, total_count)``。"""
+    where: list[str] = []
+    args: list = []
+    if kind:
+        where.append("kind = ?")
+        args.append(kind)
+    if analysis_mode:
+        where.append("analysis_mode = ?")
+        args.append(analysis_mode)
+    if q:
+        where.append("(top_summary LIKE ? OR title LIKE ?)")
+        like = f"%{q}%"
+        args.extend([like, like])
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    with _connect() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM analysis_history{where_sql}", args
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT {_ANALYSIS_SUMMARY_COLS} FROM analysis_history{where_sql} "
+            f"ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (*args, limit, offset),
+        ).fetchall()
+    return [dict(r) for r in rows], int(total)
+
+
+def get_analysis_history(entry_id: int) -> dict | None:
+    """個別取得。``request`` / ``result`` を JSON パースして返す（完全再現用）。"""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM analysis_history WHERE id = ?", (entry_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    raw_req = d.pop("request_json", None)
+    raw_res = d.pop("result_json", None)
+    d["request"] = json.loads(raw_req) if raw_req else {}
+    d["result"] = json.loads(raw_res) if raw_res else {}
+    return d
+
+
+def delete_analysis_history(entry_id: int) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute("DELETE FROM analysis_history WHERE id = ?", (entry_id,))
         conn.commit()
         return cursor.rowcount > 0
 

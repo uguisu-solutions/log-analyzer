@@ -130,6 +130,63 @@ export interface RunHistoryListResponse {
   offset: number
 }
 
+// 解析履歴 (完全再現用) — 設計: docs/plan/analysis_history.md ─────────
+export interface AnalysisHistorySummary {
+  id: number
+  run_id: string
+  created_at: string  // ISO8601 UTC
+  kind: string
+  config_id: string
+  analysis_mode: string | null
+  single_source: string | null
+  stage_order: string | null
+  title: string | null
+  confidence: number | null
+  tokens_in: number | null
+  tokens_out: number | null
+  latency_ms: number | null
+  top_category: string | null
+  top_summary: string | null
+  trace_id: string | null
+}
+
+export interface AnalysisHistoryListResponse {
+  entries: AnalysisHistorySummary[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// 詳細 (request / result 込み)。request.topology は TopologyDef 相当
+export interface AnalysisHistoryDetail extends AnalysisHistorySummary {
+  request: {
+    config_id: string
+    analysis_mode: string | null
+    single_source: string | null
+    stage_order: string | null
+    rally_max_rounds: number | null
+    view_mode: string | null
+    questionnaire_answers: QuestionnaireAnswers
+    topology: TopologyDef
+  }
+  result: AnalysisResult
+}
+
+// 解析履歴の保存リクエスト (config-log 完了時に送る)
+export interface AnalysisHistorySaveRequest {
+  run_id: string
+  kind: string
+  config_id: string
+  analysis_mode: string | null
+  single_source: string | null
+  stage_order: string | null
+  rally_max_rounds: number | null
+  view_mode: string | null
+  questionnaire_answers: QuestionnaireAnswers
+  topology: TopologyDef
+  result: AnalysisResult
+}
+
 export interface RootCauseCandidate {
   category: string
   summary: string
