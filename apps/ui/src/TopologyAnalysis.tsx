@@ -23,7 +23,6 @@ import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { GraphView } from './GraphView'
 import { QuestionnairePanel } from './QuestionnairePanel'
-import { TerraformImporter } from './TerraformImporter'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -153,8 +152,6 @@ export function TopologyAnalysis({
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
   // 表示モード (Phase E): デフォルトをチャットに (議事録の UI 要求)
   const [viewMode, setViewMode] = useState<'standard' | 'chat'>('chat')
-  // Terraform 一括取込モーダルの開閉
-  const [tfImporterOpen, setTfImporterOpen] = useState(false)
 
   const [running, setRunning] = useState(false)
   const [streamEvents, setStreamEvents] = useState<SSEEvent[]>([])
@@ -527,14 +524,6 @@ export function TopologyAnalysis({
             ノード追加（ドラッグで矩形描画）
           </button>
         </div>
-        <button
-          className="btn-secondary"
-          onClick={() => setTfImporterOpen(true)}
-          disabled={topology.nodes.length === 0}
-          title={topology.nodes.length === 0 ? 'ノードを先に作成してください' : ''}
-        >
-          Terraform 一括取込
-        </button>
         <button className="btn-secondary" onClick={clearAll} disabled={!topology.image && topology.nodes.length === 0}>
           すべてクリア
         </button>
@@ -752,24 +741,6 @@ export function TopologyAnalysis({
             <ChatHistoryView result={result} questionnaireAnswers={questionnaireAnswers} />
           </section>
         )
-      )}
-
-      {/* Terraform 一括取込モーダル */}
-      {tfImporterOpen && (
-        <TerraformImporter
-          nodes={topology.nodes}
-          onApply={(additions) => {
-            // 既存添付を保持しつつ追記 (上書きしない、同名なら重複追加)
-            setNodeConfigs(prev => {
-              const next: NodeAttachments = { ...prev }
-              for (const [nodeId, attaches] of Object.entries(additions)) {
-                next[nodeId] = [...(next[nodeId] ?? []), ...attaches]
-              }
-              return next
-            })
-          }}
-          onClose={() => setTfImporterOpen(false)}
-        />
       )}
 
       {/* rally_max_rounds 到達時の継続/停止モーダル */}

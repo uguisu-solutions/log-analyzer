@@ -1,4 +1,4 @@
-# Config-First 2 段階解析 — 設計ドキュメント (Phase A + A.5 + G + B + C + D + E + F)
+# config-log 解析 — 設計ドキュメント (Phase A + A.5 + G + B + C + D + E + F)
 
 **作成日**: 2026-05-26
 **更新日**:
@@ -7,8 +7,66 @@
   - 2026-05-26 — Phase C (GPT 監査) / D (ラウンド集計) / E (チャット表示) / F (問診票有無比較) を追記
   - 2026-05-27 — Phase E 拡張 (デフォルト chat / LiveChatView / ChatInput) と
                  介入時 orchestrator 再選択 (§9.11) を追記
-**ブランチ**: `feature/config-first-stages`
+  - 2026-06-02 — **「Config-First 解析」を「config-log 解析」にリネーム + モード刷新**
+                 (§0 参照)。Terraform 一括取込を廃止。
+**ブランチ**: `feature/config-log-analysis`
 **前提**: 既存のトポロジー解析タブ ([feature/topology-analysis](../reports/poc_progress_2026-05-25.md)) が `main` 取り込み待ち。本機能はそこから派生する後続フェーズ。
+
+> **注記**: 本ドキュメントは Phase A〜F の設計経緯を残す**履歴文書**です。現行の挙動は
+> 冒頭の §0 とコード ([rally_two_stage.py](../../apps/agents/src/log_analyzer/rally_two_stage.py) /
+> [api.py](../../apps/agents/src/log_analyzer/api.py) / [ConfigLogAnalysis.tsx](../../apps/ui/src/ConfigLogAnalysis.tsx))
+> を正とします。§3 以降の "Config-First" / "skip_config_stage" / Terraform 等の記述は
+> 当時のもので、§0 で上書きされている点に注意してください。
+
+---
+
+## 0. 現行仕様 (2026-06-02 リネーム + モード刷新 / 2026-06-02 第2次改修)
+
+「Config-First 解析」タブを **「config-log 解析」** にリネームし、解析モードを次の
+2 軸の選択に再編した。旧 `skip_config_stage` (Configs 利用 ON/OFF) は廃止。
+
+1. **1 段階か 2 段階か** を選ぶ。
+2. **1 段階 (`analysis_mode="single"`)** の場合、使用データを選ぶ (`single_source`):
+   - `config`: 設定ファイルのみ → **ログ入力フォームを非表示**
+   - `log`: ログのみ → **設定入力フォームを非表示**
+   - `both` (既定): 設定 + ログを同時に投入
+3. **2 段階 (`analysis_mode="two_stage"`)** の場合、順序を選ぶ (`stage_order`):
+   - `config_log`: コンフィグ → (自動) → ログ
+   - `log_config`: ログ → (自動) → コンフィグ (逆順)
+
+### 第2次改修 (2026-06-02)
+
+- **人間承認を廃止**: 2 段階モードでも Stage 1 完了後に承認モーダルを出さず、**自動で
+  Stage 2 へ進む** (`run_two_stage_stream(require_approval=False)` が既定)。最終結果には
+  従来どおり `stage_outputs[0]` として Stage 1 の結果を保持する。`stage_one_complete` は
+  引き続き emit し、直後に `user_decision {"action":"advance","auto":true}` を流す。
+  rally_max_rounds 上限到達時の continue/stop モーダルは存続。
+- **構成セレクタを撤去**: config-log は config4 (rally) 固定のためタブ内の構成選択 UI を削除
+  (内部では引き続き config4 系構成 id を送る)。
+- **ファイル D&D アップロード**: 構成図はキャンバスへ画像をドロップ、ログ/設定は各ノードの
+  添付セクションへファイル (複数可) をドロップして追加できる。
+- **タブ非表示**: アプリの「構成比較 / 構成設計(pipeline) / トポロジー解析」タブを UI 非表示
+  (コードは残置)。
+
+| 項目 | 変更後 |
+|---|---|
+| タブ名 / mode id | config-log 解析 / `config-log` |
+| エンドポイント | `POST /api/runs/config-log-stream` |
+| コンポーネント | `apps/ui/src/ConfigLogAnalysis.tsx` |
+| リクエスト | `ConfigLogRunRequest` (`analysis_mode` / `single_source` / `stage_order`) |
+| 構成 | config4 固定 (タブ内セレクタなし) |
+| 人間承認 | **なし** (2 段階は自動進行。`require_approval=False`) |
+| 2 段階 SSE | `stage_one_start` → … → `stage_one_complete` → `user_decision(auto)` → `stage_two_start` → `final` (各イベントに `stage` と `stage_ordinal` を付与) |
+| 1 段階 SSE | `single_stage_start` → (rally events, `stage_ordinal=1`) → `final` (`stage_outputs` は 1 件) |
+| `StageOutput.stage` | `"config"` / `"log"` / `"both"` (1 段階 both 用) |
+| 既定モード | 1 段階 `config + log 同時` |
+| ファイル入力 | 構成図 / ログ / 設定をドラッグ＆ドロップで追加可 |
+| Terraform 一括取込 | **廃止** (`TerraformImporter` / `terraformParser` / サンプル `terraform/` を削除) |
+| テスト | `apps/agents/tests/test_config_log.py` |
+
+2 段階の Stage 間仮説受け渡しは順序非依存に一般化 ([`_build_stage_one_hypothesis_block(source_kind, target_kind)`](../../apps/agents/src/log_analyzer/rally_two_stage.py))。
+以降の §1〜§11 は当時の Config-First (config→log 固定 + skip トグル + 人間承認必須) を前提とした
+記述で、歴史的経緯として残す (人間承認・skip トグルは現行では無効)。
 
 ---
 
@@ -252,7 +310,7 @@ Stage 2 ライブログ中 → Stage 2 の suspected_nodes でハイライト
 
 ## 8. テスト計画
 
-### バックエンド単体テスト (`tests/test_config_first_api.py`)
+### バックエンド単体テスト (`tests/test_config_log.py`)
 
 | テスト | 検証 |
 |---|---|
@@ -290,6 +348,11 @@ Stage 2 ライブログ中 → Stage 2 の suspected_nodes でハイライト
 ---
 
 ## 9.5. Phase A.5: Configs 利用 ON/OFF トグル
+
+> ⚠️ **廃止 (2026-06-02)**: 本節の `skip_config_stage` トグルは §0 の
+> `analysis_mode` / `single_source` / `stage_order` 体系に置き換えられた。
+> 「Logs のみ 1 段階」は現行では `analysis_mode="single", single_source="log"` に相当する。
+> 以下は当時の設計記録。
 
 議事録「**システム側で、コンフィグ利用のオン/オフ切り替えができるように準備する**」に対応。
 タブ内のラジオボタンで以下の 2 モードを切り替え可能:

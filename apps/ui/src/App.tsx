@@ -7,7 +7,7 @@ import { LogManager } from './LogManager'
 import { PipelineBuilder } from './PipelineBuilder'
 import { RunHistoryView } from './RunHistoryView'
 import { TopologyAnalysis } from './TopologyAnalysis'
-import { ConfigFirstAnalysis } from './ConfigFirstAnalysis'
+import { ConfigLogAnalysis } from './ConfigLogAnalysis'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -21,7 +21,7 @@ import './App.css'
 
 const API_BASE = 'http://localhost:8000'
 
-type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-first'
+type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-log'
 
 function ResultDetails({ result }: { result: AnalysisResult }) {
   return (
@@ -823,26 +823,14 @@ function App() {
       </header>
 
       <div className="mode-tabs">
+        {/* 構成比較 / 構成設計（pipeline）/ トポロジー解析 タブは非表示
+            (コードは残置。再表示する場合はこのコメント内のボタンを戻す) */}
         <button
           onClick={() => setMode('single')}
           className={mode === 'single' ? 'tab active' : 'tab'}
           disabled={singleRunning || isCompareRunning}
         >
           単一実行
-        </button>
-        <button
-          onClick={() => setMode('compare')}
-          className={mode === 'compare' ? 'tab active' : 'tab'}
-          disabled={singleRunning || isCompareRunning}
-        >
-          構成比較
-        </button>
-        <button
-          onClick={() => setMode('builder')}
-          className={mode === 'builder' ? 'tab active' : 'tab'}
-          disabled={singleRunning || isCompareRunning}
-        >
-          構成設計（pipeline）
         </button>
         <button
           onClick={() => setMode('logs')}
@@ -859,18 +847,11 @@ function App() {
           実行履歴
         </button>
         <button
-          onClick={() => setMode('topology')}
-          className={mode === 'topology' ? 'tab active' : 'tab'}
+          onClick={() => setMode('config-log')}
+          className={mode === 'config-log' ? 'tab active' : 'tab'}
           disabled={singleRunning || isCompareRunning}
         >
-          トポロジー解析
-        </button>
-        <button
-          onClick={() => setMode('config-first')}
-          className={mode === 'config-first' ? 'tab active' : 'tab'}
-          disabled={singleRunning || isCompareRunning}
-        >
-          Config-First 解析
+          config-log 解析
         </button>
       </div>
 
@@ -908,8 +889,8 @@ function App() {
         />
       )}
 
-      {mode === 'config-first' && (
-        <ConfigFirstAnalysis
+      {mode === 'config-log' && (
+        <ConfigLogAnalysis
           configList={configList}
           logs={logs}
           parseSSE={parseSSE}
@@ -968,8 +949,8 @@ function App() {
             <div className="config5-hint view-only-hint">
               この構成は <strong>表示専用</strong> です（実行不可）。
               構成図を参考にしつつ、解析の実行は
-              <button className="link-button" onClick={() => setMode('config-first')}>
-                「Config-First 解析」タブ
+              <button className="link-button" onClick={() => setMode('config-log')}>
+                「config-log 解析」タブ
               </button>
               から行ってください。
             </div>

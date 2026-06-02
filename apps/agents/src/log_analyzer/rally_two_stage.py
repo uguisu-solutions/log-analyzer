@@ -1,20 +1,25 @@
-"""Config-First 2 段階解析オーケストレータ (Phase A)。
+"""config-log 解析の 2 段階オーケストレータ。
 
-議事録 (2026-05-26) で合意された「人の思考プロセスに近い」検証パターン:
+議事録 (2026-05-26) で合意された「人の思考プロセスに近い」検証パターンを
+一般化したもの。Stage 1 で当たりをつけ、人間承認を挟んで Stage 2 で検証する。
 
-    Stage 1: コンフィグ情報のみで原因の当たりをつける
+    Stage 1: 一方のデータ種別 (config もしくは log) だけで原因の当たりをつける
        │
        ▼
     人間による必須承認 (advance / abort)
        │
        ▼
-    Stage 2: ログで事実確認する
+    Stage 2: もう一方を加えて事実確認する
+
+2 段階の順序は ``stage_one_kind`` / ``stage_two_kind`` で指定する:
+
+- ``config`` → ``log`` (既定): コンフィグで仮説 → ログで検証
+- ``log`` → ``config``:        ログで仮説 → コンフィグで裏取り
 
 各 Stage の内部は既存 ``run_rally_stream`` をそのまま再利用する (プロンプトは変えない)。
-Stage 1 と Stage 2 の差は **integrator に渡される log_text** だけ:
-
-- Stage 1: ``_build_topology_log_text(topology, node_logs={}, node_configs=...)``
-- Stage 2: Stage 1 仮説サマリ + ``_build_topology_log_text(topology, node_logs=..., node_configs=...)``
+Stage 1 と Stage 2 の差は **integrator に渡される log_text** だけ。具体的な合成は
+呼び出し側 (api.py) が ``stage_one_log_text`` と ``stage_two_log_text_template`` で用意し、
+本モジュールは段階遷移と decision_waiter 制御に専念する。
 
 SSE 経由でブラウザに 2 段階分のイベントを順に流す。Stage 1 完了時に
 ``stage_one_complete`` を emit して decision_waiter で人間入力を待つ。
@@ -40,37 +45,68 @@ from log_analyzer.schema import (
 TwoStageDecisionWaiter = Callable[[], Awaitable[dict[str, Any]]]
 
 
-_STAGE_LABELS = {
-    "config": "Stage 1: コンフィグ解析",
-    "log": "Stage 2: ログ検証",
+# データ種別 (config / log / both) ごとの日本語ラベル
+_KIND_LABELS = {
+    "config": "コンフィグ",
+    "log": "ログ",
+    "both": "コンフィグ + ログ",
+}
+# 仮説ブロックの「検証対象」表現
+_VERIFY_TARGET_LABELS = {
+    "config": "設定情報",
+    "log": "実ログ",
+}
+# 仮説ブロックの「仮説の出所」表現
+_SOURCE_LABELS = {
+    "config": "コンフィグ解析",
+    "log": "ログ解析",
 }
 
 
-def _build_stage_one_hypothesis_block(stage_one: StageOutput) -> str:
+def _stage_label(ordinal: int, kind: str) -> str:
+    """Stage 表示ラベルを順序とデータ種別から組み立てる。
+
+    1 段目は「解析」(当たりをつける)、2 段目は「検証」(事実確認) と表現する。
+    """
+    base = _KIND_LABELS.get(kind, kind)
+    suffix = "解析" if ordinal <= 1 else "検証"
+    return f"Stage {ordinal}: {base}{suffix}"
+
+
+def _build_stage_one_hypothesis_block(
+    stage_one: StageOutput,
+    source_kind: str = "config",
+    target_kind: str = "log",
+) -> str:
     """Stage 1 の結果を Stage 2 の log_text 先頭に挿入する仮説ブロック。
 
-    LLM (integrator / 監視) は自然にこのブロックを読み「仮説をログで検証する」モードになる。
+    LLM (integrator / 監視) は自然にこのブロックを読み「仮説を検証する」モードになる。
+    ``source_kind`` は仮説の出所 (config / log)、``target_kind`` は検証に使うデータ種別。
     """
     if not stage_one.suspected_node_findings and not stage_one.summary:
         return ""
+    source_label = _SOURCE_LABELS.get(source_kind, source_kind)
+    target_label = _VERIFY_TARGET_LABELS.get(target_kind, target_kind)
     lines: list[str] = []
-    lines.append("## Stage 1 仮説 (コンフィグ解析より)")
+    lines.append(f"## Stage 1 仮説 ({source_label}より)")
     if stage_one.summary:
         lines.append(stage_one.summary)
     if stage_one.suspected_node_findings:
         lines.append("")
-        lines.append("コンフィグ情報から推定された障害候補ノード:")
+        lines.append(f"{source_label}から推定された障害候補ノード:")
         for f in stage_one.suspected_node_findings:
             sev = f.severity or "?"
             lines.append(f"- {f.node_id} [{sev}]: {f.summary or '(詳細未記載)'}")
     lines.append("")
-    lines.append("以下の実ログでこれらの仮説を **検証** してください。")
+    lines.append(f"以下の{target_label}でこれらの仮説を **検証** してください。")
     lines.append("仮説が裏付けられれば確証を強め、矛盾があれば修正してください。")
     lines.append("")
     return "\n".join(lines) + "\n"
 
 
-def _result_to_stage_output(stage: str, result: AnalysisResult) -> StageOutput:
+def _result_to_stage_output(
+    stage: str, result: AnalysisResult, *, stage_label: str | None = None
+) -> StageOutput:
     """``run_rally_stream`` の最終 result を StageOutput に変換。"""
     summary_parts: list[str] = []
     for c in result.root_cause_candidates[:2]:
@@ -78,7 +114,7 @@ def _result_to_stage_output(stage: str, result: AnalysisResult) -> StageOutput:
     summary = " / ".join(summary_parts) if summary_parts else ""
     return StageOutput(
         stage=stage,
-        stage_label=_STAGE_LABELS.get(stage, stage),
+        stage_label=stage_label or _stage_label(1, stage),
         confidence=result.confidence,
         summary=summary,
         suspected_node_ids=list(result.suspected_node_ids),
@@ -98,6 +134,7 @@ def _result_to_stage_output(stage: str, result: AnalysisResult) -> StageOutput:
 async def _run_one_stage(
     *,
     stage: str,
+    ordinal: int,
     log_text: str,
     log_ref: str,
     topology_context: dict,
@@ -108,9 +145,10 @@ async def _run_one_stage(
 ) -> AsyncIterator[StreamEvent | AnalysisResult]:
     """単一 Stage の rally を実行し、SSE イベントを順次 yield する。
 
-    各 ``run_rally_stream`` のイベントに ``stage`` キーを付加して UI 側で
-    Stage の区別をできるようにする。``final`` イベントの代わりに最終 ``AnalysisResult``
-    を最後の要素として yield する (呼び出し側で StageOutput に変換)。
+    各 ``run_rally_stream`` のイベントに ``stage`` (データ種別) と ``stage_ordinal``
+    (1 / 2) を付加して UI 側で Stage の区別をできるようにする。``final`` イベントの
+    代わりに最終 ``AnalysisResult`` を最後の要素として yield する (呼び出し側で
+    StageOutput に変換)。
     """
     final_result: AnalysisResult | None = None
     async for ev in run_rally_stream(
@@ -125,6 +163,7 @@ async def _run_one_stage(
         # stage 情報を data に注入 (UI 側で Stage 1/2 の区別に使う)
         if "stage" not in ev.data:
             ev.data["stage"] = stage
+        ev.data.setdefault("stage_ordinal", ordinal)
         if ev.kind == "final":
             # final は本ラッパが最終 AnalysisResult に統合してから上層に流すため、
             # ここでは生 final を上に流さない。result のみ捕捉。
@@ -199,42 +238,55 @@ async def run_two_stage_stream(
     stage_two_log_text_template: Callable[[StageOutput], str],
     log_ref: str,
     topology_context: dict,
+    stage_one_kind: str = "config",
+    stage_two_kind: str = "log",
     prompt_overrides: dict[str, str] | None = None,
     model_overrides: dict[str, str] | None = None,
     rally_max_rounds: int = 3,
     decision_waiter: TwoStageDecisionWaiter | None = None,
     audit_after_integrator: bool = False,
+    require_approval: bool = False,
 ) -> AsyncIterator[StreamEvent]:
-    """Config-First 2 段階解析の SSE ストリーミング実行。
+    """config-log 解析の 2 段階 SSE ストリーミング実行。
 
-    呼び出し側 (api.py) が ``stage_one_log_text`` (configs のみで合成済み) と
-    ``stage_two_log_text_template`` (Stage 1 結果を受けて Stage 2 ログを返す関数) を
+    呼び出し側 (api.py) が ``stage_one_log_text`` (Stage 1 のデータ種別だけで合成済み)
+    と ``stage_two_log_text_template`` (Stage 1 結果を受けて Stage 2 ログを返す関数) を
     用意することで、本関数は段階遷移と decision_waiter 制御に専念する。
+
+    ``stage_one_kind`` / ``stage_two_kind`` で順序を指定する:
+    ``config`` → ``log`` (既定) または ``log`` → ``config``。
+
+    ``require_approval`` が False (既定) のときは Stage 1 完了後に人間承認を挟まず、
+    そのまま自動で Stage 2 へ進む。True のときのみ ``decision_waiter`` で advance/abort を待つ。
+    (rally_max_rounds 上限到達時の continue/stop は require_approval に依らず各 Stage 内で機能する。)
 
     SSE シーケンス:
         stage_one_start
-        (run_rally_stream のイベント群、stage="config")
-        stage_one_complete  ← decision_waiter で advance/abort 待ち
-        user_decision
-        [advance]: stage_two_start → (rally events stage="log") → final
-        [abort]:                                                  → final
+        (run_rally_stream のイベント群、stage=stage_one_kind, stage_ordinal=1)
+        stage_one_complete
+        user_decision (require_approval=False のときは {"action":"advance","auto":true})
+        stage_two_start → (rally events stage=stage_two_kind) → final
+        [require_approval=True かつ abort 選択時]: stage_two をスキップして final
     """
     p_overrides = prompt_overrides or {}
     m_overrides = model_overrides or {}
     stage_outputs: list[StageOutput] = []
     overall_trace_id: str = ""
+    stage_one_label = _stage_label(1, stage_one_kind)
+    stage_two_label = _stage_label(2, stage_two_kind)
 
     # ─── Stage 1 ────────────────────────────────────────────────
     yield StreamEvent(
         "stage_one_start",
-        {"stage": "config", "stage_label": _STAGE_LABELS["config"]},
+        {"stage": stage_one_kind, "stage_ordinal": 1, "stage_label": stage_one_label},
     )
 
     stage_one_result: AnalysisResult | None = None
     stage_one_ctx = dict(topology_context)
-    stage_one_ctx["stage"] = "config"
+    stage_one_ctx["stage"] = stage_one_kind
     async for item in _run_one_stage(
-        stage="config",
+        stage=stage_one_kind,
+        ordinal=1,
         log_text=stage_one_log_text,
         log_ref=f"{log_ref}::stage1",
         topology_context=stage_one_ctx,
@@ -249,65 +301,76 @@ async def run_two_stage_stream(
             yield item
 
     if stage_one_result is None:
-        yield StreamEvent("error", {"stage": "config", "message": "Stage 1 が結果を返しませんでした"})
+        yield StreamEvent("error", {"stage": stage_one_kind, "message": "Stage 1 が結果を返しませんでした"})
         return
 
-    stage_one_output = _result_to_stage_output("config", stage_one_result)
+    stage_one_output = _result_to_stage_output(
+        stage_one_kind, stage_one_result, stage_label=stage_one_label
+    )
     stage_outputs.append(stage_one_output)
     overall_trace_id = stage_one_output.trace_id
 
-    # ─── Stage 1 完了通知 + 必須承認待ち ────────────────────────
+    # ─── Stage 1 完了通知 ───────────────────────────────────────
+    _verify_word = _VERIFY_TARGET_LABELS.get(stage_two_kind, stage_two_kind)
+    _auto = not require_approval
     yield StreamEvent(
         "stage_one_complete",
         {
-            "stage": "config",
+            "stage": stage_one_kind,
+            "stage_ordinal": 1,
             "stage_output": stage_one_output.model_dump(mode="json"),
-            "message": "コンフィグ解析が完了しました。ログで事実確認に進むか選択してください。",
+            "auto_advance": _auto,
+            "message": f"{_SOURCE_LABELS.get(stage_one_kind, stage_one_kind)}が完了しました。"
+                       + (f"そのまま{_verify_word}で事実確認に進みます。" if _auto
+                          else f"{_verify_word}で事実確認に進むか選択してください。"),
         },
     )
 
-    if decision_waiter is None:
-        # decision_waiter が無い場合は自動で abort 扱い (テスト経路)
-        decision = {"action": "abort"}
-    else:
-        try:
-            decision = await decision_waiter()
-        except Exception as e:
-            yield StreamEvent("error", {"stage": "await_stage_decision", "message": str(e)})
+    if require_approval:
+        # 人間承認モード: decision_waiter で advance/abort を待つ
+        if decision_waiter is None:
+            decision = {"action": "abort"}
+        else:
+            try:
+                decision = await decision_waiter()
+            except Exception as e:
+                yield StreamEvent("error", {"stage": "await_stage_decision", "message": str(e)})
+                return
+        yield StreamEvent("user_decision", decision)
+        action = str(decision.get("action") or "").lower()
+        if action == "abort":
+            # Stage 1 のみの最終結果を組み立てて終了
+            final = _build_final_result(
+                stage_outputs=stage_outputs,
+                trace_id=overall_trace_id,
+                log_ref=log_ref,
+            )
+            if audit_after_integrator:
+                async for ev in _attach_audit(final, stage_one_log_text, topology_context):
+                    yield ev
+            yield StreamEvent("final", {"result": final.model_dump(mode="json")})
             return
-
-    yield StreamEvent("user_decision", decision)
-
-    action = str(decision.get("action") or "").lower()
-    if action == "abort":
-        # Stage 1 のみの最終結果を組み立てて終了
-        final = _build_final_result(
-            stage_outputs=stage_outputs,
-            trace_id=overall_trace_id,
-            log_ref=log_ref,
-        )
-        if audit_after_integrator:
-            async for ev in _attach_audit(final, stage_one_log_text, topology_context):
-                yield ev
-        yield StreamEvent("final", {"result": final.model_dump(mode="json")})
-        return
-    if action != "advance":
-        yield StreamEvent(
-            "error",
-            {
-                "stage": "await_stage_decision",
-                "message": f"unknown action='{decision.get('action')}', expected advance/abort",
-            },
-        )
-        return
+        if action != "advance":
+            yield StreamEvent(
+                "error",
+                {
+                    "stage": "await_stage_decision",
+                    "message": f"unknown action='{decision.get('action')}', expected advance/abort",
+                },
+            )
+            return
+    else:
+        # 自動進行: 人間承認を挟まずそのまま Stage 2 へ
+        yield StreamEvent("user_decision", {"action": "advance", "auto": True})
 
     # ─── Stage 2 ────────────────────────────────────────────────
     stage_two_log_text = stage_two_log_text_template(stage_one_output)
     yield StreamEvent(
         "stage_two_start",
         {
-            "stage": "log",
-            "stage_label": _STAGE_LABELS["log"],
+            "stage": stage_two_kind,
+            "stage_ordinal": 2,
+            "stage_label": stage_two_label,
             "prior_hypothesis_summary": stage_one_output.summary,
             "prior_suspected_node_ids": list(stage_one_output.suspected_node_ids),
         },
@@ -315,12 +378,13 @@ async def run_two_stage_stream(
 
     stage_two_result: AnalysisResult | None = None
     stage_two_ctx = dict(topology_context)
-    stage_two_ctx["stage"] = "log"
+    stage_two_ctx["stage"] = stage_two_kind
     stage_two_ctx["prior_hypothesis"] = [
         f.model_dump() for f in stage_one_output.suspected_node_findings
     ]
     async for item in _run_one_stage(
-        stage="log",
+        stage=stage_two_kind,
+        ordinal=2,
         log_text=stage_two_log_text,
         log_ref=f"{log_ref}::stage2",
         topology_context=stage_two_ctx,
@@ -335,10 +399,12 @@ async def run_two_stage_stream(
             yield item
 
     if stage_two_result is None:
-        yield StreamEvent("error", {"stage": "log", "message": "Stage 2 が結果を返しませんでした"})
+        yield StreamEvent("error", {"stage": stage_two_kind, "message": "Stage 2 が結果を返しませんでした"})
         return
 
-    stage_two_output = _result_to_stage_output("log", stage_two_result)
+    stage_two_output = _result_to_stage_output(
+        stage_two_kind, stage_two_result, stage_label=stage_two_label
+    )
     stage_outputs.append(stage_two_output)
 
     final = _build_final_result(

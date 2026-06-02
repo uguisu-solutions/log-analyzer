@@ -29,14 +29,13 @@
 - **ログ管理タブ**: アップロード / プレビュー / 削除
 - **実行履歴タブ**: SQLite に各実行のメタデータ（confidence / tokens / Langfuse trace_id）を残し、フィルタ表示
 - **トポロジー解析タブ**: ネットワーク構成図画像を取り込み、各ノードに **複数のログファイル + 複数の設定ファイル (Config)** を割り当てて構成4 で解析。障害候補ノードを severity 別 (直接原因=赤+点滅 / 影響を受けた側=橙 / 関与なし=非ハイライト) に矩形ハイライト + 委譲チェーン履歴 + 実行グラフを同一タブで表示
-- **Config-First 解析タブ**: 「人の思考プロセス」に近い 2 段階解析 (Configs → 人間承認モーダル → Logs 検証)。`Configs 利用 ON/OFF` で 1 段階モード (Logs のみ) と比較可能。問診票・GPT 監査・ラウンド単位 metrics 表示・チャット形式 UI 対応
-- **チャット形式 UI (デフォルト)**: トポロジー解析 / Config-First タブで「会話スレッド」表示。実行中は SSE イベントを `ChatMessage` に逐次変換、完了後は AnalysisResult を会話形式で再構成
+- **config-log 解析タブ**: 構成図 + Config / Log を入力に rally で根本原因を解析（構成は config4 固定）。解析モードを 2 軸で選択可能 — **1 段階**（config のみ / log のみ / config + log 同時。config のみ・log のみのときは不要な入力フォームを自動的に隠す）と **2 段階**（config → log / log → config。Stage 1 で当たりをつけ、**人間承認なしで自動的に Stage 2 の検証へ進む**。最終結果には各 Stage の結果を保持）。構成図・ログ・設定は**ファイルのドラッグ＆ドロップ**でも追加可。問診票・GPT 監査・ラウンド単位 metrics 表示・チャット形式 UI 対応
+- **チャット形式 UI (デフォルト)**: トポロジー解析 / config-log タブで「会話スレッド」表示。実行中は SSE イベントを `ChatMessage` に逐次変換、完了後は AnalysisResult を会話形式で再構成
 - **実行中の介入入力**: チャット入力欄から `コメント` / `ログ` / `設定` の 3 タイプを送信可能。**送信を検知すると rally が orchestrator に戻り初期ノードを再選択**（議事録「処理中にプロンプトで介入があった場合は、一度オーケストレーションノードに戻り、初期ノード選択から再開」に対応）
 - **問診票**: 5 項目のデフォルトテンプレを SQLite に同梱。実行前にチャット内で記入し、整形して LLM の最先頭 user メッセージに注入
 - **GPT 監査エージェント**: 整合性チェック専用に GPT-4o-mini を integrator 後段で 1 回呼び出し、verdict (`agree` / `partial` / `disagree` / `uncertain`) + 指摘 + 別仮説を返す
 - **ラウンド単位 metrics**: orchestrator / 各監視 / integrator 単位で tokens / latency / model をテーブル表示
 - **問診票あり/なし比較ベンチマーク**: `scripts/benchmark_questionnaire.py` でシナリオを順次実行し精度・速度・コストを CSV 化
-- **Terraform 一括取込**: `.tf` ファイルから `resource "type" "label" { ... }` を抽出し、ノード id と `_` ↔ `-` 正規化で自動マッチして各ノードの configs に一括投入（per-node 添付と併存可能）
 - Langfuse による全 LLM 呼び出しのトレース・トークン消費記録 + UI 直リンク
 - **Prompt caching**: orchestrator / 監視 / integrator の system プロンプトと安定 user ブロックに `cache_control: ephemeral` を設定し、連続実行で 2 回目以降の入力 token を最大 90% 削減
 
@@ -55,7 +54,7 @@
 | スキーマ | Pydantic v2 |
 | 永続化 | SQLite（ユーザー定義構成 / 実行履歴）+ ローカル FS（ログ・トポロジ） |
 | 観測性 | [Langfuse](https://langfuse.com/) v2（OSS LLMOps、Docker Compose で同梱） |
-| テスト | pytest（101 件） |
+| テスト | pytest（107 件） |
 
 > **AWS 不採用方針**: Step Functions / Bedrock / DynamoDB / S3 は使用しません。Python asyncio + LangGraph + Anthropic/OpenAI 直叩き + SQLite + ローカル FS で代替しています。
 
@@ -94,7 +93,7 @@ prottype1/
 │   │   │   ├── api.py                 # FastAPI エンドポイント（SSE 含む）
 │   │   │   └── cli.py                 # `log-analyze` CLI
 │   │   ├── scripts/compare_configs.py # 複数構成 × 複数ログ一括比較
-│   │   └── tests/                     # pytest（101 件）
+│   │   └── tests/                     # pytest（107 件）
 │   └── ui/                     # React フロントエンド
 │       └── src/
 │           ├── App.tsx                # タブ管理 / 単一実行 / 比較 / 構成設計 / ログ管理 / 実行履歴 / トポロジー解析
@@ -204,17 +203,17 @@ npm run dev
 
 ### Web UI（推奨）
 
-`http://localhost:5173` を開くと 7 タブが表示されます。
+`http://localhost:5173` を開くと 4 タブ（**単一実行 / ログ管理 / 実行履歴 / config-log 解析**）が表示されます。
+
+> **タブの表示状態**: 議事録の運用に合わせ **構成比較 / 構成設計（pipeline）/ トポロジー解析** タブは現在 UI 非表示です（実装コードは残置。再表示は [App.tsx](apps/ui/src/App.tsx) のタブ定義のコメントを戻すだけ）。
 
 | タブ | 用途 |
 |---|---|
-| **単一実行** | ログを 1 つ選び、構成を指定して分析実行 → 結果を表示。config4 では SSE で各ラウンドをリアルタイム表示 + ラリー制御パネル（最大ラウンド数）+ 上限到達時の確認モーダル（+N 延長 / 停止選択）。**config-first 構成を選ぶとメタフロー構成図のみ表示 (実行は Config-First タブから)** |
-| **構成比較** | 複数構成を同じログに同時実行 → 確信度・トークン・レイテンシを並べて比較 |
-| **構成設計（pipeline）** | 構成5 を D&D で設計 → ユーザー定義構成として保存 |
+| **単一実行** | ログを 1 つ選び、構成を指定して分析実行 → 結果を表示。config4 では SSE で各ラウンドをリアルタイム表示 + ラリー制御パネル（最大ラウンド数）+ 上限到達時の確認モーダル（+N 延長 / 停止選択）。**config-log 構成を選ぶとメタフロー構成図のみ表示 (実行は config-log 解析タブから)** |
 | **ログ管理** | `samples/logs/` 配下のログを一覧 / アップロード（10 MB 上限）/ 先頭 200 行プレビュー / 削除 |
 | **実行履歴** | SQLite に蓄積した過去実行を構成 / ログ / 部分文字列でフィルタ表示 + Langfuse 直リンク |
-| **トポロジー解析** | ネットワーク構成図画像 (PNG/SVG, 5MB 上限) をアップロード → 矩形描画でノード (id/type/label/ip) を定義 → 各ノードに **複数のログ + 複数の設定ファイル (Config)** を割り当てて構成4 で解析 → 障害候補ノードを severity 別 (直接原因 / 影響を受けた側 / 参考) に矩形ハイライト + 委譲チェーン履歴 + 実行グラフを表示。**Terraform 一括取込ボタン** で `.tf` から configs を自動マッチして一括投入も可。テストシナリオ: `samples/topology/scenario1_lb_fw_denial/` |
-| **Config-First 解析** | 議事録に基づく **2 段階解析** (Configs → 人間承認 → Logs 検証)。`Configs 利用 ON/OFF` で 1 段階モードと比較可。**デフォルトでチャット表示**、実行中の介入入力 (コメント / ログ / 設定) で **orchestrator が初期ノードを再選択**。問診票・GPT 監査・ラウンド単位 metrics 表示も対応。テストシナリオ: `samples/topology/scenario2_api_acl_missing/` |
+| **config-log 解析** | 構成図 + Config / Log を入力に rally で根本原因を解析（構成は config4 固定でセレクタなし）。**1 段階**（config のみ / log のみ / config + log 同時）と **2 段階**（config → log / log → config。**人間承認なしで自動的に Stage 2 へ進行**、最終結果に各 Stage を保持）を選択。1 段階で config のみ・log のみのときは不要な入力フォームを自動的に隠す。構成図・ログ・設定は**ファイルのドラッグ＆ドロップ**でも追加可。**デフォルトでチャット表示**、実行中の介入入力 (コメント / ログ / 設定) で **orchestrator が初期ノードを再選択**。問診票・GPT 監査・ラウンド単位 metrics 表示も対応。テストシナリオ: `samples/topology/scenario2_api_acl_missing/` |
+| （非表示）**構成比較 / 構成設計 / トポロジー解析** | 現在 UI 非表示（コードは残置） |
 
 ノードをクリックすると **プロンプト・モデルをその場で編集** でき、実行前に試したり、ユーザー定義構成として別名保存できます。
 
@@ -291,7 +290,7 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 101 passed
+# 期待: 107 passed
 ```
 
 ---
@@ -330,11 +329,11 @@ PoC 段階のため未設定。
 ## 関連ドキュメント
 
 - [docs/plan/implementation_plan.md](docs/plan/implementation_plan.md) — 全体実装計画
-- [docs/plan/config_first_stages.md](docs/plan/config_first_stages.md) — Config-First 設計書 (Phase A〜F + E 拡張 + orchestrator 再選択)
+- [docs/plan/config_log_stages.md](docs/plan/config_log_stages.md) — config-log 解析 設計書 (1 段階 / 2 段階モード + Phase A〜F + E 拡張 + orchestrator 再選択)
 - [docs/plan/remaining_work.md](docs/plan/remaining_work.md) — 未実装バックログ
 - [docs/reports/poc_progress_2026-05-25.md](docs/reports/poc_progress_2026-05-25.md) — トポロジー解析タブ進捗
 - [docs/reports/poc_progress_2026-05-14.md](docs/reports/poc_progress_2026-05-14.md) — 構成4 委譲チェーン刷新
 - [samples/topology/scenario1_lb_fw_denial/README.md](samples/topology/scenario1_lb_fw_denial/README.md) — シナリオ 1 (トポロジー解析)
-- [samples/topology/scenario2_api_acl_missing/README.md](samples/topology/scenario2_api_acl_missing/README.md) — シナリオ 2 (Config-First 解析)
+- [samples/topology/scenario2_api_acl_missing/README.md](samples/topology/scenario2_api_acl_missing/README.md) — シナリオ 2 (config-log 解析)
 - [apps/agents/README.md](apps/agents/README.md) — バックエンド詳細
 - [infra/README.md](infra/README.md) — Langfuse セットアップ詳細

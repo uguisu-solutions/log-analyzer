@@ -2730,8 +2730,29 @@ code {
   height: 320px;
 }
 
-/* ─── Config-First 2 段階解析タブ ──────────────────────── */
-.config-first-mode .stage-indicator {
+/* ─── config-log: ファイル D&D ──────────────────────── */
+.topology-canvas.drag-over {
+  outline: 3px dashed #2563eb;
+  outline-offset: -3px;
+  background: #eff6ff;
+}
+.attach-section.drag-over {
+  outline: 2px dashed #2563eb;
+  outline-offset: -2px;
+  background: #eff6ff;
+  border-radius: 6px;
+}
+.attach-dnd-hint {
+  font-size: 0.78rem;
+  padding: 0.25rem 0;
+  margin-bottom: 0.25rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+  text-align: center;
+}
+
+/* ─── config-log 解析タブ ──────────────────────── */
+.config-log-mode .stage-indicator {
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -2881,7 +2902,7 @@ code {
   color: #fff;
 }
 
-/* ─── Config-First モード切替トグル ────────────────────── */
+/* ─── config-log モード切替トグル ────────────────────── */
 .topology-mode-bar {
   padding: 0.6rem 0.8rem;
   background: #fff;
@@ -3469,95 +3490,3 @@ code {
   color: #b3261e;
 }
 
-/* ─── Terraform 一括取込モーダル ─── */
-.tf-importer-modal {
-  max-width: 920px;
-  width: 90vw;
-  max-height: 90vh;
-  overflow-y: auto;
-}
-.tf-importer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.tf-importer-header h3 { margin: 0; }
-.btn-close {
-  background: none;
-  border: none;
-  font-size: 1.4rem;
-  cursor: pointer;
-  color: #666;
-  line-height: 1;
-}
-.btn-close:hover { color: #000; }
-.tf-importer-input {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 0.6rem;
-}
-.tf-importer-input-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
-.tf-importer-textarea {
-  width: 100%;
-  font-family: ui-monospace, "SF Mono", monospace;
-  font-size: 0.82rem;
-  padding: 0.5rem;
-  border: 1px solid #d0d5db;
-  border-radius: 4px;
-  resize: vertical;
-  box-sizing: border-box;
-}
-.tf-importer-actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
-.tf-importer-error {
-  margin-top: 0.6rem;
-  padding: 0.4rem 0.6rem;
-  background: #fdecea;
-  color: #7a0e08;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-.tf-importer-preview {
-  margin-top: 0.8rem;
-  border-top: 1px solid var(--border);
-  padding-top: 0.6rem;
-}
-.tf-importer-preview h4 { margin: 0 0 0.5rem 0; font-size: 0.95rem; }
-.tf-importer-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.84rem;
-}
-.tf-importer-table th, .tf-importer-table td {
-  padding: 0.35rem 0.5rem;
-  text-align: left;
-  border-bottom: 1px solid #e0e3e7;
-}
-.tf-importer-table th {
-  background: #f6f7f9;
-  font-weight: 700;
-  font-size: 0.78rem;
-}
-.tf-importer-table .tf-row-matched { background: #e7f5ec; }
-.tf-importer-table .tf-row-unmatched { background: #fff8e1; }
-.tf-importer-table code {
-  background: #f3f4f6;
-  padding: 0 0.3em;
-  border-radius: 3px;
-  font-size: 0.88em;
-}
-.tf-importer-table select {
-  font-size: 0.84rem;
-  padding: 0.2rem 0.3rem;
-  border: 1px solid #d0d5db;
-  border-radius: 3px;
-}
