@@ -27,10 +27,36 @@ def test_default_questionnaire_seeded(isolated_db):
     rows = storage.list_questionnaires()
     assert len(rows) == 1
     assert rows[0]["name"] == "default"
-    assert len(rows[0]["items"]) == 5
-    # 議事録合意の 5 項目が揃っている
-    keys = {it["key"] for it in rows[0]["items"]}
-    assert keys == {"symptom_onset", "scope", "reproducibility", "recent_changes", "free_notes"}
+    items = rows[0]["items"]
+    assert len(items) == 6
+    # 事象(必須) + 議事録合意の 5 項目が揃っている
+    keys = {it["key"] for it in items}
+    assert keys == {"event", "symptom_onset", "scope", "reproducibility", "recent_changes", "free_notes"}
+    # 事象は先頭かつ必須
+    assert items[0]["key"] == "event"
+    assert items[0]["required"] is True
+
+
+def test_default_questionnaire_migration_adds_event(isolated_db):
+    """event 無しの旧 default テンプレに init_db を再実行すると event が先頭に補われる。"""
+    import json
+    # default の items を旧スキーマ (event 無し) に差し替える
+    with storage._connect() as conn:
+        old_items = [
+            {"key": "symptom_onset", "label": "x", "type": "text",
+             "options": [], "placeholder": "", "required": False},
+        ]
+        conn.execute(
+            "UPDATE questionnaire_templates SET items_json = ? WHERE name = 'default'",
+            (json.dumps(old_items, ensure_ascii=False),),
+        )
+        conn.commit()
+    storage.init_db()  # マイグレーションが走る
+    default = next(r for r in storage.list_questionnaires() if r["name"] == "default")
+    keys = [it["key"] for it in default["items"]]
+    assert keys[0] == "event"
+    assert default["items"][0]["required"] is True
+    assert "symptom_onset" in keys  # 既存項目は保持
 
 
 def test_default_seed_idempotent(isolated_db):

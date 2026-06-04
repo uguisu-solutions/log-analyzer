@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChatHistoryView } from './ChatHistoryView'
 import { RoundMetricsView } from './RoundMetricsView'
+import { buildReasoningCsv, downloadCsv } from './reasoningCsv'
 import type {
   AnalysisHistoryDetail,
   AnalysisHistoryListResponse,
@@ -263,6 +264,12 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
       <div className="ah-detail-bar">
         <button className="btn-secondary" onClick={onBack}>← 一覧へ戻る</button>
         <h2>解析履歴 #{detail.id}</h2>
+        {result && (
+          <button className="btn-secondary btn-small"
+            onClick={() => downloadCsv(`reasoning-${result.trace_id?.slice(0, 8) || detail.id}.csv`, buildReasoningCsv(result))}>
+            推論過程を CSV 出力
+          </button>
+        )}
         <button className="btn-small btn-delete" onClick={onDelete}>削除</button>
       </div>
 

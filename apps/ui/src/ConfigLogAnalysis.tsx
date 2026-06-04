@@ -27,6 +27,7 @@ import { LiveChatView } from './LiveChatView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
+import { buildReasoningCsv, downloadCsv } from './reasoningCsv'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -145,6 +146,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const [stageOrder, setStageOrder] = useState<StageOrder>('config_log')
   // 問診票回答 (Phase B、揮発)
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
+  // 問診票の必須項目 (事象など) がすべて埋まっているか。実行可否のゲートに使う
+  const [questionnaireValid, setQuestionnaireValid] = useState<boolean>(false)
   // 監査エージェント (Phase C): integrator 後に GPT で独立検証
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
   // GPT 監査プロンプト (編集可能。既定はバックエンドから取得して初期表示)
@@ -401,6 +404,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     if (isRunning) return false
     if (!selectedConfig) return false
     if (topology.nodes.length === 0) return false
+    if (!questionnaireValid) return false  // 問診票の必須項目 (事象) が未入力なら実行不可
     if (analysisMode === 'single') {
       if (singleSource === 'config') return hasConfig
       if (singleSource === 'log') return hasLog
@@ -408,7 +412,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     }
     // 2 段階: Stage 1 の始動データ種別が揃っていること
     return stageKinds[0] === 'config' ? hasConfig : hasLog
-  }, [isRunning, selectedConfig, topology.nodes, analysisMode, singleSource, stageKinds, hasConfig, hasLog])
+  }, [isRunning, selectedConfig, topology.nodes, questionnaireValid, analysisMode, singleSource, stageKinds, hasConfig, hasLog])
 
   // ─── 実行 ────────────────────────────────────────────────────
   // 解析完了時に「解析履歴」へ保存する (best-effort、本流は壊さない)
@@ -669,6 +673,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         <QuestionnairePanel
           answers={questionnaireAnswers}
           onAnswersChange={setQuestionnaireAnswers}
+          onValidityChange={setQuestionnaireValid}
           disabled={isRunning}
         />
       )}
@@ -704,6 +709,12 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           <button onClick={cancel} className="btn-secondary">中止</button>
         )}
       </div>
+
+      {!isRunning && !questionnaireValid && (
+        <p className="muted" style={{ margin: '0.2rem 0 0.4rem' }}>
+          ※ 問診票の必須項目（事象）を入力すると解析を開始できます。
+        </p>
+      )}
 
       {/* GPT 監査プロンプト編集 (監査有効時のみ。既定は閉じていてクリックで展開) */}
       {auditAfterIntegrator && (
@@ -747,6 +758,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           <QuestionnairePanel
             answers={questionnaireAnswers}
             onAnswersChange={setQuestionnaireAnswers}
+            onValidityChange={setQuestionnaireValid}
             disabled={isRunning}
           />
           {streamEvents.length > 0 ? (
@@ -799,7 +811,16 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       {/* 最終結果ペイン */}
       {(stageStatus === 'completed' || stageStatus === 'aborted') && finalResult && (
         <section className="topology-result">
-          <h3>解析結果</h3>
+          <div className="result-header-bar">
+            <h3>解析結果</h3>
+            <button
+              type="button"
+              className="btn-secondary btn-small"
+              onClick={() => downloadCsv(`reasoning-${finalResult.trace_id?.slice(0, 8) || 'result'}.csv`, buildReasoningCsv(finalResult))}
+            >
+              推論過程を CSV 出力
+            </button>
+          </div>
           {viewMode === 'chat' ? (
             <ChatHistoryView result={finalResult} questionnaireAnswers={questionnaireAnswers} />
           ) : (
@@ -988,6 +1009,37 @@ function ResultTabs({ current, onChange, isTwoStage, stageOneOutput, stageTwoOut
   )
 }
 
+// 推奨アクションを 暫定対応 / 本質対応 に分けて表示する
+function RecommendedActionsSplit({ actions }: { actions: AnalysisResult['recommended_actions'] }) {
+  const groups: Array<['provisional' | 'permanent', string]> = [
+    ['provisional', '暫定対応'],
+    ['permanent', '本質対応'],
+  ]
+  return (
+    <>
+      {groups.map(([kind, label]) => {
+        const list = actions.filter(a =>
+          kind === 'provisional' ? a.kind === 'provisional' : a.kind !== 'provisional')
+        if (list.length === 0) return null
+        return (
+          <div key={kind} className="action-group">
+            <h5 className="action-group-title">{label}（{list.length}）</h5>
+            <ul className="actions">
+              {list.map((a, i) => (
+                <li key={i} className={a.human_judgment_required ? 'requires-human' : ''}>
+                  <span className={`risk risk-${a.risk_level}`}>{a.risk_level}</span>
+                  {a.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
+                  <span className="action-text">{a.action}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
 interface CombinedResultViewProps {
   result: AnalysisResult
   isTwoStage: boolean
@@ -1081,15 +1133,7 @@ function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTwoOutput
       </ul>
 
       <h4>推奨アクション（{result.recommended_actions.length}）</h4>
-      <ul className="actions">
-        {result.recommended_actions.map((a, i) => (
-          <li key={i} className={a.human_judgment_required ? 'requires-human' : ''}>
-            <span className={`risk risk-${a.risk_level}`}>{a.risk_level}</span>
-            {a.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
-            <span className="action-text">{a.action}</span>
-          </li>
-        ))}
-      </ul>
+      <RecommendedActionsSplit actions={result.recommended_actions} />
 
       {/* 監査エージェント (Phase C) の所見 */}
       {result.audit_report && <AuditReportView report={result.audit_report} />}

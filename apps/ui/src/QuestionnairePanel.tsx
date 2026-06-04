@@ -19,9 +19,12 @@ interface Props {
   answers: QuestionnaireAnswers
   onAnswersChange: (next: QuestionnaireAnswers) => void
   disabled?: boolean
+  // 必須項目がすべて埋まっているか (required=true の全項目) を親へ通知。
+  // 親はこれを実行可否 (canRun) のゲートに使える。安定したコールバックを渡すこと。
+  onValidityChange?: (allRequiredFilled: boolean) => void
 }
 
-export function QuestionnairePanel({ answers, onAnswersChange, disabled }: Props) {
+export function QuestionnairePanel({ answers, onAnswersChange, disabled, onValidityChange }: Props) {
   const [templates, setTemplates] = useState<QuestionnaireTemplate[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [expanded, setExpanded] = useState<boolean>(false)
@@ -52,6 +55,13 @@ export function QuestionnairePanel({ answers, onAnswersChange, disabled }: Props
 
   const items: QuestionnaireItem[] = selected?.items ?? []
   const answeredCount = items.reduce((n, it) => (answers[it.key]?.trim() ? n + 1 : n), 0)
+
+  // 必須項目がすべて埋まっているか (テンプレ未読込時は false=未充足扱い)
+  const requiredOk = useMemo(
+    () => selected != null && items.filter(it => it.required).every(it => (answers[it.key] ?? '').trim().length > 0),
+    [selected, items, answers],
+  )
+  useEffect(() => { onValidityChange?.(requiredOk) }, [requiredOk, onValidityChange])
 
   const handleTemplateChange = (id: number) => {
     setSelectedId(id)

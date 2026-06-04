@@ -52,6 +52,21 @@
   から取得し、実行時は `ConfigLogRunRequest.audit_system_prompt` で上書き送信する
   (空なら [audit_agent.py](../../apps/agents/src/log_analyzer/audit_agent.py) の既定 `SYSTEM_PROMPT`)。
 
+### 第3次改修 (2026-06-04 評価強化)
+
+- **モデルを Opus に統一**: config4(rally) の Claude 系ノード (orchestrator / 各監視 / integrator)
+  の既定モデルを `claude-opus-4-7` に変更 (orchestrator.py / monitors.py / integrator.py /
+  prompt_slots.py。env `RALLY_*_MODEL` で個別上書き可)。
+- **問診票「事象」を必須化**: デフォルト問診票の先頭に必須項目 `event`(事象) を追加
+  (storage.py。既存 default テンプレには `init_db` 時のマイグレーションで補完)。UI は必須項目が
+  未入力だと「解析を開始」を無効化 (`QuestionnairePanel.onValidityChange` → canRun ゲート)。
+- **推奨アクションを暫定対応／本質対応に分割**: `RecommendedAction.kind`
+  (`provisional`=暫定対応 / `permanent`=本質対応、既定 permanent) を追加し、integrator プロンプトで
+  両方の提示を指示。UI (ChatHistoryView / 結果ペイン) で種別ごとにグルーピング表示。
+- **推論過程の CSV 出力**: 解析結果ペインと解析履歴詳細に「推論過程を CSV 出力」ボタンを追加
+  ([reasoningCsv.ts](../../apps/ui/src/reasoningCsv.ts))。round_metrics を主軸に
+  stage / round / role / model / tokens / latency / confidence / rationale を行出力 (2 段階は Stage 別)。
+
 | 項目 | 変更後 |
 |---|---|
 | タブ名 / mode id | config-log 解析 / `config-log` |

@@ -49,3 +49,16 @@ def test_root_cause_ignores_legacy_rank_field():
     })
     assert not hasattr(candidate, "rank") or getattr(candidate, "rank", None) is None
     assert candidate.category == "FW"
+
+
+def test_recommended_action_kind_default_and_override():
+    """RecommendedAction.kind は既定 permanent、provisional 指定で上書きできる。"""
+    a = RecommendedAction(action="応急処置", human_judgment_required=False, risk_level=RiskLevel.LOW)
+    assert a.kind == "permanent"  # 旧データ互換: 未指定は本質対応扱い
+    b = RecommendedAction(
+        action="暫定回避", human_judgment_required=True, risk_level=RiskLevel.MID, kind="provisional"
+    )
+    assert b.kind == "provisional"
+    # ラウンドトリップで保持される
+    restored = RecommendedAction.model_validate(b.model_dump())
+    assert restored.kind == "provisional"

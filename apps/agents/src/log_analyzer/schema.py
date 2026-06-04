@@ -55,6 +55,9 @@ class RecommendedAction(BaseModel):
     action: str
     human_judgment_required: bool
     risk_level: RiskLevel
+    # 対応の種別: "provisional"=暫定対応(応急処置) / "permanent"=本質対応(恒久対策)。
+    # 旧データ互換のため既定は permanent。
+    kind: str = "permanent"
 
 
 class TraceNode(BaseModel):
