@@ -26,6 +26,10 @@ INTEGRATOR_PROMPT = """\
 - recommended_actions: ロールバック・再起動・設定変更・データ削除を伴うアクションは
   必ず `human_judgment_required: true`（議事録 L3、外せないフラグ）。
   各監視が立てた true は統合後も維持し、false に上書きしない
+  - 各アクションに `kind` を付与する:
+    - `"provisional"`: 暫定対応（応急処置・早期の症状緩和・回避策）
+    - `"permanent"`:   本質対応（根本原因の恒久的な解消）
+    可能なら **暫定対応と本質対応の両方**を提示する（少なくとも本質対応は 1 つ以上）
 - confidence: 監視間で結論が一致する度合いに応じて算出
   - 全監視一致 + トポロジ裏付けあり: 0.9 以上
   - 一部一致: 0.7 〜 0.85
@@ -38,7 +42,7 @@ INTEGRATOR_PROMPT = """\
     {"category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["..."]}
   ],
   "recommended_actions": [
-    {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high"}
+    {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high", "kind": "provisional|permanent"}
   ],
   "confidence": 0.0
 }
@@ -59,7 +63,10 @@ INTEGRATOR_PROMPT = """\
 ```
 {
   "root_cause_candidates": [{"category": "FW", "summary": "...", "evidence": ["..."]}],
-  "recommended_actions": [{"action": "...", "human_judgment_required": true, "risk_level": "high"}],
+  "recommended_actions": [
+    {"action": "api-backends 向け permit を一時的に再追加し疎通を回復", "human_judgment_required": true, "risk_level": "mid", "kind": "provisional"},
+    {"action": "ACL 変更の承認フロー・構成管理を整備し再発を防止", "human_judgment_required": true, "risk_level": "high", "kind": "permanent"}
+  ],
   "confidence": 0.85,
   "suspected_nodes": [
     {"node_id": "fw-01", "summary": "policy reload で lb-to-app-01 ルールが欠落し dst=10.0.2.11 が default-deny で落ちている", "severity": "primary"},
@@ -78,10 +85,10 @@ INTEGRATOR_PROMPT = """\
 def integrator_node(state: Config4State) -> dict:
     p_overrides = state.get("prompt_overrides", {}) or {}
     m_overrides = state.get("model_overrides", {}) or {}
-    # integrator は最終統合で高品質な推論が要るため Sonnet をデフォルト維持。
-    # 必要に応じ RALLY_INTEGRATOR_MODEL で Opus 4.7 等に切替可能。
+    # config-log 解析の評価方針 (2026-06) で Claude 系ノードは Opus に統一。
+    # 必要に応じ RALLY_INTEGRATOR_MODEL で切替可能。
     model = m_overrides.get("integrator") or os.environ.get(
-        "RALLY_INTEGRATOR_MODEL", "claude-sonnet-4-5"
+        "RALLY_INTEGRATOR_MODEL", "claude-opus-4-7"
     )
     system_prompt = p_overrides.get("integrator", INTEGRATOR_PROMPT)
 

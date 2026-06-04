@@ -161,6 +161,9 @@ def init_db() -> None:
 
 _DEFAULT_QUESTIONNAIRE_NAME = "default"
 _DEFAULT_QUESTIONNAIRE_ITEMS: list[dict] = [
+    {"key": "event", "label": "事象（何が起きているか）",
+     "type": "textarea", "options": [],
+     "placeholder": "観測されている事象を具体的に記述（必須）", "required": True},
     {"key": "symptom_onset", "label": "症状はいつから発生していますか",
      "type": "text", "options": [], "placeholder": "", "required": False},
     {"key": "scope", "label": "影響範囲",
@@ -177,25 +180,40 @@ _DEFAULT_QUESTIONNAIRE_ITEMS: list[dict] = [
 
 
 def _ensure_default_questionnaire(conn: sqlite3.Connection) -> None:
-    """name='default' のテンプレが無ければ作成 (初回起動時のみ)。"""
+    """name='default' のテンプレが無ければ作成 (初回起動時のみ)。
+
+    既に存在する場合でも、必須項目 ``event`` (事象) が欠けていれば先頭に補う
+    (旧スキーマからのマイグレーション。既存の他項目・回答テンプレ構造は保持)。
+    """
     row = conn.execute(
-        "SELECT id FROM questionnaire_templates WHERE name = ?",
+        "SELECT id, items_json FROM questionnaire_templates WHERE name = ?",
         (_DEFAULT_QUESTIONNAIRE_NAME,),
     ).fetchone()
-    if row is not None:
-        return
     now = _now_iso()
-    conn.execute(
-        "INSERT INTO questionnaire_templates "
-        "(name, description, items_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        (
-            _DEFAULT_QUESTIONNAIRE_NAME,
-            "デフォルトの問診票",
-            json.dumps(_DEFAULT_QUESTIONNAIRE_ITEMS, ensure_ascii=False),
-            now,
-            now,
-        ),
-    )
+    if row is None:
+        conn.execute(
+            "INSERT INTO questionnaire_templates "
+            "(name, description, items_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                _DEFAULT_QUESTIONNAIRE_NAME,
+                "デフォルトの問診票",
+                json.dumps(_DEFAULT_QUESTIONNAIRE_ITEMS, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        return
+    # マイグレーション: event (事象) 必須項目が無ければ先頭に追加
+    try:
+        items = json.loads(row[1]) if row[1] else []
+    except Exception:
+        items = []
+    if not any(isinstance(it, dict) and it.get("key") == "event" for it in items):
+        items = [_DEFAULT_QUESTIONNAIRE_ITEMS[0], *items]
+        conn.execute(
+            "UPDATE questionnaire_templates SET items_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(items, ensure_ascii=False), now, row[0]),
+        )
 
 
 @contextmanager

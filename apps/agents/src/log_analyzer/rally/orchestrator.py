@@ -24,9 +24,9 @@ from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.rally.state import Config4State
 
 # config4 のロール別デフォルトモデル。
-# orchestrator は「ログから初手を 1 つ選ぶ」分類タスクなので Haiku で十分速く・安く処理できる。
+# config-log 解析の評価方針 (2026-06) で Claude 系ノードは Opus に統一。
 # 個別に上書きしたい場合は環境変数 RALLY_ORCHESTRATOR_MODEL で変更可能。
-_DEFAULT_ORCHESTRATOR_MODEL = "claude-haiku-4-5"
+_DEFAULT_ORCHESTRATOR_MODEL = "claude-opus-4-7"
 
 ORCHESTRATOR_PROMPT = """\
 あなたはネットワーク／システムインフラのトリアージ・オーケストレータです。

@@ -117,16 +117,28 @@ function buildConversation(messages: React.ReactNode[], a: ConversationArgs): vo
       )}
       {a.actions.length > 0 && (
         <>
-          <p className="chat-section-title">推奨アクション</p>
-          <ul className="chat-actions">
-            {a.actions.map((act, i) => (
-              <li key={i}>
-                <span className={`risk risk-${act.risk_level}`}>{act.risk_level}</span>
-                {act.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
-                {act.action}
-              </li>
-            ))}
-          </ul>
+          {([
+            ['provisional', '暫定対応'],
+            ['permanent', '本質対応'],
+          ] as const).map(([kind, label]) => {
+            const group = a.actions.filter(act =>
+              kind === 'provisional' ? act.kind === 'provisional' : act.kind !== 'provisional')
+            if (group.length === 0) return null
+            return (
+              <div key={kind}>
+                <p className="chat-section-title">推奨アクション（{label}）</p>
+                <ul className="chat-actions">
+                  {group.map((act, i) => (
+                    <li key={i}>
+                      <span className={`risk risk-${act.risk_level}`}>{act.risk_level}</span>
+                      {act.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
+                      {act.action}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )
+          })}
         </>
       )}
     </ChatMessage>

@@ -36,9 +36,10 @@ from log_analyzer.rally.tools import extract_target_service, get_config, read_to
 
 VALID_NEXT_NODES: set[str] = {"fw", "routing", "app", "dns", "sec", "integrator"}
 
-# config4 監視のデフォルトモデル。各監視は「分析 + 次ノード指名」のパターンマッチ的タスクなので
-# Haiku で十分高速・安価に処理できる。RALLY_MONITOR_MODEL で個別に上書き可能。
-_DEFAULT_MONITOR_MODEL = "claude-haiku-4-5"
+# config4 監視のデフォルトモデル。
+# config-log 解析の評価方針 (2026-06) で Claude 系ノードは Opus に統一。
+# RALLY_MONITOR_MODEL で個別に上書き可能。
+_DEFAULT_MONITOR_MODEL = "claude-opus-4-7"
 
 
 # ─── System Prompts ──────────────────────────────────────────────────

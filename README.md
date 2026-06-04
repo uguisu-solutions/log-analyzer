@@ -29,10 +29,10 @@
 - **ログ管理タブ**: アップロード / プレビュー / 削除
 - **実行履歴タブ**: SQLite に各実行のメタデータ（confidence / tokens / Langfuse trace_id）を残し、フィルタ表示
 - **トポロジー解析タブ**: ネットワーク構成図画像を取り込み、各ノードに **複数のログファイル + 複数の設定ファイル (Config)** を割り当てて構成4 で解析。障害候補ノードを severity 別 (直接原因=赤+点滅 / 影響を受けた側=橙 / 関与なし=非ハイライト) に矩形ハイライト + 委譲チェーン履歴 + 実行グラフを同一タブで表示
-- **config-log 解析タブ**: 構成図 + Config / Log を入力に rally で根本原因を解析（構成は config4 固定）。解析モードを 2 軸で選択可能 — **1 段階**（config のみ / log のみ / config + log 同時。config のみ・log のみのときは不要な入力フォームを自動的に隠す）と **2 段階**（config → log / log → config。Stage 1 で当たりをつけ、**人間承認なしで自動的に Stage 2 の検証へ進む**。最終結果には各 Stage の結果を保持）。構成図・ログ・設定は**ファイルのドラッグ＆ドロップ**でも追加可。問診票・GPT 監査・ラウンド単位 metrics 表示・チャット形式 UI 対応
+- **config-log 解析タブ**: 構成図 + Config / Log を入力に rally で根本原因を解析（構成は config4 固定、**Claude 系ノードは Opus 4.7**）。解析モードを 2 軸で選択可能 — **1 段階**（config のみ / log のみ / config + log 同時。config のみ・log のみのときは不要な入力フォームを自動的に隠す）と **2 段階**（config → log / log → config。Stage 1 で当たりをつけ、**人間承認なしで自動的に Stage 2 の検証へ進む**。最終結果には各 Stage の結果を保持）。構成図・ログ・設定は**ファイルのドラッグ＆ドロップ**でも追加可。**推奨アクションは暫定対応／本質対応に分けて表示**、**推論過程を CSV 出力**可。問診票（**事象は必須**）・GPT 監査・ラウンド単位 metrics 表示・チャット形式 UI 対応
 - **チャット形式 UI (デフォルト)**: トポロジー解析 / config-log タブで「会話スレッド」表示。実行中は SSE イベントを `ChatMessage` に逐次変換、完了後は AnalysisResult を会話形式で再構成
 - **実行中の介入入力**: チャット入力欄から `コメント` / `ログ` / `設定` の 3 タイプを送信可能。**送信を検知すると rally が orchestrator に戻り初期ノードを再選択**（議事録「処理中にプロンプトで介入があった場合は、一度オーケストレーションノードに戻り、初期ノード選択から再開」に対応）
-- **問診票**: 5 項目のデフォルトテンプレを SQLite に同梱。実行前にチャット内で記入し、整形して LLM の最先頭 user メッセージに注入
+- **問診票**: 6 項目のデフォルトテンプレを SQLite に同梱（先頭の「事象」は**必須**、未入力だと解析を開始できない）。実行前にチャット内で記入し、整形して LLM の最先頭 user メッセージに注入
 - **GPT 監査エージェント**: 整合性チェック専用に GPT-4o-mini を integrator 後段で 1 回呼び出し、verdict (`agree` / `partial` / `disagree` / `uncertain`) + 指摘 + 別仮説を返す。**監査プロンプトは config-log タブの折りたたみ入力欄でその場で編集可能**（`GET /api/audit-prompt` で既定値を取得、`audit_system_prompt` で上書き）
 - **ラウンド単位 metrics**: orchestrator / 各監視 / integrator 単位で tokens / latency / model をテーブル表示
 - **問診票あり/なし比較ベンチマーク**: `scripts/benchmark_questionnaire.py` でシナリオを順次実行し精度・速度・コストを CSV 化
@@ -50,12 +50,12 @@
 |---|---|
 | 言語 | Python 3.11+ |
 | エージェント orchestration | 構成3 は `asyncio.gather` で並列。構成4 は **手動 async ループ** + SSE ストリーミング (LangGraph は旧 fan-out 型で使用していたが委譲チェーン型では不要に)。構成5 は依存深度ごとに `asyncio.gather` で並列実行する DAG ランナー |
-| LLM | Anthropic Claude (デフォルト: orchestrator/監視 = Haiku 4.5、integrator = Sonnet 4.5、Opus 4.7 へ slot 別上書き可) + OpenAI (GPT-4o-mini、構成3 のみ) |
+| LLM | Anthropic Claude (config1/2/3: 分析=Sonnet 4.5 / triage=Haiku 4.5。**config4(config-log) は Claude 系ノードを Opus 4.7 に統一**、slot 別上書き可) + OpenAI (GPT-4o-mini、構成3 と GPT 監査) |
 | Web フレームワーク | FastAPI + Uvicorn（SSE 用に `StreamingResponse`） |
 | スキーマ | Pydantic v2 |
 | 永続化 | SQLite（ユーザー定義構成 / 実行履歴）+ ローカル FS（ログ・トポロジ） |
 | 観測性 | [Langfuse](https://langfuse.com/) v2（OSS LLMOps、Docker Compose で同梱） |
-| テスト | pytest（114 件） |
+| テスト | pytest（116 件） |
 
 > **AWS 不採用方針**: Step Functions / Bedrock / DynamoDB / S3 は使用しません。Python asyncio + LangGraph + Anthropic/OpenAI 直叩き + SQLite + ローカル FS で代替しています。
 
@@ -94,7 +94,7 @@ prottype1/
 │   │   │   ├── api.py                 # FastAPI エンドポイント（SSE 含む）
 │   │   │   └── cli.py                 # `log-analyze` CLI
 │   │   ├── scripts/compare_configs.py # 複数構成 × 複数ログ一括比較
-│   │   └── tests/                     # pytest（114 件）
+│   │   └── tests/                     # pytest（116 件）
 │   └── ui/                     # React フロントエンド
 │       └── src/
 │           ├── App.tsx                # タブ管理 / 単一実行 / 比較 / 構成設計 / ログ管理 / 実行履歴 / トポロジー解析
@@ -292,7 +292,7 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 114 passed
+# 期待: 116 passed
 ```
 
 ---

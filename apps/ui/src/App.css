@@ -2793,6 +2793,23 @@ code {
   cursor: default;
 }
 
+/* ─── 解析結果ヘッダ + 推奨アクション分類 ──────────────── */
+.result-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+.result-header-bar h3 { margin: 0; }
+.action-group { margin-bottom: 0.6rem; }
+.action-group-title {
+  margin: 0.5rem 0 0.3rem;
+  font-size: 0.9rem;
+  color: #1e3a8a;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.2rem;
+}
+
 /* ─── GPT 監査プロンプト編集 (折りたたみ) ──────────────── */
 .audit-prompt-details {
   margin-bottom: 0.6rem;

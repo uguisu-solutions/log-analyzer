@@ -199,6 +199,8 @@ export interface RecommendedAction {
   action: string
   human_judgment_required: boolean
   risk_level: string
+  // "provisional"=暫定対応 / "permanent"=本質対応 (旧データは未設定→本質対応扱い)
+  kind?: string
 }
 
 export interface GraphNodeData {
