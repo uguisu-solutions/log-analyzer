@@ -1718,6 +1718,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             trace_id=final_result.trace_id,
             log_ref=log_ref,
         )
+        # 監査結果は rally の最終 result に乗っている (run_rally_stream 内で実行)。
+        # _build_final_result は stage_outputs から再構築するため audit_report が落ちるので引き継ぐ。
+        final.audit_report = final_result.audit_report
         final_dict = final.model_dump(mode="json")
         yield _sse_bytes("final", {"result": final_dict})
         _record_history(final_dict)

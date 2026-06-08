@@ -55,7 +55,7 @@
 | スキーマ | Pydantic v2 |
 | 永続化 | SQLite（ユーザー定義構成 / 実行履歴）+ ローカル FS（ログ・トポロジ） |
 | 観測性 | [Langfuse](https://langfuse.com/) v2（OSS LLMOps、Docker Compose で同梱） |
-| テスト | pytest（116 件） |
+| テスト | pytest（117 件） |
 
 > **AWS 不採用方針**: Step Functions / Bedrock / DynamoDB / S3 は使用しません。Python asyncio + LangGraph + Anthropic/OpenAI 直叩き + SQLite + ローカル FS で代替しています。
 
@@ -94,7 +94,7 @@ prottype1/
 │   │   │   ├── api.py                 # FastAPI エンドポイント（SSE 含む）
 │   │   │   └── cli.py                 # `log-analyze` CLI
 │   │   ├── scripts/compare_configs.py # 複数構成 × 複数ログ一括比較
-│   │   └── tests/                     # pytest（116 件）
+│   │   └── tests/                     # pytest（117 件）
 │   └── ui/                     # React フロントエンド
 │       └── src/
 │           ├── App.tsx                # タブ管理 / 単一実行 / 比較 / 構成設計 / ログ管理 / 実行履歴 / トポロジー解析
@@ -292,7 +292,7 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 116 passed
+# 期待: 117 passed
 ```
 
 ---
