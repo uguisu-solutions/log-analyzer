@@ -28,6 +28,7 @@ import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import { buildReasoningReport, downloadText } from './reasoningReport'
+import { RecommendedActionList } from './RecommendedActionList'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -1009,37 +1010,6 @@ function ResultTabs({ current, onChange, isTwoStage, stageOneOutput, stageTwoOut
   )
 }
 
-// 推奨アクションを 暫定対応 / 本質対応 に分けて表示する
-function RecommendedActionsSplit({ actions }: { actions: AnalysisResult['recommended_actions'] }) {
-  const groups: Array<['provisional' | 'permanent', string]> = [
-    ['provisional', '暫定対応'],
-    ['permanent', '本質対応'],
-  ]
-  return (
-    <>
-      {groups.map(([kind, label]) => {
-        const list = actions.filter(a =>
-          kind === 'provisional' ? a.kind === 'provisional' : a.kind !== 'provisional')
-        if (list.length === 0) return null
-        return (
-          <div key={kind} className="action-group">
-            <h5 className="action-group-title">{label}（{list.length}）</h5>
-            <ul className="actions">
-              {list.map((a, i) => (
-                <li key={i} className={a.human_judgment_required ? 'requires-human' : ''}>
-                  <span className={`risk risk-${a.risk_level}`}>{a.risk_level}</span>
-                  {a.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
-                  <span className="action-text">{a.action}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )
-      })}
-    </>
-  )
-}
-
 interface CombinedResultViewProps {
   result: AnalysisResult
   isTwoStage: boolean
@@ -1133,7 +1103,7 @@ function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTwoOutput
       </ul>
 
       <h4>推奨アクション（{result.recommended_actions.length}）</h4>
-      <RecommendedActionsSplit actions={result.recommended_actions} />
+      <RecommendedActionList actions={result.recommended_actions} />
 
       {/* 監査エージェント (Phase C) の所見 */}
       {result.audit_report && <AuditReportView report={result.audit_report} />}

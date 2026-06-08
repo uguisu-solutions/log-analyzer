@@ -201,6 +201,11 @@ export interface RecommendedAction {
   risk_level: string
   // "provisional"=暫定対応 / "permanent"=本質対応 (旧データは未設定→本質対応扱い)
   kind?: string
+  confidence?: number          // このアクションの確信度 0-1 (グループ内で降順表示)
+  steps?: string[]             // ジュニア向け実行手順 (順序付き)
+  risks?: string[]             // 手順実施で想定されるリスク (アクション単位)
+  rollback_possible?: string   // "yes" | "no" | "unknown"
+  rollback_note?: string       // ロールバック方法・補足
 }
 
 export interface GraphNodeData {

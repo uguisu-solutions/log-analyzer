@@ -58,6 +58,16 @@ class RecommendedAction(BaseModel):
     # 対応の種別: "provisional"=暫定対応(応急処置) / "permanent"=本質対応(恒久対策)。
     # 旧データ互換のため既定は permanent。
     kind: str = "permanent"
+    # このアクションの確信度 (0-1)。UI はグループ内でこの降順に表示する。
+    confidence: float = 0.0
+    # ジュニアエンジニアがそのまま着手できる粒度の実行手順 (順序付き)。
+    steps: list[str] = Field(default_factory=list)
+    # 手順を実施する際に想定されるリスク (アクション単位)。
+    risks: list[str] = Field(default_factory=list)
+    # ロールバック可否: "yes" | "no" | "unknown"。
+    rollback_possible: str = "unknown"
+    # ロールバック方法・補足。
+    rollback_note: str = ""
 
 
 class TraceNode(BaseModel):

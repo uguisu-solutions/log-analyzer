@@ -62,3 +62,27 @@ def test_recommended_action_kind_default_and_override():
     # ラウンドトリップで保持される
     restored = RecommendedAction.model_validate(b.model_dump())
     assert restored.kind == "provisional"
+
+
+def test_recommended_action_confidence_steps_rollback():
+    """confidence / steps / risks / rollback_possible / rollback_note の既定値と上書き・往復。"""
+    a = RecommendedAction(action="x", human_judgment_required=False, risk_level=RiskLevel.LOW)
+    assert a.confidence == 0.0
+    assert a.steps == [] and a.risks == []
+    assert a.rollback_possible == "unknown"
+    assert a.rollback_note == ""
+
+    b = RecommendedAction(
+        action="ポート付替え", human_judgment_required=True, risk_level=RiskLevel.MID,
+        kind="provisional", confidence=0.82,
+        steps=["SSH 接続", "対象ポートを予備へ付替え", "疎通確認"],
+        risks=["他通信への波及"],
+        rollback_possible="yes", rollback_note="元ポートへ戻す",
+    )
+    assert b.confidence == 0.82
+    assert b.steps[0] == "SSH 接続"
+    assert b.rollback_possible == "yes"
+    restored = RecommendedAction.model_validate(b.model_dump())
+    assert restored.confidence == 0.82
+    assert restored.steps == ["SSH 接続", "対象ポートを予備へ付替え", "疎通確認"]
+    assert restored.rollback_note == "元ポートへ戻す"

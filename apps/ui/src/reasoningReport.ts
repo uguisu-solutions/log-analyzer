@@ -102,16 +102,28 @@ function renderStage(lines: string[], st: StageBlock): void {
     lines.push('- 根本原因候補:')
     for (const c of st.candidates) lines.push(`    - [${c.category}] ${c.summary}`)
   }
-  const prov = st.actions.filter(a => a.kind === 'provisional')
-  const perm = st.actions.filter(a => a.kind !== 'provisional')
-  if (prov.length > 0) {
-    lines.push('- 推奨アクション（暫定対応）:')
-    for (const a of prov) lines.push(`    - [${a.risk_level}]${a.human_judgment_required ? '[人間判断必須]' : ''} ${a.action}`)
+  const sortByConf = (xs: AnalysisResult['recommended_actions']) =>
+    xs.slice().sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+  const rollbackText = (v?: string) =>
+    v === 'yes' ? 'ロールバック可' : v === 'no' ? 'ロールバック不可' : 'ロールバック不明'
+  const emitActions = (label: string, list: AnalysisResult['recommended_actions']) => {
+    if (list.length === 0) return
+    lines.push(`- 推奨アクション（${label}・確信度降順）:`)
+    for (const a of list) {
+      const flags = `[conf ${(a.confidence ?? 0).toFixed(2)}][${a.risk_level}]`
+        + (a.human_judgment_required ? '[人間判断必須]' : '')
+        + `[${rollbackText(a.rollback_possible)}]`
+      lines.push(`    - ${flags} ${a.action}`)
+      if ((a.steps?.length ?? 0) > 0) {
+        lines.push('        - 手順:')
+        a.steps!.forEach((s, i) => lines.push(`            ${i + 1}. ${s}`))
+      }
+      if ((a.risks?.length ?? 0) > 0) lines.push(`        - 想定リスク: ${a.risks!.join(' / ')}`)
+      if (a.rollback_note) lines.push(`        - ロールバック: ${a.rollback_note}`)
+    }
   }
-  if (perm.length > 0) {
-    lines.push('- 推奨アクション（本質対応）:')
-    for (const a of perm) lines.push(`    - [${a.risk_level}]${a.human_judgment_required ? '[人間判断必須]' : ''} ${a.action}`)
-  }
+  emitActions('暫定対応', sortByConf(st.actions.filter(a => a.kind === 'provisional')))
+  emitActions('本質対応', sortByConf(st.actions.filter(a => a.kind !== 'provisional')))
   lines.push('')
 }
 

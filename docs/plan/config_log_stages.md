@@ -52,6 +52,17 @@
   から取得し、実行時は `ConfigLogRunRequest.audit_system_prompt` で上書き送信する
   (空なら [audit_agent.py](../../apps/agents/src/log_analyzer/audit_agent.py) の既定 `SYSTEM_PROMPT`)。
 
+### 第4次改修 (2026-06 推奨アクションの実行性強化)
+
+- **確信度の明示＋確信度順表示**: `RecommendedAction.confidence` (0–1) を追加。UI は
+  暫定対応／本質対応のグループを維持しつつ、**各グループ内を confidence 降順**で表示。
+- **手順アコーディオン**: 各推奨アクションをクリックすると、ジュニアエンジニアが着手できる
+  **実行手順 (`steps`)・想定リスク (`risks`)・ロールバック可否 (`rollback_possible` /
+  `rollback_note`)** をアコーディオン展開。
+- 実装: schema に上記フィールド追加、integrator プロンプトで生成を指示、共通コンポーネント
+  [RecommendedActionList.tsx](../../apps/ui/src/RecommendedActionList.tsx) を新設して
+  結果ペイン・チャット結果・解析履歴詳細で共用。レポート出力 (reasoningReport.ts) にも反映。
+
 ### 第3次改修 (2026-06-04 評価強化)
 
 - **モデルを Opus に統一**: config4(rally) の Claude 系ノード (orchestrator / 各監視 / integrator)

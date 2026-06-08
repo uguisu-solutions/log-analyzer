@@ -29,7 +29,7 @@
 - **ログ管理タブ**: アップロード / プレビュー / 削除
 - **実行履歴タブ**: SQLite に各実行のメタデータ（confidence / tokens / Langfuse trace_id）を残し、フィルタ表示
 - **トポロジー解析タブ**: ネットワーク構成図画像を取り込み、各ノードに **複数のログファイル + 複数の設定ファイル (Config)** を割り当てて構成4 で解析。障害候補ノードを severity 別 (直接原因=赤+点滅 / 影響を受けた側=橙 / 関与なし=非ハイライト) に矩形ハイライト + 委譲チェーン履歴 + 実行グラフを同一タブで表示
-- **config-log 解析タブ**: 構成図 + Config / Log を入力に rally で根本原因を解析（構成は config4 固定、**Claude 系ノードは Opus 4.7**）。解析モードを 2 軸で選択可能 — **1 段階**（config のみ / log のみ / config + log 同時。config のみ・log のみのときは不要な入力フォームを自動的に隠す）と **2 段階**（config → log / log → config。Stage 1 で当たりをつけ、**人間承認なしで自動的に Stage 2 の検証へ進む**。最終結果には各 Stage の結果を保持）。構成図・ログ・設定は**ファイルのドラッグ＆ドロップ**でも追加可。**推奨アクションは暫定対応／本質対応に分けて表示**、**推論過程をノード別の読みやすいレポート (Markdown) で出力**可。問診票（**事象は必須**）・GPT 監査・ラウンド単位 metrics 表示・チャット形式 UI 対応
+- **config-log 解析タブ**: 構成図 + Config / Log を入力に rally で根本原因を解析（構成は config4 固定、**Claude 系ノードは Opus 4.7**）。解析モードを 2 軸で選択可能 — **1 段階**（config のみ / log のみ / config + log 同時。config のみ・log のみのときは不要な入力フォームを自動的に隠す）と **2 段階**（config → log / log → config。Stage 1 で当たりをつけ、**人間承認なしで自動的に Stage 2 の検証へ進む**。最終結果には各 Stage の結果を保持）。構成図・ログ・設定は**ファイルのドラッグ＆ドロップ**でも追加可。**推奨アクションは暫定対応／本質対応に分けて各グループ内を確信度降順で表示**し、**クリックで実行手順（ジュニア向け）・想定リスク・ロールバック可否をアコーディオン展開**。**推論過程をノード別の読みやすいレポート (Markdown) で出力**可。問診票（**事象は必須**）・GPT 監査・ラウンド単位 metrics 表示・チャット形式 UI 対応
 - **チャット形式 UI (デフォルト)**: トポロジー解析 / config-log タブで「会話スレッド」表示。実行中は SSE イベントを `ChatMessage` に逐次変換、完了後は AnalysisResult を会話形式で再構成
 - **実行中の介入入力**: チャット入力欄から `コメント` / `ログ` / `設定` の 3 タイプを送信可能。**送信を検知すると rally が orchestrator に戻り初期ノードを再選択**（議事録「処理中にプロンプトで介入があった場合は、一度オーケストレーションノードに戻り、初期ノード選択から再開」に対応）
 - **問診票**: 6 項目のデフォルトテンプレを SQLite に同梱（先頭の「事象」は**必須**、未入力だと解析を開始できない）。実行前にチャット内で記入し、整形して LLM の最先頭 user メッセージに注入
@@ -55,7 +55,7 @@
 | スキーマ | Pydantic v2 |
 | 永続化 | SQLite（ユーザー定義構成 / 実行履歴）+ ローカル FS（ログ・トポロジ） |
 | 観測性 | [Langfuse](https://langfuse.com/) v2（OSS LLMOps、Docker Compose で同梱） |
-| テスト | pytest（117 件） |
+| テスト | pytest（118 件） |
 
 > **AWS 不採用方針**: Step Functions / Bedrock / DynamoDB / S3 は使用しません。Python asyncio + LangGraph + Anthropic/OpenAI 直叩き + SQLite + ローカル FS で代替しています。
 
@@ -94,7 +94,7 @@ prottype1/
 │   │   │   ├── api.py                 # FastAPI エンドポイント（SSE 含む）
 │   │   │   └── cli.py                 # `log-analyze` CLI
 │   │   ├── scripts/compare_configs.py # 複数構成 × 複数ログ一括比較
-│   │   └── tests/                     # pytest（117 件）
+│   │   └── tests/                     # pytest（118 件）
 │   └── ui/                     # React フロントエンド
 │       └── src/
 │           ├── App.tsx                # タブ管理 / 単一実行 / 比較 / 構成設計 / ログ管理 / 実行履歴 / トポロジー解析
@@ -292,7 +292,7 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 117 passed
+# 期待: 118 passed
 ```
 
 ---

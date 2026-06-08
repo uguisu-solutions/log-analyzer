@@ -12,6 +12,7 @@
  * - result.root_cause_candidates / recommended_actions: 最終結論
  * - result.audit_report: GPT 監査 (Phase C)
  */
+import { RecommendedActionList } from './RecommendedActionList'
 import type {
   AnalysisResult,
   AuditReport,
@@ -117,28 +118,8 @@ function buildConversation(messages: React.ReactNode[], a: ConversationArgs): vo
       )}
       {a.actions.length > 0 && (
         <>
-          {([
-            ['provisional', '暫定対応'],
-            ['permanent', '本質対応'],
-          ] as const).map(([kind, label]) => {
-            const group = a.actions.filter(act =>
-              kind === 'provisional' ? act.kind === 'provisional' : act.kind !== 'provisional')
-            if (group.length === 0) return null
-            return (
-              <div key={kind}>
-                <p className="chat-section-title">推奨アクション（{label}）</p>
-                <ul className="chat-actions">
-                  {group.map((act, i) => (
-                    <li key={i}>
-                      <span className={`risk risk-${act.risk_level}`}>{act.risk_level}</span>
-                      {act.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
-                      {act.action}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )
-          })}
+          <p className="chat-section-title">推奨アクション（クリックで手順を表示）</p>
+          <RecommendedActionList actions={a.actions} />
         </>
       )}
     </ChatMessage>

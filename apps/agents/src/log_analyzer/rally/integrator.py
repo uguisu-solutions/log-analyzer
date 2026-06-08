@@ -30,6 +30,13 @@ INTEGRATOR_PROMPT = """\
     - `"provisional"`: 暫定対応（応急処置・早期の症状緩和・回避策）
     - `"permanent"`:   本質対応（根本原因の恒久的な解消）
     可能なら **暫定対応と本質対応の両方**を提示する（少なくとも本質対応は 1 つ以上）
+  - 各アクションに次も付与する:
+    - `confidence`: そのアクションが妥当である確信度 (0.0–1.0)。**kind ごとに confidence 降順**で並べる
+    - `steps`: **ジュニアクラスのエンジニアがそのまま着手できる粒度**の具体手順を順序付き配列で。
+      対象機器・コマンド例・確認すべき観点を含め、各要素 1 ステップ
+    - `risks`: その手順を実施する際に想定されるリスク・副作用・影響範囲（配列）
+    - `rollback_possible`: 作業をロールバックできるか。`"yes"` / `"no"` / `"unknown"` のいずれか
+    - `rollback_note`: ロールバック可能な場合の戻し方、不可なら理由・注意（文字列、不要なら空）
 - confidence: 監視間で結論が一致する度合いに応じて算出
   - 全監視一致 + トポロジ裏付けあり: 0.9 以上
   - 一部一致: 0.7 〜 0.85
@@ -42,7 +49,11 @@ INTEGRATOR_PROMPT = """\
     {"category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["..."]}
   ],
   "recommended_actions": [
-    {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high", "kind": "provisional|permanent"}
+    {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high",
+     "kind": "provisional|permanent", "confidence": 0.0,
+     "steps": ["手順1 (対象機器/コマンド例/確認観点)", "手順2", "..."],
+     "risks": ["想定リスク1", "..."],
+     "rollback_possible": "yes|no|unknown", "rollback_note": "..."}
   ],
   "confidence": 0.0
 }
@@ -64,8 +75,18 @@ INTEGRATOR_PROMPT = """\
 {
   "root_cause_candidates": [{"category": "FW", "summary": "...", "evidence": ["..."]}],
   "recommended_actions": [
-    {"action": "api-backends 向け permit を一時的に再追加し疎通を回復", "human_judgment_required": true, "risk_level": "mid", "kind": "provisional"},
-    {"action": "ACL 変更の承認フロー・構成管理を整備し再発を防止", "human_judgment_required": true, "risk_level": "high", "kind": "permanent"}
+    {"action": "api-backends 向け permit を一時的に再追加し疎通を回復",
+     "human_judgment_required": true, "risk_level": "mid", "kind": "provisional", "confidence": 0.88,
+     "steps": ["fw-01 に SSH 接続し `configure terminal` に入る",
+               "`access-list inside_out` に api-backends 宛て permit 行を元の位置に再追加",
+               "`write memory` で保存し、lb-01 から api-01:443 への疎通を確認"],
+     "risks": ["ACL 変更が他通信に波及する可能性", "誤った行追加で別経路を開放するリスク"],
+     "rollback_possible": "yes", "rollback_note": "追加した permit 行を削除し write memory すれば原状復帰"},
+    {"action": "ACL 変更の承認フロー・構成管理を整備し再発を防止",
+     "human_judgment_required": true, "risk_level": "high", "kind": "permanent", "confidence": 0.7,
+     "steps": ["構成変更の承認・レビュー手順を文書化", "IaC/構成管理での ACL 管理に移行"],
+     "risks": ["運用フロー変更に伴う一時的な作業負荷増"],
+     "rollback_possible": "unknown", "rollback_note": ""}
   ],
   "confidence": 0.85,
   "suspected_nodes": [
@@ -135,10 +156,10 @@ def integrator_node(state: Config4State) -> dict:
     client = anthropic.Anthropic()
     started = time.perf_counter()
     # 複数ラウンドのラリーで monitor_results が肥大すると応答も長くなりやすい。
-    # 切断による JSON parse 失敗を避けるため余裕を持たせる
+    # 推奨アクションに手順/リスク/ロールバックが加わり出力が増えるため余裕を持たせる
     response = client.messages.create(
         model=model,
-        max_tokens=4000,
+        max_tokens=6000,
         system=[
             {
                 "type": "text",

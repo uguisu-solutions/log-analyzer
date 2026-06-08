@@ -2810,6 +2810,54 @@ code {
   padding-bottom: 0.2rem;
 }
 
+/* 推奨アクション (確信度降順 + 手順アコーディオン) */
+.action-list { display: flex; flex-direction: column; gap: 0.35rem; }
+.action-item { border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; }
+.action-item > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  user-select: none;
+}
+.action-item > summary::-webkit-details-marker { display: none; }
+.action-caret { display: inline-block; transition: transform 0.15s ease; color: #2563eb; }
+.action-item[open] > summary > .action-caret { transform: rotate(90deg); }
+.conf-badge {
+  font-weight: 700;
+  font-size: 0.78rem;
+  background: #1e3a8a;
+  color: #fff;
+  border-radius: 10px;
+  padding: 0.05rem 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+.action-summary .action-text { flex: 1 1 auto; min-width: 12rem; }
+.rb-badge {
+  font-size: 0.72rem;
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid transparent;
+}
+.rb-badge.rb-yes { background: #e7f5ec; color: #14532d; border-color: #86efac; }
+.rb-badge.rb-no { background: #fee2e2; color: #7f1d1d; border-color: #fca5a5; }
+.rb-badge.rb-unknown { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+.action-detail { border-top: 1px solid #eef2f7; padding: 0.5rem 0.8rem 0.6rem; }
+.action-detail-title {
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: #334155;
+  margin: 0.5rem 0 0.2rem;
+}
+.action-detail-title:first-child { margin-top: 0; }
+.action-steps, .action-risks { margin: 0; padding-left: 1.3rem; }
+.action-steps li, .action-risks li { margin: 0.15rem 0; }
+.action-risks li { color: #7c2d12; }
+.action-rollback { margin: 0.2rem 0 0; }
+
 /* ─── GPT 監査プロンプト編集 (折りたたみ) ──────────────── */
 .audit-prompt-details {
   margin-bottom: 0.6rem;
