@@ -166,7 +166,7 @@ function buildAudit(messages: React.ReactNode[], ar: AuditReport): void {
         </>
       )}
       <p className="muted chat-meta">
-        model: {ar.model || 'gpt-4o-mini'} · confidence {ar.confidence.toFixed(2)} ·
+        model: {ar.model || 'gpt-5.5'} · confidence {ar.confidence.toFixed(2)} ·
         {' '}{ar.tokens_in.toLocaleString()}/{ar.tokens_out.toLocaleString()} tok ·
         {(ar.latency_ms / 1000).toFixed(1)}s
       </p>

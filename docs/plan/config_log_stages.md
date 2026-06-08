@@ -57,6 +57,9 @@
 - **モデルを Opus に統一**: config4(rally) の Claude 系ノード (orchestrator / 各監視 / integrator)
   の既定モデルを `claude-opus-4-7` に変更 (orchestrator.py / monitors.py / integrator.py /
   prompt_slots.py。env `RALLY_*_MODEL` で個別上書き可)。
+  - **(2026-06-08 追補) モデル全面統一**: Claude 系は全構成 (config1〜4 / baseline / filtered /
+    multi_model / pipeline) で `claude-opus-4-7`、OpenAI 系 (GPT 監査 = audit_agent 既定、
+    構成3 の 3rd モデル) は `gpt-5.5` に統一。
 - **問診票「事象」を必須化**: デフォルト問診票の先頭に必須項目 `event`(事象) を追加
   (storage.py。既存 default テンプレには `init_db` 時のマイグレーションで補完)。UI は必須項目が
   未入力だと「解析を開始」を無効化 (`QuestionnairePanel.onValidityChange` → canRun ゲート)。

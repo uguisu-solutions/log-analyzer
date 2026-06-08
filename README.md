@@ -10,9 +10,9 @@
 
 | 構成 | 名称 | 概要 |
 |---|---|---|
-| **config1** | ベースライン | ログ → Claude Sonnet 1 回 → 共通 JSON |
-| **config2** | フィルタ + 圧縮 | ルールベース前処理 → Haiku triage → Sonnet analyze |
-| **config3** | マルチモデル並列 | Sonnet / Haiku / GPT-4o の 3 モデル並列 → integrate |
+| **config1** | ベースライン | ログ → Claude Opus 1 回 → 共通 JSON |
+| **config2** | フィルタ + 圧縮 | ルールベース前処理 → Opus triage → Opus analyze |
+| **config3** | マルチモデル並列 | Claude Opus ×2 / OpenAI GPT-5.5 の 3 並列 → integrate |
 | **config4** | 委譲チェーン型ラリー | orchestrator が初手の監視 1 つを選ぶ→各監視が分析後に次ノード（別監視 or integrator）を JSON で指名する **シングルアクティブな委譲チェーン**。SSE でリアルタイム可視化、上限到達時はユーザー確認モーダルで延長 / 停止を選択 |
 | **config5** | ユーザー定義パイプライン | UI で input → ... → output の DAG をドラッグ＆ドロップ構築 |
 
@@ -33,7 +33,7 @@
 - **チャット形式 UI (デフォルト)**: トポロジー解析 / config-log タブで「会話スレッド」表示。実行中は SSE イベントを `ChatMessage` に逐次変換、完了後は AnalysisResult を会話形式で再構成
 - **実行中の介入入力**: チャット入力欄から `コメント` / `ログ` / `設定` の 3 タイプを送信可能。**送信を検知すると rally が orchestrator に戻り初期ノードを再選択**（議事録「処理中にプロンプトで介入があった場合は、一度オーケストレーションノードに戻り、初期ノード選択から再開」に対応）
 - **問診票**: 6 項目のデフォルトテンプレを SQLite に同梱（先頭の「事象」は**必須**、未入力だと解析を開始できない）。実行前にチャット内で記入し、整形して LLM の最先頭 user メッセージに注入
-- **GPT 監査エージェント**: 整合性チェック専用に GPT-4o-mini を integrator 後段で 1 回呼び出し、verdict (`agree` / `partial` / `disagree` / `uncertain`) + 指摘 + 別仮説を返す。**監査プロンプトは config-log タブの折りたたみ入力欄でその場で編集可能**（`GET /api/audit-prompt` で既定値を取得、`audit_system_prompt` で上書き）
+- **GPT 監査エージェント**: 整合性チェック専用に OpenAI GPT-5.5 を integrator 後段で 1 回呼び出し、verdict (`agree` / `partial` / `disagree` / `uncertain`) + 指摘 + 別仮説を返す。**監査プロンプトは config-log タブの折りたたみ入力欄でその場で編集可能**（`GET /api/audit-prompt` で既定値を取得、`audit_system_prompt` で上書き）
 - **ラウンド単位 metrics**: orchestrator / 各監視 / integrator 単位で tokens / latency / model をテーブル表示
 - **問診票あり/なし比較ベンチマーク**: `scripts/benchmark_questionnaire.py` でシナリオを順次実行し精度・速度・コストを CSV 化
 - **解析履歴タブ**: config-log 解析の各実行を「入力 + Claude の推論過程 + 結果」付きで SQLite に保存し、一覧 → 詳細で**解析終了後の画面（構成図ハイライト + 会話形式の推論過程 + 最終結果）を再現**（[設計](docs/plan/analysis_history.md)）
@@ -50,7 +50,7 @@
 |---|---|
 | 言語 | Python 3.11+ |
 | エージェント orchestration | 構成3 は `asyncio.gather` で並列。構成4 は **手動 async ループ** + SSE ストリーミング (LangGraph は旧 fan-out 型で使用していたが委譲チェーン型では不要に)。構成5 は依存深度ごとに `asyncio.gather` で並列実行する DAG ランナー |
-| LLM | Anthropic Claude (config1/2/3: 分析=Sonnet 4.5 / triage=Haiku 4.5。**config4(config-log) は Claude 系ノードを Opus 4.7 に統一**、slot 別上書き可) + OpenAI (GPT-4o-mini、構成3 と GPT 監査) |
+| LLM | **モデル統一方針 (2026-06): Claude 系は全構成で Opus 4.7、OpenAI は GPT-5.5**（slot 別上書き可）。OpenAI は構成3 の 3rd モデルと GPT 監査で使用 |
 | Web フレームワーク | FastAPI + Uvicorn（SSE 用に `StreamingResponse`） |
 | スキーマ | Pydantic v2 |
 | 永続化 | SQLite（ユーザー定義構成 / 実行履歴）+ ローカル FS（ログ・トポロジ） |

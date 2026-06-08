@@ -5,9 +5,9 @@
         "nodes": [
             {"id": "input", "type": "input"},
             {"id": "<n>", "type": "llm", "prompt": "...",
-             "model": "claude-sonnet-4-5", "input_template": "..."},
+             "model": "claude-opus-4-7", "input_template": "..."},
             {"id": "output", "type": "output", "prompt": "...",
-             "model": "claude-sonnet-4-5", "input_template": "..."},
+             "model": "claude-opus-4-7", "input_template": "..."},
         ],
         "edges": [{"source": "<from>", "target": "<to>"}, ...]
     }
@@ -101,7 +101,7 @@ NODE_TYPE_DEFS = [
         "fixed": False,
         "editable_fields": ["prompt", "model", "input_template"],
         "default_prompt": DEFAULT_LLM_PROMPT,
-        "default_model": "claude-sonnet-4-5",
+        "default_model": "claude-opus-4-7",
         "default_input_template": DEFAULT_INPUT_TEMPLATE_LLM,
     },
     {
@@ -111,12 +111,12 @@ NODE_TYPE_DEFS = [
         "fixed": True,
         "editable_fields": ["prompt", "model", "input_template"],
         "default_prompt": DEFAULT_OUTPUT_PROMPT,
-        "default_model": "claude-sonnet-4-5",
+        "default_model": "claude-opus-4-7",
         "default_input_template": DEFAULT_INPUT_TEMPLATE_OUTPUT,
     },
 ]
 
-ALLOWED_MODELS = ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-7"]
+ALLOWED_MODELS = ["claude-opus-4-7"]
 
 
 # ─── パイプライン検証 ─────────────────────────────────────────────────
@@ -147,7 +147,7 @@ def validate_pipeline(pipeline_def: dict) -> None:
             raise PipelineValidationError(f"不明なノードタイプ: {ntype}（id={nid}）")
         type_counts[ntype] += 1
         if ntype in {"llm", "output"}:
-            model = n.get("model", "claude-sonnet-4-5")
+            model = n.get("model", "claude-opus-4-7")
             if model not in ALLOWED_MODELS:
                 raise PipelineValidationError(f"許可されないモデル: {model}（id={nid}）")
 
@@ -239,7 +239,7 @@ async def _run_llm_node(
     upstream_outputs: dict[str, str],
 ) -> tuple[str, dict[str, Any]]:
     """LLM / output ノードを実行し、(出力テキスト, トレース用 metadata) を返す。"""
-    model = node.get("model", "claude-sonnet-4-5")
+    model = node.get("model", "claude-opus-4-7")
     system_prompt = node.get("prompt") or (
         DEFAULT_OUTPUT_PROMPT if node.get("type") == "output" else DEFAULT_LLM_PROMPT
     )

@@ -435,7 +435,7 @@ async def _attach_audit(
     import asyncio as _aio
     from log_analyzer.audit_agent import run_audit
 
-    yield StreamEvent("audit_start", {"model_hint": "gpt-4o-mini"})
+    yield StreamEvent("audit_start", {"model_hint": "gpt-5.5"})
     loop = _aio.get_running_loop()
     try:
         audit = await loop.run_in_executor(

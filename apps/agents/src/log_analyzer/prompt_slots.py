@@ -5,8 +5,8 @@ Phase 2 W6+ で導入。ユーザー定義構成は「base_config + 一部 slot 
 API を提供する。
 
 モデル選択:
-- 各 slot は Anthropic 系の 3 モデルから選べる（Sonnet 4.5 / Haiku 4.5 / Opus 4.7）。
-  config3.analyze だけは 3 モデル並列実行が設計の本質なので model 上書き不可。
+- 各 slot は Anthropic 系（現状 Opus 4.7 に統一）から選べる。
+  config3.analyze だけは複数モデル並列実行が設計の本質なので model 上書き不可。
 - 将来 OpenAI / 他ベンダーを許可する場合は ``ANTHROPIC_MODELS`` を ``allowed_models`` に
   渡すか、slot ごとに別の許可リストを構成する。
 """
@@ -24,8 +24,6 @@ class SlotInfo(TypedDict):
 
 
 ANTHROPIC_MODELS = [
-    "claude-sonnet-4-5",
-    "claude-haiku-4-5",
     "claude-opus-4-7",
 ]
 
@@ -34,16 +32,16 @@ ANTHROPIC_MODELS = [
 # dict 挿入順序で UI に並ぶ（パイプラインの実行順）
 SLOT_DEFS: dict[str, dict[str, dict]] = {
     "config1": {
-        "analyze": {"label": "分析プロンプト", "default_model": "claude-sonnet-4-5", "model_overridable": True},
+        "analyze": {"label": "分析プロンプト", "default_model": "claude-opus-4-7", "model_overridable": True},
     },
     "config2": {
-        "triage": {"label": "Triage プロンプト", "default_model": "claude-haiku-4-5", "model_overridable": True},
-        "analyze": {"label": "分析プロンプト", "default_model": "claude-sonnet-4-5", "model_overridable": True},
+        "triage": {"label": "Triage プロンプト", "default_model": "claude-opus-4-7", "model_overridable": True},
+        "analyze": {"label": "分析プロンプト", "default_model": "claude-opus-4-7", "model_overridable": True},
     },
     "config3": {
         # config3.analyze は 3 モデル並列実行が設計の核なのでモデル上書き不可
-        "analyze": {"label": "並列モデル共通プロンプト (Sonnet / Haiku / GPT-4o-mini)", "default_model": "(3 モデル並列)", "model_overridable": False},
-        "integrate": {"label": "統合プロンプト", "default_model": "claude-sonnet-4-5", "model_overridable": True},
+        "analyze": {"label": "並列モデル共通プロンプト (Claude Opus ×2 / GPT-5.5)", "default_model": "(3 モデル並列)", "model_overridable": False},
+        "integrate": {"label": "統合プロンプト", "default_model": "claude-opus-4-7", "model_overridable": True},
     },
     "config4": {
         # config-log 解析の評価方針 (2026-06) で Claude 系ノードは Opus に統一。slot 別に UI から上書き可能。
