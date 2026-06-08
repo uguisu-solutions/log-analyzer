@@ -93,9 +93,10 @@ async def _analyze_with_openai(
 ) -> _ModelRunResult:
     client = openai.AsyncOpenAI()
     started = time.perf_counter()
+    # GPT-5 系は max_tokens 非対応 (max_completion_tokens を使う)。新旧両対応で後者を使う。
     response = await client.chat.completions.create(
         model=model,
-        max_tokens=2000,
+        max_completion_tokens=2000,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": log_text},

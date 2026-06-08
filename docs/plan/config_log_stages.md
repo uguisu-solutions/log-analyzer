@@ -66,9 +66,13 @@
 - **推奨アクションを暫定対応／本質対応に分割**: `RecommendedAction.kind`
   (`provisional`=暫定対応 / `permanent`=本質対応、既定 permanent) を追加し、integrator プロンプトで
   両方の提示を指示。UI (ChatHistoryView / 結果ペイン) で種別ごとにグルーピング表示。
-- **推論過程の CSV 出力**: 解析結果ペインと解析履歴詳細に「推論過程を CSV 出力」ボタンを追加
-  ([reasoningCsv.ts](../../apps/ui/src/reasoningCsv.ts))。round_metrics を主軸に
-  stage / round / role / model / tokens / latency / confidence / rationale を行出力 (2 段階は Stage 別)。
+- **推論過程のノード別レポート出力**: 解析結果ペインと解析履歴詳細に「推論過程をレポート出力」
+  ボタンを追加 ([reasoningReport.ts](../../apps/ui/src/reasoningReport.ts))。委譲チェーンを
+  **エージェント(ノード)毎にグルーピング**し、各ノードのラウンド・委譲先・理由・観点・confidence・
+  model/tokens/latency を人間が読みやすい Markdown で出力 (2 段階は Stage 別、障害候補ノード・GPT 監査も付記)。
+- **GPT-5 系 API 対応**: OpenAI を gpt-5.x にしたことに伴い、監査 / 構成3 の OpenAI 呼び出しを
+  `max_tokens` → `max_completion_tokens` に変更し、temperature は GPT-5 系では既定(1)のみ送る
+  (audit_agent.py / multi_model_agent.py)。
 
 | 項目 | 変更後 |
 |---|---|

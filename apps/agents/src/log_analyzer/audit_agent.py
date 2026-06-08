@@ -124,15 +124,19 @@ def run_audit(
     started = time.perf_counter()
     try:
         client = openai.OpenAI()
-        response = client.chat.completions.create(
-            model=chosen_model,
-            max_tokens=1500,
-            messages=[
+        # GPT-5 系は max_tokens 非対応 (max_completion_tokens を使う) かつ temperature は既定(1)のみ。
+        # 新旧両対応のため max_completion_tokens を使い、temperature は非 GPT-5 のときだけ付ける。
+        create_kwargs: dict = {
+            "model": chosen_model,
+            "max_completion_tokens": 1500,
+            "messages": [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": _build_user_input(log_text, topology_context, analysis_result)},
             ],
-            temperature=0.1,
-        )
+        }
+        if not chosen_model.startswith("gpt-5"):
+            create_kwargs["temperature"] = 0.1
+        response = client.chat.completions.create(**create_kwargs)
         latency_ms = int((time.perf_counter() - started) * 1000)
         raw = response.choices[0].message.content or ""
         parsed, parse_error = safe_extract_json(
