@@ -70,9 +70,12 @@
   ボタンを追加 ([reasoningReport.ts](../../apps/ui/src/reasoningReport.ts))。委譲チェーンを
   **エージェント(ノード)毎にグルーピング**し、各ノードのラウンド・委譲先・理由・観点・confidence・
   model/tokens/latency を人間が読みやすい Markdown で出力 (2 段階は Stage 別、障害候補ノード・GPT 監査も付記)。
-- **GPT-5 系 API 対応**: OpenAI を gpt-5.x にしたことに伴い、監査 / 構成3 の OpenAI 呼び出しを
-  `max_tokens` → `max_completion_tokens` に変更し、temperature は GPT-5 系では既定(1)のみ送る
-  (audit_agent.py / multi_model_agent.py)。
+- **GPT-5.5 = OpenAI Responses API へ移行**: 公式 GPT-5.5 ガイダンスに従い、監査 / 構成3 の
+  OpenAI 呼び出しを Chat Completions → **Responses API** (`client.responses.create`) に変更。
+  `instructions` (system) + `input` (user) + `max_output_tokens` + `reasoning={"effort":"low"}`
+  + `text={"verbosity":"low"}` を使用 (audit_agent.py / multi_model_agent.py)。
+  これにより旧実装の `max_tokens` 非対応エラー (400 Unsupported parameter) を解消。
+  usage は `input_tokens` / `output_tokens`、本文は `output_text` で取得。
 
 | 項目 | 変更後 |
 |---|---|

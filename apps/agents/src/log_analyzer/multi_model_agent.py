@@ -93,24 +93,25 @@ async def _analyze_with_openai(
 ) -> _ModelRunResult:
     client = openai.AsyncOpenAI()
     started = time.perf_counter()
-    # GPT-5 系は max_tokens 非対応 (max_completion_tokens を使う)。新旧両対応で後者を使う。
-    response = await client.chat.completions.create(
+    # GPT-5.x は Responses API + reasoning.effort / text.verbosity が推奨 (OpenAI 公式ガイダンス)。
+    response = await client.responses.create(
         model=model,
-        max_completion_tokens=2000,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": log_text},
-        ],
+        instructions=system_prompt,
+        input=log_text,
+        max_output_tokens=4000,
+        reasoning={"effort": "low"},
+        text={"verbosity": "low"},
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    raw_text = response.choices[0].message.content or ""
+    raw_text = getattr(response, "output_text", None) or ""
     parsed = _extract_json(raw_text)
+    usage = getattr(response, "usage", None)
     return _ModelRunResult(
         role=role,
         model=model,
         parsed=parsed,
-        tokens_in=response.usage.prompt_tokens,
-        tokens_out=response.usage.completion_tokens,
+        tokens_in=int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
+        tokens_out=int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
         latency_ms=latency_ms,
     )
 
