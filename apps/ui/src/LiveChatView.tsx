@@ -227,7 +227,7 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
       case 'audit_start':
         messages.push(
           <ChatMessage key={`ev-${i}`} sender="audit" speaker="監査エージェント (GPT)" tag="検証中">
-            <p className="muted">独立検証中... ({String(d.model_hint ?? 'gpt-4o-mini')})</p>
+            <p className="muted">独立検証中... ({String(d.model_hint ?? 'gpt-5.5')})</p>
           </ChatMessage>
         )
         return

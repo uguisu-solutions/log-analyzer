@@ -58,8 +58,8 @@ def run_filtered(
 ) -> AnalysisResult:
     p_overrides = prompt_overrides or {}
     m_overrides = model_overrides or {}
-    haiku_model = m_overrides.get("triage") or os.environ.get("FILTER_MODEL", "claude-haiku-4-5")
-    sonnet_model = m_overrides.get("analyze") or os.environ.get("BASELINE_MODEL", "claude-sonnet-4-5")
+    haiku_model = m_overrides.get("triage") or os.environ.get("FILTER_MODEL", "claude-opus-4-7")
+    sonnet_model = m_overrides.get("analyze") or os.environ.get("BASELINE_MODEL", "claude-opus-4-7")
     triage_prompt = p_overrides.get("triage", HAIKU_TRIAGE_PROMPT)
     analyze_prompt = p_overrides.get("analyze", SYSTEM_PROMPT)
     langfuse = get_client()

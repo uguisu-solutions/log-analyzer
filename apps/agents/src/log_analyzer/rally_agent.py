@@ -716,7 +716,7 @@ async def run_rally_stream(
     # ─── 5. 監査エージェント (Phase C, オプション) ─────────────────
     if audit_after_integrator:
         from log_analyzer.audit_agent import run_audit  # 遅延 import (依存軽量化)
-        yield StreamEvent("audit_start", {"model_hint": "gpt-4o-mini"})
+        yield StreamEvent("audit_start", {"model_hint": "gpt-5.5"})
         try:
             audit = await _run_sync(
                 lambda: run_audit(log_text, topology_context, result, system_prompt=audit_system_prompt)

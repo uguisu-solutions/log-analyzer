@@ -40,22 +40,27 @@ def test_audit_returns_uncertain_without_api_key(monkeypatch):
     assert report.tokens_out == 0
 
 
+def _fake_responses_client(output_text: str, input_tokens: int = 10, output_tokens: int = 5) -> MagicMock:
+    """Responses API (client.responses.create) を模したフェイク client。"""
+    fake_response = MagicMock(
+        output_text=output_text,
+        usage=MagicMock(input_tokens=input_tokens, output_tokens=output_tokens),
+    )
+    fake_client = MagicMock()
+    fake_client.responses.create.return_value = fake_response
+    return fake_client
+
+
 def test_audit_parses_agree_verdict(monkeypatch):
     """モック GPT 応答を JSON で返したとき verdict / concerns / alternative_hypotheses が拾えること。"""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
-    fake_message = MagicMock()
-    fake_message.content = (
+    fake_client = _fake_responses_client(
         '{"verdict": "agree", "confidence": 0.9, '
         '"summary": "主原因と severity 共に妥当", '
         '"concerns": ["lb-01 の確信度は若干高すぎるかも"], '
-        '"alternative_hypotheses": []}'
+        '"alternative_hypotheses": []}',
+        input_tokens=1200, output_tokens=80,
     )
-    fake_choice = MagicMock(message=fake_message)
-    fake_usage = MagicMock(prompt_tokens=1200, completion_tokens=80)
-    fake_response = MagicMock(choices=[fake_choice], usage=fake_usage)
-    fake_client = MagicMock()
-    fake_client.chat.completions.create.return_value = fake_response
-
     with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
         report = run_audit("log", {"nodes": [{"id": "fw-01"}]}, _sample_analysis())
     assert report.verdict == "agree"
@@ -70,13 +75,7 @@ def test_audit_parses_agree_verdict(monkeypatch):
 def test_audit_normalizes_bad_verdict(monkeypatch):
     """規定外 verdict は 'uncertain' に正規化。"""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
-    fake_message = MagicMock()
-    fake_message.content = '{"verdict": "STRONGLY_AGREE", "confidence": 0.99, "summary": "x"}'
-    fake_choice = MagicMock(message=fake_message)
-    fake_usage = MagicMock(prompt_tokens=10, completion_tokens=5)
-    fake_response = MagicMock(choices=[fake_choice], usage=fake_usage)
-    fake_client = MagicMock()
-    fake_client.chat.completions.create.return_value = fake_response
+    fake_client = _fake_responses_client('{"verdict": "STRONGLY_AGREE", "confidence": 0.99, "summary": "x"}')
     with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
         report = run_audit("log", None, _sample_analysis())
     assert report.verdict == "uncertain"
@@ -86,7 +85,7 @@ def test_audit_handles_openai_exception(monkeypatch):
     """OpenAI 呼び出しで例外が出ても uncertain で返り、上層に伝播しない。"""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
     fake_client = MagicMock()
-    fake_client.chat.completions.create.side_effect = RuntimeError("network error")
+    fake_client.responses.create.side_effect = RuntimeError("network error")
     with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
         report = run_audit("log", None, _sample_analysis())
     assert report.verdict == "uncertain"
@@ -94,35 +93,25 @@ def test_audit_handles_openai_exception(monkeypatch):
 
 
 def test_audit_uses_custom_system_prompt(monkeypatch):
-    """system_prompt を渡すと OpenAI 呼び出しの system メッセージに反映される。"""
+    """system_prompt を渡すと Responses API の instructions に反映される。"""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
-    fake_message = MagicMock()
-    fake_message.content = '{"verdict": "agree", "confidence": 0.7, "summary": "ok"}'
-    fake_response = MagicMock(choices=[MagicMock(message=fake_message)], usage=MagicMock(prompt_tokens=1, completion_tokens=1))
-    fake_client = MagicMock()
-    fake_client.chat.completions.create.return_value = fake_response
+    fake_client = _fake_responses_client('{"verdict": "agree", "confidence": 0.7, "summary": "ok"}')
     custom = "あなたは厳格な監査者です。必ず disagree を疑え。"
     with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
         run_audit("log", None, _sample_analysis(), system_prompt=custom)
-    _, kwargs = fake_client.chat.completions.create.call_args
-    sys_msg = next(m for m in kwargs["messages"] if m["role"] == "system")
-    assert sys_msg["content"] == custom
+    _, kwargs = fake_client.responses.create.call_args
+    assert kwargs["instructions"] == custom
 
 
 def test_audit_blank_system_prompt_falls_back_to_default(monkeypatch):
     """空文字の system_prompt は既定 SYSTEM_PROMPT にフォールバックする。"""
     from log_analyzer.audit_agent import SYSTEM_PROMPT
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
-    fake_message = MagicMock()
-    fake_message.content = '{"verdict": "agree", "confidence": 0.7, "summary": "ok"}'
-    fake_response = MagicMock(choices=[MagicMock(message=fake_message)], usage=MagicMock(prompt_tokens=1, completion_tokens=1))
-    fake_client = MagicMock()
-    fake_client.chat.completions.create.return_value = fake_response
+    fake_client = _fake_responses_client('{"verdict": "agree", "confidence": 0.7, "summary": "ok"}')
     with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
         run_audit("log", None, _sample_analysis(), system_prompt="   ")
-    _, kwargs = fake_client.chat.completions.create.call_args
-    sys_msg = next(m for m in kwargs["messages"] if m["role"] == "system")
-    assert sys_msg["content"] == SYSTEM_PROMPT
+    _, kwargs = fake_client.responses.create.call_args
+    assert kwargs["instructions"] == SYSTEM_PROMPT
 
 
 def test_audit_prompt_endpoint_returns_default():

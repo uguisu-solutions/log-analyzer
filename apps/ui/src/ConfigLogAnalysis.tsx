@@ -27,7 +27,7 @@ import { LiveChatView } from './LiveChatView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
-import { buildReasoningCsv, downloadCsv } from './reasoningCsv'
+import { buildReasoningReport, downloadText } from './reasoningReport'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -816,9 +816,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
             <button
               type="button"
               className="btn-secondary btn-small"
-              onClick={() => downloadCsv(`reasoning-${finalResult.trace_id?.slice(0, 8) || 'result'}.csv`, buildReasoningCsv(finalResult))}
+              onClick={() => downloadText(`reasoning-${finalResult.trace_id?.slice(0, 8) || 'result'}.md`, buildReasoningReport(finalResult))}
             >
-              推論過程を CSV 出力
+              推論過程をレポート出力
             </button>
           </div>
           {viewMode === 'chat' ? (

@@ -57,15 +57,25 @@
 - **モデルを Opus に統一**: config4(rally) の Claude 系ノード (orchestrator / 各監視 / integrator)
   の既定モデルを `claude-opus-4-7` に変更 (orchestrator.py / monitors.py / integrator.py /
   prompt_slots.py。env `RALLY_*_MODEL` で個別上書き可)。
+  - **(2026-06-08 追補) モデル全面統一**: Claude 系は全構成 (config1〜4 / baseline / filtered /
+    multi_model / pipeline) で `claude-opus-4-7`、OpenAI 系 (GPT 監査 = audit_agent 既定、
+    構成3 の 3rd モデル) は `gpt-5.5` に統一。
 - **問診票「事象」を必須化**: デフォルト問診票の先頭に必須項目 `event`(事象) を追加
   (storage.py。既存 default テンプレには `init_db` 時のマイグレーションで補完)。UI は必須項目が
   未入力だと「解析を開始」を無効化 (`QuestionnairePanel.onValidityChange` → canRun ゲート)。
 - **推奨アクションを暫定対応／本質対応に分割**: `RecommendedAction.kind`
   (`provisional`=暫定対応 / `permanent`=本質対応、既定 permanent) を追加し、integrator プロンプトで
   両方の提示を指示。UI (ChatHistoryView / 結果ペイン) で種別ごとにグルーピング表示。
-- **推論過程の CSV 出力**: 解析結果ペインと解析履歴詳細に「推論過程を CSV 出力」ボタンを追加
-  ([reasoningCsv.ts](../../apps/ui/src/reasoningCsv.ts))。round_metrics を主軸に
-  stage / round / role / model / tokens / latency / confidence / rationale を行出力 (2 段階は Stage 別)。
+- **推論過程のノード別レポート出力**: 解析結果ペインと解析履歴詳細に「推論過程をレポート出力」
+  ボタンを追加 ([reasoningReport.ts](../../apps/ui/src/reasoningReport.ts))。委譲チェーンを
+  **エージェント(ノード)毎にグルーピング**し、各ノードのラウンド・委譲先・理由・観点・confidence・
+  model/tokens/latency を人間が読みやすい Markdown で出力 (2 段階は Stage 別、障害候補ノード・GPT 監査も付記)。
+- **GPT-5.5 = OpenAI Responses API へ移行**: 公式 GPT-5.5 ガイダンスに従い、監査 / 構成3 の
+  OpenAI 呼び出しを Chat Completions → **Responses API** (`client.responses.create`) に変更。
+  `instructions` (system) + `input` (user) + `max_output_tokens` + `reasoning={"effort":"low"}`
+  + `text={"verbosity":"low"}` を使用 (audit_agent.py / multi_model_agent.py)。
+  これにより旧実装の `max_tokens` 非対応エラー (400 Unsupported parameter) を解消。
+  usage は `input_tokens` / `output_tokens`、本文は `output_text` で取得。
 
 | 項目 | 変更後 |
 |---|---|

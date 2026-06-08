@@ -12,9 +12,8 @@ Claude 系で動いた構成4 (rally) の結論を **独立した別モデル (G
 出力:
     AuditReport (verdict: agree/partial/disagree/uncertain)
 
-意図的に低コストモデル (gpt-4o-mini) を既定にしている — 監査は
-「同じ証拠から別の結論が出ないか」を確認する補助的タスクなので、
-最高品質より価格重視が合う。``AUDIT_MODEL`` 環境変数で上書き可能。
+既定モデルは OpenAI の ``gpt-5.5``（Claude 系本体とは別ベンダーで独立検証する意図）。
+``AUDIT_MODEL`` 環境変数で上書き可能。
 """
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.schema import AnalysisResult, AuditReport
 
 
-_DEFAULT_AUDIT_MODEL = "gpt-4o-mini"
+_DEFAULT_AUDIT_MODEL = "gpt-5.5"
 
 
 SYSTEM_PROMPT = """\
@@ -125,17 +124,19 @@ def run_audit(
     started = time.perf_counter()
     try:
         client = openai.OpenAI()
-        response = client.chat.completions.create(
+        # GPT-5.x は Responses API + reasoning.effort / text.verbosity が推奨
+        # (OpenAI 公式 GPT-5.5 ガイダンス)。監査は補助タスクなので effort=low / verbosity=low。
+        # reasoning トークンが出力枠を食って空応答になるのを避けるため max_output_tokens は余裕を持たせる。
+        response = client.responses.create(
             model=chosen_model,
-            max_tokens=1500,
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": _build_user_input(log_text, topology_context, analysis_result)},
-            ],
-            temperature=0.1,
+            instructions=sys_prompt,
+            input=_build_user_input(log_text, topology_context, analysis_result),
+            max_output_tokens=4000,
+            reasoning={"effort": "low"},
+            text={"verbosity": "low"},
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        raw = response.choices[0].message.content or ""
+        raw = (getattr(response, "output_text", None) or "")
         parsed, parse_error = safe_extract_json(
             raw,
             fallback={
@@ -150,8 +151,9 @@ def run_audit(
         if verdict not in {"agree", "partial", "disagree", "uncertain"}:
             verdict = "uncertain"
         usage = getattr(response, "usage", None)
-        tokens_in = int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0
-        tokens_out = int(getattr(usage, "completion_tokens", 0) or 0) if usage else 0
+        # Responses API の usage は input_tokens / output_tokens
+        tokens_in = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+        tokens_out = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
         summary = str(parsed.get("summary") or "").strip()
         if parse_error:
             summary = (summary + f" [parse_error: {parse_error[:120]}]").strip()

@@ -1,0 +1,197 @@
+/**
+ * 解析結果 (AnalysisResult) の「推論過程」を、人間が読みやすい **ノード(エージェント)毎の
+ * Markdown レポート**に変換するユーティリティ。
+ *
+ * 委譲チェーン (delegation_history) を「どのノードが何をしたか」でグルーピングし、
+ * 各ノードのラウンド・委譲先・理由・観点・confidence・モデル/トークン/レイテンシ
+ * (round_metrics) を読みやすく並べる。2 段階解析では Stage ごとに展開する。
+ */
+import type {
+  AnalysisResult,
+  DelegationEvent,
+  RoundMetrics,
+  StageOutput,
+} from './types'
+
+const ROLE_LABEL: Record<string, string> = {
+  orchestrator: 'オーケストレータ',
+  integrator: '統合 (integrator)',
+  fw: 'FW 監視',
+  routing: 'Routing 監視',
+  app: 'App 監視',
+  dns: 'DNS 監視',
+  sec: 'Sec 監視',
+}
+function roleLabel(role: string): string {
+  return ROLE_LABEL[role] ?? `${role} 監視`
+}
+
+const SEVERITY_LABEL: Record<string, string> = {
+  primary: '直接原因',
+  secondary: '影響を受けた側',
+  info: '参考',
+}
+
+// 委譲イベントを「行動の説明」に変換 (kind 別の日本語化)
+function eventAction(d: DelegationEvent): string {
+  const to = d.to_node ? roleLabel(d.to_node) : ''
+  switch (d.kind) {
+    case 'orchestrator_initial': return `初手に **${to}** を選択`
+    case 'orchestrator_restart': return `介入を受けて **${to}** を再選択`
+    case 'monitor_delegation': return `**${to}** に委譲`
+    case 'monitor_finalize': return '統合 (integrator) を指名（自然終了）'
+    case 'routing_violation_fallback': return '遷移制約違反のため integrator に強制フォールバック'
+    case 'max_rounds_finalize': return 'ラウンド上限により強制終了'
+    case 'user_finalize': return 'ユーザーが停止を選択'
+    case 'user_extend': return 'ユーザーがラウンド延長を選択'
+    default: return d.to_node ? `→ ${to}` : (d.kind || '')
+  }
+}
+
+function actingRole(d: DelegationEvent): string {
+  if (d.kind === 'orchestrator_initial' || d.kind === 'orchestrator_restart') return 'orchestrator'
+  return d.from_node ?? 'orchestrator'
+}
+
+function metricFor(metrics: RoundMetrics[], role: string, round: number): RoundMetrics | undefined {
+  return metrics.find(m => m.role === role && m.round === round) ?? metrics.find(m => m.role === role)
+}
+
+function metricSuffix(m: RoundMetrics | undefined): string {
+  if (!m) return ''
+  return ` _(model: ${m.model || '?'} · ${m.tokens_in.toLocaleString()}/${m.tokens_out.toLocaleString()} tok · ${(m.latency_ms / 1000).toFixed(1)}s)_`
+}
+
+interface StageBlock {
+  label: string
+  history: DelegationEvent[]
+  metrics: RoundMetrics[]
+  confidence: number
+  candidates: AnalysisResult['root_cause_candidates']
+  actions: AnalysisResult['recommended_actions']
+}
+
+function renderStage(lines: string[], st: StageBlock): void {
+  // 委譲イベントを実行ノードごとにグルーピング (登場順を保つ)
+  const order: string[] = []
+  const byRole = new Map<string, DelegationEvent[]>()
+  for (const d of st.history) {
+    if (d.kind === 'user_finalize' || d.kind === 'user_extend') continue
+    const role = actingRole(d)
+    if (!byRole.has(role)) { byRole.set(role, []); order.push(role) }
+    byRole.get(role)!.push(d)
+  }
+
+  for (const role of order) {
+    lines.push(`### ${roleLabel(role)}`)
+    for (const d of byRole.get(role)!) {
+      const m = metricFor(st.metrics, role, d.round)
+      lines.push(`- **round ${d.round}**: ${eventAction(d)}${metricSuffix(m)}`)
+      if (d.confidence != null) lines.push(`    - confidence: ${d.confidence.toFixed(2)}`)
+      if (d.rationale) lines.push(`    - 理由: ${d.rationale}`)
+      if (d.focus_hint) lines.push(`    - 次への観点: ${d.focus_hint}`)
+    }
+    lines.push('')
+  }
+
+  // 統合ノードの最終結論
+  const im = st.metrics.find(m => m.role === 'integrator')
+  lines.push(`### ${roleLabel('integrator')}`)
+  lines.push(`- 最終確信度: **${st.confidence.toFixed(2)}**${metricSuffix(im)}`)
+  if (st.candidates.length > 0) {
+    lines.push('- 根本原因候補:')
+    for (const c of st.candidates) lines.push(`    - [${c.category}] ${c.summary}`)
+  }
+  const prov = st.actions.filter(a => a.kind === 'provisional')
+  const perm = st.actions.filter(a => a.kind !== 'provisional')
+  if (prov.length > 0) {
+    lines.push('- 推奨アクション（暫定対応）:')
+    for (const a of prov) lines.push(`    - [${a.risk_level}]${a.human_judgment_required ? '[人間判断必須]' : ''} ${a.action}`)
+  }
+  if (perm.length > 0) {
+    lines.push('- 推奨アクション（本質対応）:')
+    for (const a of perm) lines.push(`    - [${a.risk_level}]${a.human_judgment_required ? '[人間判断必須]' : ''} ${a.action}`)
+  }
+  lines.push('')
+}
+
+export function buildReasoningReport(result: AnalysisResult): string {
+  const lines: string[] = []
+  lines.push('# 推論過程レポート (config-log 解析)')
+  lines.push('')
+  lines.push('## 概要')
+  lines.push(`- 最終確信度: **${result.confidence.toFixed(2)}**`)
+  lines.push(`- 合計トークン (in / out): ${result.metrics.tokens_in.toLocaleString()} / ${result.metrics.tokens_out.toLocaleString()}`)
+  lines.push(`- 合計レイテンシ: ${(result.metrics.latency_ms_total / 1000).toFixed(1)}s`)
+  if (result.trace_id) lines.push(`- trace_id: ${result.trace_id}`)
+  lines.push('')
+
+  const stages: StageOutput[] = result.stage_outputs ?? []
+  if (stages.length >= 2) {
+    for (const s of stages) {
+      lines.push(`## ${s.stage_label || s.stage}`)
+      lines.push('')
+      renderStage(lines, {
+        label: s.stage_label || s.stage,
+        history: s.delegation_history ?? [],
+        metrics: s.round_metrics ?? [],
+        confidence: s.confidence,
+        candidates: s.root_cause_candidates ?? [],
+        actions: s.recommended_actions ?? [],
+      })
+    }
+  } else {
+    lines.push('## 推論チェーン（ノード別）')
+    lines.push('')
+    renderStage(lines, {
+      label: '',
+      history: result.delegation_history ?? [],
+      metrics: result.round_metrics ?? [],
+      confidence: result.confidence,
+      candidates: result.root_cause_candidates ?? [],
+      actions: result.recommended_actions ?? [],
+    })
+  }
+
+  // 障害候補ノード (トポロジ上のノード)
+  if (result.suspected_node_findings && result.suspected_node_findings.length > 0) {
+    lines.push('## 障害候補ノード')
+    for (const f of result.suspected_node_findings) {
+      const sev = SEVERITY_LABEL[f.severity || ''] ?? f.severity ?? ''
+      lines.push(`- **${f.node_id}**${sev ? ` [${sev}]` : ''}: ${f.summary || '(詳細未記載)'}`)
+    }
+    lines.push('')
+  }
+
+  // GPT 監査
+  if (result.audit_report) {
+    const ar = result.audit_report
+    lines.push('## GPT 監査')
+    lines.push(`- verdict: **${ar.verdict}** (confidence ${ar.confidence.toFixed(2)}, model ${ar.model || '?'})`)
+    if (ar.summary) lines.push(`- 総評: ${ar.summary}`)
+    if (ar.concerns.length > 0) {
+      lines.push('- 指摘事項:')
+      for (const c of ar.concerns) lines.push(`    - ${c}`)
+    }
+    if (ar.alternative_hypotheses.length > 0) {
+      lines.push('- 別の仮説:')
+      for (const h of ar.alternative_hypotheses) lines.push(`    - ${h}`)
+    }
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
+/** テキストをファイルとしてダウンロードさせる (Markdown / プレーンテキスト)。 */
+export function downloadText(filename: string, text: string, mime = 'text/markdown;charset=utf-8;'): void {
+  const blob = new Blob(['﻿' + text], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}

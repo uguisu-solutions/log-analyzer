@@ -26,7 +26,7 @@ export function AuditReportView({ report }: Props) {
         <h4>監査エージェントの所見 (GPT)</h4>
         <span className={`audit-verdict-badge audit-${verdict}`}>{label}</span>
         <span className="audit-meta muted">
-          model: {report.model || 'gpt-4o-mini'} ·
+          model: {report.model || 'gpt-5.5'} ·
           confidence {report.confidence.toFixed(2)} ·
           {report.tokens_in.toLocaleString()}/{report.tokens_out.toLocaleString()} tok ·
           {(report.latency_ms / 1000).toFixed(1)}s

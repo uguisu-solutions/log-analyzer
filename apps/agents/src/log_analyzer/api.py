@@ -121,21 +121,21 @@ BUILTIN_STRUCTURES: dict[str, dict] = {
                 "id": "sonnet",
                 "type": "slot_instance",
                 "slot_id": "analyze",
-                "fixed_model": "claude-sonnet-4-5",
+                "fixed_model": "claude-opus-4-7",
                 "label": "Sonnet\n(slot: analyze)",
             },
             {
                 "id": "haiku",
                 "type": "slot_instance",
                 "slot_id": "analyze",
-                "fixed_model": "claude-haiku-4-5",
+                "fixed_model": "claude-opus-4-7",
                 "label": "Haiku\n(slot: analyze)",
             },
             {
                 "id": "openai",
                 "type": "slot_instance",
                 "slot_id": "analyze",
-                "fixed_model": "gpt-4o-mini",
+                "fixed_model": "gpt-5.5",
                 "label": "GPT-4o-mini\n(slot: analyze)",
             },
             {"id": "integrate", "type": "slot", "slot_id": "integrate", "label": "統合（最終出力）"},
@@ -1079,7 +1079,7 @@ def get_default_pipeline() -> PipelineDefaultResponse:
                     "id": "output",
                     "type": "output",
                     "prompt": pipeline_runner.DEFAULT_OUTPUT_PROMPT,
-                    "model": "claude-sonnet-4-5",
+                    "model": "claude-opus-4-7",
                     "input_template": pipeline_runner.DEFAULT_INPUT_TEMPLATE_OUTPUT,
                 },
             ],
@@ -1718,6 +1718,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             trace_id=final_result.trace_id,
             log_ref=log_ref,
         )
+        # 監査結果は rally の最終 result に乗っている (run_rally_stream 内で実行)。
+        # _build_final_result は stage_outputs から再構築するため audit_report が落ちるので引き継ぐ。
+        final.audit_report = final_result.audit_report
         final_dict = final.model_dump(mode="json")
         yield _sse_bytes("final", {"result": final_dict})
         _record_history(final_dict)

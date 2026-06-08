@@ -16,6 +16,7 @@ from log_analyzer.rally_two_stage import (
 )
 from log_analyzer.schema import (
     AnalysisResult,
+    AuditReport,
     ConfigId,
     Metrics,
     RecommendedAction,
@@ -470,6 +471,52 @@ def test_run_two_stage_stream_advance_emits_both_stages(monkeypatch):
     assert stages == ["config", "log"]
     assert result["confidence"] == 0.85
     assert result["metrics"]["tokens_in"] == 800
+
+
+def test_single_mode_preserves_audit_report(monkeypatch):
+    """1 段階モードで監査が有効なとき、最終 result に audit_report が引き継がれる。
+
+    監査は run_rally_stream 内で実行され rally の result に乗るが、_gen_single は
+    _build_final_result で再構築するため、明示的に引き継がないと欠落する (回帰防止)。
+    """
+    import json as _json
+    from log_analyzer.rally_agent import StreamEvent as RealStreamEvent
+
+    async def fake_rally(*args, **kwargs):
+        ar = AnalysisResult(
+            config_id=ConfigId.CONFIG4,
+            input_log_ref="x",
+            root_cause_candidates=[RootCauseCandidate(category=Category.FW, summary="s")],
+            recommended_actions=[],
+            confidence=0.8,
+            metrics=Metrics(tokens_in=1, tokens_out=1, latency_ms_total=1),
+            audit_report=AuditReport(verdict="disagree", confidence=0.78, summary="audit ran"),
+        )
+        yield RealStreamEvent("final", {"result": ar.model_dump(mode="json")})
+
+    monkeypatch.setattr("log_analyzer.api.run_rally_stream", fake_rally)
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-log-stream",
+        json={
+            "config": "config4",
+            "topology": {"nodes": [{"id": "fw-01"}], "links": []},
+            "node_configs": {"fw-01": [{"name": "x.conf", "content": "x"}]},
+            "analysis_mode": "single",
+            "single_source": "config",
+            "audit_after_integrator": True,
+        },
+    )
+    assert r.status_code == 200
+    # SSE 本文から final イベントの result を取り出す
+    final_result = None
+    for block in r.text.split("\n\n"):
+        if "event: final" in block:
+            data = "".join(ln[5:].strip() for ln in block.splitlines() if ln.startswith("data:"))
+            final_result = _json.loads(data)["result"]
+    assert final_result is not None
+    assert final_result["audit_report"] is not None
+    assert final_result["audit_report"]["verdict"] == "disagree"
 
 
 def test_run_two_stage_stream_log_config_order(monkeypatch):

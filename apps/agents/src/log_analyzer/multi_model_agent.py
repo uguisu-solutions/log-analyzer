@@ -2,13 +2,14 @@
 
 パイプライン:
     log text
-      ─┬─> Claude Sonnet 4.5 ──┐
-       ├─> Claude Haiku 4.5  ──┼─> 統合エージェント (Sonnet 4.5) ─> AnalysisResult
-       └─> OpenAI GPT-4o(-mini)─┘
+      ─┬─> Claude Opus 4.7 ────┐
+       ├─> Claude Opus 4.7 ────┼─> 統合エージェント (Opus 4.7) ─> AnalysisResult
+       └─> OpenAI GPT-5.5 ──────┘
 
 並列実行は `asyncio.gather` で実装（AWS Step Functions Parallel の代替、2026-05-07 決定）。
-3rd モデルの GPT-4o(-mini) は Amazon Nova の代替として採用。Anthropic 系列とは
-独立したベンダーなので、Q3「マルチモデルは単一より優れるか」をベンダー横断で評価できる。
+3rd モデルの GPT-5.5 は Anthropic 系列とは独立したベンダーなので、
+Q3「マルチモデルは単一より優れるか」をベンダー横断で評価できる。
+（モデル統一方針 2026-06: Claude=Opus 4.7 / OpenAI=GPT-5.5）
 """
 from __future__ import annotations
 
@@ -92,23 +93,25 @@ async def _analyze_with_openai(
 ) -> _ModelRunResult:
     client = openai.AsyncOpenAI()
     started = time.perf_counter()
-    response = await client.chat.completions.create(
+    # GPT-5.x は Responses API + reasoning.effort / text.verbosity が推奨 (OpenAI 公式ガイダンス)。
+    response = await client.responses.create(
         model=model,
-        max_tokens=2000,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": log_text},
-        ],
+        instructions=system_prompt,
+        input=log_text,
+        max_output_tokens=4000,
+        reasoning={"effort": "low"},
+        text={"verbosity": "low"},
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    raw_text = response.choices[0].message.content or ""
+    raw_text = getattr(response, "output_text", None) or ""
     parsed = _extract_json(raw_text)
+    usage = getattr(response, "usage", None)
     return _ModelRunResult(
         role=role,
         model=model,
         parsed=parsed,
-        tokens_in=response.usage.prompt_tokens,
-        tokens_out=response.usage.completion_tokens,
+        tokens_in=int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
+        tokens_out=int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
         latency_ms=latency_ms,
     )
 
@@ -174,9 +177,9 @@ async def _run_multi_model_async(
     model_overrides: dict[str, str],
 ) -> AnalysisResult:
     # 3 並列段は設計上 Sonnet / Haiku / GPT-4o-mini で固定（モデル上書き不可）
-    sonnet_model = os.environ.get("BASELINE_MODEL", "claude-sonnet-4-5")
-    haiku_model = os.environ.get("FILTER_MODEL", "claude-haiku-4-5")
-    openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    sonnet_model = os.environ.get("BASELINE_MODEL", "claude-opus-4-7")
+    haiku_model = os.environ.get("FILTER_MODEL", "claude-opus-4-7")
+    openai_model = os.environ.get("OPENAI_MODEL", "gpt-5.5")
     # 統合段はモデル上書き可
     integrate_model = model_overrides.get("integrate") or sonnet_model
     analyze_prompt = prompt_overrides.get("analyze", SYSTEM_PROMPT)

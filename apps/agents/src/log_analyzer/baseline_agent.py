@@ -64,7 +64,7 @@ def run_baseline(
     """
     p_overrides = prompt_overrides or {}
     m_overrides = model_overrides or {}
-    model = m_overrides.get("analyze") or os.environ.get("BASELINE_MODEL", "claude-sonnet-4-5")
+    model = m_overrides.get("analyze") or os.environ.get("BASELINE_MODEL", "claude-opus-4-7")
     system_prompt = p_overrides.get("analyze", SYSTEM_PROMPT)
     langfuse = get_client()
 
