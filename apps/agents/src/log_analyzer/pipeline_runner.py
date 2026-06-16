@@ -45,7 +45,7 @@ from log_analyzer.schema import (
     RecommendedAction,
     RootCauseCandidate,
 )
-from log_analyzer.tracing import flush, get_client
+from log_analyzer.tracing import flush, get_client, usage_for
 
 
 # ─── デフォルトプロンプト ──────────────────────────────────────────────
@@ -333,7 +333,7 @@ async def _run_pipeline_async(
                     model=meta["model"],
                     input=meta["user_input_preview"],
                     output=meta["raw_output"],
-                    usage_details={"input": meta["tokens_in"], "output": meta["tokens_out"]},
+                    usage=usage_for(meta["model"], meta["tokens_in"], meta["tokens_out"]),
                 )
     wall_ms = int((time.perf_counter() - wall_start) * 1000)
 

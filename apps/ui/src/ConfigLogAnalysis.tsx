@@ -36,6 +36,8 @@ import type {
   LogEntry,
   NodeAttachment,
   NodeAttachments,
+  NodeLogSource,
+  NodeLogSources,
   QuestionnaireAnswers,
   SSEEvent,
   StageOutput,
@@ -47,6 +49,8 @@ import type {
 const API_BASE = 'http://localhost:8000'
 // トポロジー解析タブとは別キーで保存 (誤共有を防ぐ)
 const STORAGE_KEY = 'log-analyzer.config-log-topology-v1'
+// アップロード 1 ファイルの上限 (これを超えるものは BigQuery 取得へ誘導しフリーズを防ぐ)
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024  // 5 MB
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 // 解析モード
@@ -126,6 +130,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   // ─── ノード別添付 (揮発) ─────────────────────────────────────
   const [nodeLogs, setNodeLogs] = useState<NodeAttachments>({})
   const [nodeConfigs, setNodeConfigs] = useState<NodeAttachments>({})
+  // ノード別のログ取得元 (未設定は 'upload' 扱い)。'bigquery' のノードは
+  // アップロードの代わりに解析エージェントが BQ から取得する。
+  const [nodeLogSources, setNodeLogSources] = useState<NodeLogSources>({})
 
   // ─── 編集モード ──────────────────────────────────────────────
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -280,11 +287,34 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   // ログ / config をファイルごと (複数可) ノードに追加
   const addFilesToNode = (setter: Dispatch<SetStateAction<NodeAttachments>>, nodeId: string, files: FileList) => {
     for (const file of Array.from(files)) {
+      // 大容量ファイルは UI フリーズ・API 入力上限の原因になるため、上限超は拒否し
+      // BigQuery 取得ルートへ誘導する。
+      if (file.size > MAX_UPLOAD_BYTES) {
+        const mb = (file.size / (1024 * 1024)).toFixed(1)
+        setError(
+          `「${file.name}」は ${mb}MB で上限 ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB を超えています。` +
+          `大容量ログはノードの「ログ取得元」を BigQuery に切り替えてご利用ください。`
+        )
+        continue
+      }
       const reader = new FileReader()
       reader.onload = () => addAttachment(setter, nodeId, { name: file.name, content: String(reader.result ?? '') })
       reader.onerror = () => setError(`ファイル読み込みに失敗: ${file.name}`)
       reader.readAsText(file)
     }
+  }
+
+  // ─── ログ取得元 (upload / bigquery) ──────────────────────────
+  const getLogSource = (nodeId: string): NodeLogSource =>
+    nodeLogSources[nodeId] ?? { type: 'upload' }
+  const setLogSourceType = (nodeId: string, type: 'upload' | 'bigquery') => {
+    setNodeLogSources(prev => ({ ...prev, [nodeId]: { ...(prev[nodeId] ?? { type: 'upload' }), type } }))
+  }
+  const updateLogSource = (nodeId: string, patch: Partial<NodeLogSource>) => {
+    setNodeLogSources(prev => ({
+      ...prev,
+      [nodeId]: { ...(prev[nodeId] ?? { type: 'upload' }), ...patch },
+    }))
   }
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if (editMode !== 'add' || !topology.image) return
@@ -329,6 +359,12 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       return next
     }
     setNodeLogs(renameKey); setNodeConfigs(renameKey)
+    setNodeLogSources(prev => {
+      if (!(oldId in prev)) return prev
+      const next: NodeLogSources = {}
+      for (const [k, val] of Object.entries(prev)) next[k === oldId ? trimmed : k] = val
+      return next
+    })
     if (selectedNodeId === oldId) setSelectedNodeId(trimmed)
   }
   const deleteNode = (id: string) => {
@@ -344,11 +380,15 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       return next
     }
     setNodeLogs(dropKey); setNodeConfigs(dropKey)
+    setNodeLogSources(prev => {
+      if (!(id in prev)) return prev
+      const { [id]: _drop, ...rest } = prev; return rest
+    })
     if (selectedNodeId === id) setSelectedNodeId(null)
   }
   const clearAll = () => {
     if (!confirm('構成図とノード定義をすべて削除します。よろしいですか？')) return
-    setTopology(EMPTY_TOPOLOGY); setNodeLogs({}); setNodeConfigs({})
+    setTopology(EMPTY_TOPOLOGY); setNodeLogs({}); setNodeConfigs({}); setNodeLogSources({})
     setSelectedNodeId(null); setStageOneOutput(null); setStageTwoOutput(null)
     setFinalResult(null); setStreamEvents([]); setStageStatus('idle')
   }
@@ -397,9 +437,20 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     () => Object.values(nodeConfigs).some(list => list.some(a => a.content.trim().length > 0)),
     [nodeConfigs],
   )
+  // BigQuery 取得に設定された (かつトポロジーに存在する) ノード ID 一覧
+  const bigqueryNodeIds = useMemo(
+    () => Object.entries(nodeLogSources)
+      .filter(([nid, s]) => s.type === 'bigquery' && topology.nodes.some(n => n.id === nid))
+      .map(([nid]) => nid),
+    [nodeLogSources, topology.nodes],
+  )
+  // ログ有無: アップロード済みログ または BigQuery 取得ノードのいずれか
   const hasLog = useMemo(
-    () => Object.values(nodeLogs).some(list => list.some(a => a.content.trim().length > 0)),
-    [nodeLogs],
+    () => bigqueryNodeIds.length > 0
+      || Object.entries(nodeLogs).some(([nid, list]) =>
+        nodeLogSources[nid]?.type !== 'bigquery'
+        && list.some(a => a.content.trim().length > 0)),
+    [nodeLogs, nodeLogSources, bigqueryNodeIds],
   )
   const canRun = useMemo(() => {
     if (isRunning) return false
@@ -454,6 +505,35 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     // run_id_assigned から取得した実際の run_id を保持 (state の runId は本クロージャでは
     // 古い値のため、ローカル変数で確実に追跡する)
     let currentRunId: string | null = null
+    // BigQuery 取得ノードはアップロード本文を送らず、取得指定 (node_bigquery) を送る
+    const logsToSend = (() => {
+      if (!showLogForm) return {}
+      const f = filteredAttachments(nodeLogs)
+      for (const nid of Object.keys(f)) {
+        if (nodeLogSources[nid]?.type === 'bigquery') delete f[nid]
+      }
+      return f
+    })()
+    const nodeBigquery: Record<string, {
+      host: string; table: string
+      host_column: string; time_column: string; text_column: string; columns: string[]
+      start: string; end: string; limit: number | null
+    }> = {}
+    if (showLogForm) {
+      for (const nid of bigqueryNodeIds) {
+        const s = nodeLogSources[nid]
+        nodeBigquery[nid] = {
+          host: s?.host || '', table: s?.table || '',
+          // 空欄 = 強制しない (host列は絞らない / 時刻列・本文列はエージェントが自動判定)。
+          // 指定があればそれを既定値として渡し、エージェントの明示指定で上書きされる。
+          host_column: s?.hostColumn || '',
+          time_column: s?.timeColumn || '',
+          text_column: s?.textColumn || '',
+          columns: (s?.columns || '').split(',').map(c => c.trim()).filter(Boolean),
+          start: s?.start || '', end: s?.end || '', limit: s?.limit ?? null,
+        }
+      }
+    }
     try {
       const body = {
         config: selectedConfig,
@@ -463,8 +543,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           links: topology.links,
         },
         // フォーム非表示の種別は送らない (意図に忠実 + 無駄なトークン削減)
-        node_logs: showLogForm ? filteredAttachments(nodeLogs) : {},
+        node_logs: logsToSend,
         node_configs: showConfigForm ? filteredAttachments(nodeConfigs) : {},
+        node_bigquery: nodeBigquery,
         analysis_mode: analysisMode,
         single_source: singleSource,
         stage_order: stageOrder,
@@ -641,11 +722,14 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
               node={selectedNode}
               logs={nodeLogs[selectedNode.id] ?? []}
               configs={nodeConfigs[selectedNode.id] ?? []}
+              logSource={getLogSource(selectedNode.id)}
               sampleLogs={logs}
               showConfigForm={showConfigForm}
               showLogForm={showLogForm}
               onUpdate={(patch) => updateNode(selectedNode.id, patch)}
               onRename={(newId) => renameNode(selectedNode.id, newId)}
+              onSetLogSourceType={(t) => setLogSourceType(selectedNode.id, t)}
+              onUpdateLogSource={(patch) => updateLogSource(selectedNode.id, patch)}
               onAddLog={() => addAttachment(setNodeLogs, selectedNode.id, { name: '', content: '' })}
               onUpdateLog={(i, patch) => updateAttachment(setNodeLogs, selectedNode.id, i, patch)}
               onRemoveLog={(i) => removeAttachment(setNodeLogs, selectedNode.id, i)}
@@ -1181,11 +1265,14 @@ interface CfNodeEditorProps {
   node: TopologyNode
   logs: NodeAttachment[]
   configs: NodeAttachment[]
+  logSource: NodeLogSource
   sampleLogs: LogEntry[]
   showConfigForm: boolean
   showLogForm: boolean
   onUpdate: (patch: Partial<TopologyNode>) => void
   onRename: (newId: string) => void
+  onSetLogSourceType: (type: 'upload' | 'bigquery') => void
+  onUpdateLogSource: (patch: Partial<NodeLogSource>) => void
   onAddLog: () => void
   onUpdateLog: (i: number, patch: Partial<NodeAttachment>) => void
   onRemoveLog: (i: number) => void
@@ -1200,8 +1287,10 @@ interface CfNodeEditorProps {
   allNodes: TopologyNode[]
 }
 function CfNodeEditor(props: CfNodeEditorProps) {
-  const { node, logs, configs, sampleLogs, showConfigForm, showLogForm, onUpdate, onRename, onAddLog, onUpdateLog, onRemoveLog,
+  const { node, logs, configs, logSource, sampleLogs, showConfigForm, showLogForm, onUpdate, onRename,
+          onSetLogSourceType, onUpdateLogSource, onAddLog, onUpdateLog, onRemoveLog,
           onAddConfig, onUpdateConfig, onRemoveConfig, onDropLogFiles, onDropConfigFiles, onLoadSample, onDelete, isSuspected, allNodes } = props
+  const isBigQuery = logSource.type === 'bigquery'
   const [idDraft, setIdDraft] = useState(node.id)
   useEffect(() => setIdDraft(node.id), [node.id])
   const idTaken = idDraft !== node.id && allNodes.some(n => n.id === idDraft)
@@ -1222,14 +1311,87 @@ function CfNodeEditor(props: CfNodeEditorProps) {
       <label className="field"><span>ip</span><input type="text" value={node.ip} onChange={e => onUpdate({ ip: e.target.value })} /></label>
 
       {showLogForm && (
-        <CfAttachmentSection title="ログファイル" kind="log" items={logs}
-          onAdd={onAddLog} onUpdate={onUpdateLog} onRemove={onRemoveLog} onDropFiles={onDropLogFiles}
-          extraTopRow={
-            <select defaultValue="" onChange={e => { if (e.target.value) { onLoadSample(e.target.value); e.target.value = '' } }}>
-              <option value="">＋ samples/logs/ から追加...</option>
-              {sampleLogs.map(l => <option key={l.name} value={l.name}>{l.name} ({l.lines} 行)</option>)}
-            </select>
-          } />
+        <div className="log-source-block">
+          <div className="field log-source-toggle">
+            <span>ログ取得元</span>
+            <div className="log-source-radios">
+              <label>
+                <input type="radio" name={`logsrc-${node.id}`} checked={!isBigQuery}
+                  onChange={() => onSetLogSourceType('upload')} />
+                アップロード
+              </label>
+              <label>
+                <input type="radio" name={`logsrc-${node.id}`} checked={isBigQuery}
+                  onChange={() => onSetLogSourceType('bigquery')} />
+                BigQuery 取得
+              </label>
+            </div>
+          </div>
+          {isBigQuery ? (
+            <div className="bq-source-fields">
+              <p className="muted">
+                このノードのログは BigQuery から取得します（大容量ログ向け）。
+                解析エージェントが取得前にテーブルのスキーマ（列構成）とサンプル行を自動で確認し、
+                時刻・キーワードで絞って必要分だけ取得します。通常は <strong>table</strong> を指定するだけでOKです。
+                ※テーブルが未パーティションの場合、期間で絞ってもスキャン量（課金）は
+                減らないことがあります。コスト上限は環境変数 BIGQUERY_MAX_BYTES_BILLED で制御します。
+              </p>
+              <label className="field"><span>table</span>
+                <input type="text" value={logSource.table ?? ''} placeholder="(既定テーブル) 例: logs.ad021_case2"
+                  onChange={e => onUpdateLogSource({ table: e.target.value })} />
+              </label>
+              <label className="field"><span>host</span>
+                <input type="text" value={logSource.host ?? ''} placeholder={node.id}
+                  onChange={e => onUpdateLogSource({ host: e.target.value })} />
+              </label>
+              <details className="bq-advanced">
+                <summary>列の手動指定（任意・通常は不要。空ならエージェントが自動判定）</summary>
+                <p className="muted">
+                  テーブルに host 列がある場合のみ「host列」を指定してください
+                  （空ならテーブル全体を対象＝1テーブル1機器）。時刻列・本文列・取得列は
+                  空のままでエージェントがスキーマから判断します。指定した場合はそれを優先します。
+                </p>
+                <label className="field"><span>host列</span>
+                  <input type="text" value={logSource.hostColumn ?? ''} placeholder="(空=テーブル全体)"
+                    onChange={e => onUpdateLogSource({ hostColumn: e.target.value })} />
+                </label>
+                <label className="field"><span>時刻列</span>
+                  <input type="text" value={logSource.timeColumn ?? ''} placeholder="(空=自動判定) 例: timestamp"
+                    onChange={e => onUpdateLogSource({ timeColumn: e.target.value })} />
+                </label>
+                <label className="field"><span>本文列</span>
+                  <input type="text" value={logSource.textColumn ?? ''} placeholder="(空=自動判定) 例: log_message"
+                    onChange={e => onUpdateLogSource({ textColumn: e.target.value })} />
+                </label>
+                <label className="field"><span>取得列</span>
+                  <input type="text" value={logSource.columns ?? ''} placeholder="(空=全列) 例: timestamp,priority,log_message"
+                    onChange={e => onUpdateLogSource({ columns: e.target.value })} />
+                </label>
+              </details>
+              <label className="field"><span>開始 (任意)</span>
+                <input type="text" value={logSource.start ?? ''} placeholder="2026-06-10T09:00:00Z"
+                  onChange={e => onUpdateLogSource({ start: e.target.value })} />
+              </label>
+              <label className="field"><span>終了 (任意)</span>
+                <input type="text" value={logSource.end ?? ''} placeholder="2026-06-10T10:00:00Z"
+                  onChange={e => onUpdateLogSource({ end: e.target.value })} />
+              </label>
+              <label className="field"><span>件数上限 (任意)</span>
+                <input type="number" min={1} value={logSource.limit ?? ''}
+                  onChange={e => onUpdateLogSource({ limit: e.target.value ? Number(e.target.value) : undefined })} />
+              </label>
+            </div>
+          ) : (
+            <CfAttachmentSection title="ログファイル" kind="log" items={logs}
+              onAdd={onAddLog} onUpdate={onUpdateLog} onRemove={onRemoveLog} onDropFiles={onDropLogFiles}
+              extraTopRow={
+                <select defaultValue="" onChange={e => { if (e.target.value) { onLoadSample(e.target.value); e.target.value = '' } }}>
+                  <option value="">＋ samples/logs/ から追加...</option>
+                  {sampleLogs.map(l => <option key={l.name} value={l.name}>{l.name} ({l.lines} 行)</option>)}
+                </select>
+              } />
+          )}
+        </div>
       )}
 
       {showConfigForm && (

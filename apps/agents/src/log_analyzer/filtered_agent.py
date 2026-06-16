@@ -29,7 +29,7 @@ from log_analyzer.schema import (
     RecommendedAction,
     RootCauseCandidate,
 )
-from log_analyzer.tracing import flush, get_client
+from log_analyzer.tracing import flush, get_client, usage_for
 
 HAIKU_TRIAGE_PROMPT = """\
 あなたはインフラログ解析の前処理エンジニアです。
@@ -90,10 +90,8 @@ def run_filtered(
         model=haiku_model,
         input=haiku_input[:2000],
         output=triage_card,
-        usage_details={
-            "input": haiku_response.usage.input_tokens,
-            "output": haiku_response.usage.output_tokens,
-        },
+        usage=usage_for(haiku_model, haiku_response.usage.input_tokens,
+                        haiku_response.usage.output_tokens),
     )
 
     sonnet_input = _format_sonnet_input(triage_card, fr)
@@ -181,10 +179,8 @@ def run_filtered(
         model=sonnet_model,
         input=sonnet_input[:2000],
         output=raw_text,
-        usage_details={
-            "input": sonnet_response.usage.input_tokens,
-            "output": sonnet_response.usage.output_tokens,
-        },
+        usage=usage_for(sonnet_model, sonnet_response.usage.input_tokens,
+                        sonnet_response.usage.output_tokens),
     )
     trace.update(output=result.model_dump(mode="json"))
     flush()

@@ -142,6 +142,8 @@ async def _run_one_stage(
     model_overrides: dict[str, str],
     rally_max_rounds: int,
     decision_waiter: TwoStageDecisionWaiter | None,
+    bq_sources: dict[str, dict] | None = None,
+    evidence_sink: list[dict] | None = None,
 ) -> AsyncIterator[StreamEvent | AnalysisResult]:
     """単一 Stage の rally を実行し、SSE イベントを順次 yield する。
 
@@ -149,6 +151,9 @@ async def _run_one_stage(
     (1 / 2) を付加して UI 側で Stage の区別をできるようにする。``final`` イベントの
     代わりに最終 ``AnalysisResult`` を最後の要素として yield する (呼び出し側で
     StageOutput に変換)。
+
+    ``evidence_sink`` を渡すと、内側 rally が BigQuery から取得した実ログ
+    (final イベント同梱の ``bq_evidence``) をそこへ蓄積する。監査へ渡す証拠用。
     """
     final_result: AnalysisResult | None = None
     async for ev in run_rally_stream(
@@ -159,6 +164,7 @@ async def _run_one_stage(
         rally_max_rounds=rally_max_rounds,
         decision_waiter=decision_waiter,
         topology_context=topology_context,
+        bq_sources=bq_sources,
     ):
         # stage 情報を data に注入 (UI 側で Stage 1/2 の区別に使う)
         if "stage" not in ev.data:
@@ -166,12 +172,14 @@ async def _run_one_stage(
         ev.data.setdefault("stage_ordinal", ordinal)
         if ev.kind == "final":
             # final は本ラッパが最終 AnalysisResult に統合してから上層に流すため、
-            # ここでは生 final を上に流さない。result のみ捕捉。
+            # ここでは生 final を上に流さない。result と bq_evidence を捕捉。
             payload = ev.data.get("result")
             if isinstance(payload, dict):
                 final_result = AnalysisResult.model_validate(payload)
             elif isinstance(payload, AnalysisResult):
                 final_result = payload
+            if evidence_sink is not None:
+                evidence_sink.extend(ev.data.get("bq_evidence") or [])
             continue
         yield ev
     if final_result is None:
@@ -247,6 +255,7 @@ async def run_two_stage_stream(
     audit_after_integrator: bool = False,
     audit_system_prompt: str | None = None,
     require_approval: bool = False,
+    bq_sources: dict[str, dict] | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """config-log 解析の 2 段階 SSE ストリーミング実行。
 
@@ -271,6 +280,11 @@ async def run_two_stage_stream(
     """
     p_overrides = prompt_overrides or {}
     m_overrides = model_overrides or {}
+    bq = bq_sources or {}
+    # BigQuery はログ取得ルート。ログを含む Stage だけ tool を有効化する。
+    # (config 始動の Stage 1 はログを含まないので BQ tool は不要)
+    stage_one_bq = bq if stage_one_kind == "log" else {}
+    stage_two_bq = bq  # Stage 2 は両データ種別を投入するため常にログを含む
     stage_outputs: list[StageOutput] = []
     overall_trace_id: str = ""
     stage_one_label = _stage_label(1, stage_one_kind)
@@ -281,6 +295,9 @@ async def run_two_stage_stream(
         "stage_one_start",
         {"stage": stage_one_kind, "stage_ordinal": 1, "stage_label": stage_one_label},
     )
+
+    # 両 Stage で BigQuery から取得した実ログ (監査の証拠) を蓄積する
+    bq_evidence: list[dict] = []
 
     stage_one_result: AnalysisResult | None = None
     stage_one_ctx = dict(topology_context)
@@ -295,6 +312,8 @@ async def run_two_stage_stream(
         model_overrides=m_overrides,
         rally_max_rounds=rally_max_rounds,
         decision_waiter=decision_waiter,
+        bq_sources=stage_one_bq,
+        evidence_sink=bq_evidence,
     ):
         if isinstance(item, AnalysisResult):
             stage_one_result = item
@@ -347,7 +366,8 @@ async def run_two_stage_stream(
                 log_ref=log_ref,
             )
             if audit_after_integrator:
-                async for ev in _attach_audit(final, stage_one_log_text, topology_context, audit_system_prompt):
+                async for ev in _attach_audit(final, stage_one_log_text, topology_context,
+                                              audit_system_prompt, bq_evidence):
                     yield ev
             yield StreamEvent("final", {"result": final.model_dump(mode="json")})
             return
@@ -393,6 +413,8 @@ async def run_two_stage_stream(
         model_overrides=m_overrides,
         rally_max_rounds=rally_max_rounds,
         decision_waiter=decision_waiter,
+        bq_sources=stage_two_bq,
+        evidence_sink=bq_evidence,
     ):
         if isinstance(item, AnalysisResult):
             stage_two_result = item
@@ -415,7 +437,8 @@ async def run_two_stage_stream(
     )
     if audit_after_integrator:
         # Stage 2 まで進んだ場合は Stage 2 のログテキストで監査
-        async for ev in _attach_audit(final, stage_two_log_text, topology_context, audit_system_prompt):
+        async for ev in _attach_audit(final, stage_two_log_text, topology_context,
+                                      audit_system_prompt, bq_evidence):
             yield ev
     yield StreamEvent("final", {"result": final.model_dump(mode="json")})
 
@@ -425,10 +448,13 @@ async def _attach_audit(
     log_text_for_audit: str,
     topology_context: dict,
     audit_system_prompt: str | None = None,
+    bq_evidence: list[dict] | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """最終 AnalysisResult に対して監査 (Phase C) を 1 回実行する補助関数。
 
     GPT-4o-mini で独立検証し、結果を ``final.audit_report`` にセットする。
+    ``bq_evidence`` には rally が BigQuery から取得した実ログを渡し、監査が
+    BQ ノードの参照実態を検証できるようにする。
     SSE イベントは audit_start / audit_done。失敗時は uncertain で続行
     (本流の final emit を妨げない)。
     """
@@ -439,7 +465,11 @@ async def _attach_audit(
     loop = _aio.get_running_loop()
     try:
         audit = await loop.run_in_executor(
-            None, lambda: run_audit(log_text_for_audit, topology_context, final, system_prompt=audit_system_prompt)
+            None,
+            lambda: run_audit(
+                log_text_for_audit, topology_context, final,
+                system_prompt=audit_system_prompt, bq_evidence=bq_evidence,
+            ),
         )
     except Exception as e:
         yield StreamEvent("error", {"stage": "audit", "message": str(e)})

@@ -28,12 +28,17 @@ def test_default_questionnaire_seeded(isolated_db):
     assert len(rows) == 1
     assert rows[0]["name"] == "default"
     items = rows[0]["items"]
-    assert len(items) == 6
-    # 事象(必須) + 議事録合意の 5 項目が揃っている
+    assert len(items) == 11
+    # 概要(必須) + 問診項目が揃っている
     keys = {it["key"] for it in items}
-    assert keys == {"event", "symptom_onset", "scope", "reproducibility", "recent_changes", "free_notes"}
-    # 事象は先頭かつ必須
+    assert keys == {
+        "event", "onset", "occurred_at", "location", "trigger_action",
+        "impact_scope", "past_occurrence", "has_topology_diagram",
+        "has_device_list", "has_device_roles", "has_config_info",
+    }
+    # 概要は先頭かつ必須
     assert items[0]["key"] == "event"
+    assert items[0]["label"] == "概要"
     assert items[0]["required"] is True
 
 

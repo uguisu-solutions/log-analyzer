@@ -110,9 +110,7 @@ function renderStage(lines: string[], st: StageBlock): void {
     if (list.length === 0) return
     lines.push(`- 推奨アクション（${label}・確信度降順）:`)
     for (const a of list) {
-      const flags = `[conf ${(a.confidence ?? 0).toFixed(2)}][${a.risk_level}]`
-        + (a.human_judgment_required ? '[人間判断必須]' : '')
-        + `[${rollbackText(a.rollback_possible)}]`
+      const flags = `[conf ${(a.confidence ?? 0).toFixed(2)}][${rollbackText(a.rollback_possible)}]`
       lines.push(`    - ${flags} ${a.action}`)
       if ((a.steps?.length ?? 0) > 0) {
         lines.push('        - 手順:')

@@ -64,31 +64,145 @@ verdict の選択:
 """
 
 
-def _build_user_input(
-    log_text: str, topology_context: dict | None, analysis_result: AnalysisResult
+# ─── 監査入力の予算化 (トークン上限・コスト対策) ─────────────────────
+# 監査 GPT には log_text 全文を渡していたため、入力上限超過・高コストの原因に
+# なっていた。ノード単位で本文を頭/末尾に切り詰め、全体の文字数にも上限を設ける。
+# いずれも環境変数で調整可能。
+_NODE_DELIM = "=== NODE:"
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _truncate_lines(text: str, head: int, tail: int) -> str:
+    """行単位で頭 head 行＋末尾 tail 行だけ残し、中間を省略注記に置き換える。"""
+    lines = text.split("\n")
+    if len(lines) <= head + tail + 1:
+        return text
+    omitted = len(lines) - head - tail
+    return "\n".join(lines[:head] + [f"...（{omitted} 行省略）..."] + lines[-tail:])
+
+
+def _budget_log_text(log_text: str, *, head_lines: int, tail_lines: int, max_chars: int) -> str:
+    """監査向けに log_text を圧縮する。
+
+    ``=== NODE:`` セクションごとに本文を頭/末尾へ切り詰め、最後に全体文字数の
+    セーフティネットを掛ける。証拠の所在 (どのノードか) は残しつつ、巨大な生ログ
+    本文だけを削ることで、独立検証に必要な情報を保ったまま入力量を抑える。
+    """
+    if _NODE_DELIM in log_text:
+        # split は区切りを消すので、各セクションにマーカーを復元する
+        preamble, *sections = log_text.split(_NODE_DELIM)
+        rebuilt = [preamble.rstrip()]
+        for sec in sections:
+            rebuilt.append(_NODE_DELIM + _truncate_lines(sec, head_lines, tail_lines))
+        out = "\n".join(rebuilt)
+    else:
+        out = _truncate_lines(log_text, head_lines, tail_lines)
+    if len(out) > max_chars:  # 最終セーフティネット
+        keep = max_chars // 2
+        out = out[:keep] + f"\n...（全体で {len(out) - max_chars} 文字省略）...\n" + out[-keep:]
+    return out
+
+
+def _compact_analysis(ar: AnalysisResult) -> dict:
+    """監査に渡す分析結果 JSON を圧縮する。
+
+    検証に必要な要素 (主原因・証拠・severity・推奨アクションの過不足判断材料) は
+    残し、ジュニア向けの詳細な実行手順 / リスク列挙 / ロールバック手順など、独立
+    検証には不要で嵩む情報は落とす。
+    """
+    max_evidence = _env_int("AUDIT_MAX_EVIDENCE_PER_CAUSE", 5)
+    rcc = []
+    for c in ar.root_cause_candidates:
+        d = c.model_dump(mode="json")
+        rcc.append({
+            "category": d.get("category"),
+            "summary": d.get("summary"),
+            "evidence": (d.get("evidence") or [])[:max_evidence],
+        })
+    ra = []
+    for a in ar.recommended_actions:
+        d = a.model_dump(mode="json")
+        # 過剰/不足の判断に必要な最小限のみ (steps/risks/rollback_note は落とす)
+        ra.append({k: d.get(k) for k in
+                   ("action", "kind", "risk_level", "confidence", "human_judgment_required")})
+    return {
+        "root_cause_candidates": rcc,
+        "recommended_actions": ra,
+        "confidence": ar.confidence,
+        "suspected_node_ids": list(ar.suspected_node_ids),
+        "suspected_node_findings": [f.model_dump(mode="json") for f in ar.suspected_node_findings],
+    }
+
+
+def _format_bq_evidence(
+    bq_evidence: list[dict], *, head_lines: int, tail_lines: int, max_chars: int
 ) -> str:
-    """監査向け user メッセージを組み立てる。"""
+    """rally が BigQuery から取得した実ログ (証拠) を予算内に整形する。
+
+    BQ ノードは log_text にマーカーしか入らないため、監査が「rally が実際に何を
+    見たか」を検証できるよう、取得行をここで渡す。各取得ブロックを頭/末尾に
+    切り詰め、全体にも文字上限を掛ける。
+    """
+    blocks: list[str] = []
+    for e in bq_evidence or []:
+        host = (e or {}).get("host") or "?"
+        content = _truncate_lines(str((e or {}).get("content") or ""), head_lines, tail_lines)
+        if content.strip():
+            blocks.append(f"[host={host}]\n{content}")
+    text = "\n\n".join(blocks)
+    if len(text) > max_chars:
+        keep = max_chars // 2
+        text = text[:keep] + f"\n...（全体で {len(text) - max_chars} 文字省略）...\n" + text[-keep:]
+    return text
+
+
+def _build_user_input(
+    log_text: str,
+    topology_context: dict | None,
+    analysis_result: AnalysisResult,
+    bq_evidence: list[dict] | None = None,
+) -> str:
+    """監査向け user メッセージを組み立てる (入力量を予算内に圧縮する)。"""
+    head = _env_int("AUDIT_NODE_HEAD_LINES", 40)
+    tail = _env_int("AUDIT_NODE_TAIL_LINES", 20)
+    bounded = _budget_log_text(
+        log_text,
+        head_lines=head,
+        tail_lines=tail,
+        max_chars=_env_int("AUDIT_MAX_INPUT_CHARS", 40000),
+    )
     parts: list[str] = []
     parts.append("## 与えられたログ・コンフィグ・(問診票・トポロジー)")
-    parts.append(log_text)
+    parts.append("（入力上限のため、各ノードのログは先頭/末尾を残して中間を省略しています）")
+    parts.append(bounded)
     parts.append("")
+    # rally が BigQuery から実際に取得した行を証拠として提示 (マーカーしか無い BQ
+    # ノードでも、監査が rally の参照実態を検証できるようにする)。
+    if bq_evidence:
+        ev_text = _format_bq_evidence(
+            bq_evidence, head_lines=head, tail_lines=tail,
+            max_chars=_env_int("AUDIT_MAX_EVIDENCE_CHARS", 20000),
+        )
+        if ev_text.strip():
+            parts.append("## rally が BigQuery から実際に取得したログ (証拠)")
+            parts.append(ev_text)
+            parts.append("")
     if topology_context:
         parts.append("## トポロジー (参考)")
         parts.append(json.dumps(topology_context, ensure_ascii=False, indent=2))
         parts.append("")
     parts.append("## 監査対象: Claude 系で出された分析結果")
-    # 監査の認知バイアスを下げるため、原文 JSON を素のまま提示する
-    parts.append(json.dumps(
-        {
-            "root_cause_candidates": [c.model_dump() for c in analysis_result.root_cause_candidates],
-            "recommended_actions": [a.model_dump() for a in analysis_result.recommended_actions],
-            "confidence": analysis_result.confidence,
-            "suspected_node_ids": list(analysis_result.suspected_node_ids),
-            "suspected_node_findings": [f.model_dump() for f in analysis_result.suspected_node_findings],
-        },
-        ensure_ascii=False,
-        indent=2,
-    ))
+    # 監査の認知バイアスを下げるため、原文 JSON を (圧縮しつつ) 素のまま提示する
+    parts.append(json.dumps(_compact_analysis(analysis_result), ensure_ascii=False, indent=2))
     parts.append("")
     parts.append("以上の証拠だけから、上記分析結果を独立に検証してください。")
     return "\n".join(parts)
@@ -101,6 +215,7 @@ def run_audit(
     *,
     model: str | None = None,
     system_prompt: str | None = None,
+    bq_evidence: list[dict] | None = None,
 ) -> AuditReport:
     """同期的に GPT 監査を 1 回実行し、AuditReport を返す。
 
@@ -130,7 +245,7 @@ def run_audit(
         response = client.responses.create(
             model=chosen_model,
             instructions=sys_prompt,
-            input=_build_user_input(log_text, topology_context, analysis_result),
+            input=_build_user_input(log_text, topology_context, analysis_result, bq_evidence),
             max_output_tokens=4000,
             reasoning={"effort": "low"},
             text={"verbosity": "low"},
