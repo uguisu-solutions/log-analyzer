@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 
@@ -35,7 +34,7 @@ from log_analyzer.schema import (
     RoundMetrics,
     SuspectedNodeFinding,
 )
-from log_analyzer.tracing import flush, get_client
+from log_analyzer.tracing import flush, get_client, usage_for
 
 # decision_waiter コールバックの戻り値型:
 #   {"action": "continue", "extend_by": int}  rally_max_rounds を +extend_by 延長して再開
@@ -346,6 +345,7 @@ async def run_rally_stream(
     topology_context: dict | None = None,
     audit_after_integrator: bool = False,
     audit_system_prompt: str | None = None,
+    bq_sources: dict[str, dict] | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """委譲チェーンを 1 ステップずつ実行しながら ``StreamEvent`` を yield する。
 
@@ -375,6 +375,12 @@ async def run_rally_stream(
         # トポロジー解析タブから渡される。{nodes: [...], links: [...]} 形式。
         # integrator は suspected_node_ids 生成のためにこの ID 一覧を参照する。
         "topology_context": topology_context,
+        # ログ取得元が BigQuery のノードのメタデータ {host: {table,start,end,limit}}。
+        # 監視ノードの bigquery_query tool-use で host 許可リスト兼デフォルト補完に使う。
+        "bq_sources": bq_sources or {},
+        # 監視が BigQuery から実際に取得した行 [{host, content}]。監査の証拠として渡す
+        # (rally 本体には再投入しない = コスト増を避ける)。
+        "bq_evidence": [],
     }
 
     langfuse = get_client()
@@ -402,6 +408,8 @@ async def run_rally_stream(
             "model": orch["model"],
             "tokens_in": orch["tokens_in"],
             "tokens_out": orch["tokens_out"],
+            "cache_creation": orch.get("cache_creation", 0),
+            "cache_read": orch.get("cache_read", 0),
             "latency_ms": orch["latency_ms"],
             "input": orch["user_input"][:2000],
             "raw_output": orch["raw_output"],
@@ -529,6 +537,8 @@ async def run_rally_stream(
                     "model": orch["model"],
                     "tokens_in": orch["tokens_in"],
                     "tokens_out": orch["tokens_out"],
+                    "cache_creation": orch.get("cache_creation", 0),
+                    "cache_read": orch.get("cache_read", 0),
                     "latency_ms": orch["latency_ms"],
                     "input": orch["user_input"][:2000],
                     "raw_output": orch["raw_output"],
@@ -596,6 +606,8 @@ async def run_rally_stream(
                 "model": result["model"],
                 "tokens_in": result["tokens_in"],
                 "tokens_out": result["tokens_out"],
+                "cache_creation": result.get("cache_creation", 0),
+                "cache_read": result.get("cache_read", 0),
                 "latency_ms": result["latency_ms"],
                 "input": result["user_input"][:2000],
                 "raw_output": result["raw_output"],
@@ -610,6 +622,9 @@ async def run_rally_stream(
         }
         if result.get("_parse_error"):
             state["monitor_results"][current]["_parse_error"] = result["_parse_error"]
+        # BigQuery 取得実ログを監査の証拠として蓄積 (rally 本体へは再投入しない)
+        if result.get("_bq_fetched"):
+            state.setdefault("bq_evidence", []).extend(result["_bq_fetched"])
 
         next_node = result["next"]
         violation = result.get("_routing_violation")
@@ -687,10 +702,11 @@ async def run_rally_stream(
             model=entry["model"],
             input=entry.get("input", "")[:2000],
             output=entry.get("raw_output", ""),
-            usage_details={
-                "input": entry["tokens_in"],
-                "output": entry["tokens_out"],
-            },
+            usage=usage_for(
+                entry["model"], entry["tokens_in"], entry["tokens_out"],
+                cache_creation=entry.get("cache_creation", 0),
+                cache_read=entry.get("cache_read", 0),
+            ),
         )
 
     wall_ms = int((time.perf_counter() - wall_start) * 1000)
@@ -719,7 +735,11 @@ async def run_rally_stream(
         yield StreamEvent("audit_start", {"model_hint": "gpt-5.5"})
         try:
             audit = await _run_sync(
-                lambda: run_audit(log_text, topology_context, result, system_prompt=audit_system_prompt)
+                lambda: run_audit(
+                    log_text, topology_context, result,
+                    system_prompt=audit_system_prompt,
+                    bq_evidence=state.get("bq_evidence"),
+                )
             )
         except Exception as e:
             yield StreamEvent("error", {"stage": "audit", "message": str(e)})
@@ -742,7 +762,12 @@ async def run_rally_stream(
 
     trace.update(output=result.model_dump(mode="json"))
     flush()
-    yield StreamEvent("final", {"result": result.model_dump(mode="json")})
+    # bq_evidence は監査専用の証拠。2 段ラッパ (_run_one_stage) が final を傍受して
+    # 取り出すために final イベントに同梱する (UI はこのキーを無視してよい)。
+    yield StreamEvent(
+        "final",
+        {"result": result.model_dump(mode="json"), "bq_evidence": state.get("bq_evidence") or []},
+    )
 
 
 # ─── 非ストリーミング呼出ラッパ ──────────────────────────────────────
@@ -755,6 +780,7 @@ async def run_rally_async(
     prompt_overrides: dict[str, str] | None = None,
     model_overrides: dict[str, str] | None = None,
     rally_max_rounds: int | None = None,
+    bq_sources: dict[str, dict] | None = None,
 ) -> AnalysisResult:
     """非対話・非ストリーミングの async 呼出。/api/runs から使う。
 
@@ -768,6 +794,7 @@ async def run_rally_async(
         model_overrides=model_overrides,
         rally_max_rounds=rally_max_rounds or 3,
         decision_waiter=None,
+        bq_sources=bq_sources,
     ):
         if ev.kind == "final":
             final_payload = ev.data["result"]

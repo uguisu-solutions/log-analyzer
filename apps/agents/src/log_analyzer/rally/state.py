@@ -59,3 +59,12 @@ class Config4State(TypedDict, total=False):
     # 安定ブロック (元 log_text) は変更せず、動的ブロックとして以降の監視 /
     # integrator に渡すことで prompt caching を維持しつつ追加情報を反映する。
     appended_logs: list[dict]
+
+    # ログ取得元が BigQuery のノードのメタデータ。
+    # {host: {"table", "host_column", "time_column", "text_column", "columns",
+    #         "start", "end", "limit"}}
+    # 列構成はテーブルごとに異なる前提で、絞り込み対象の列名も持つ
+    # (host_column を空にすると host で絞らない = 1 テーブル 1 機器のケース)。
+    # 監視ノードの bigquery_query tool-use で host 許可リスト兼デフォルト補完に使う。
+    # 空なら BQ tool は無効 (tools= を渡さない)。
+    bq_sources: dict[str, dict]

@@ -49,13 +49,11 @@ function ActionItem({ a }: { a: RecommendedAction }) {
       <summary className="action-summary">
         <span className="action-caret">▸</span>
         <span className="conf-badge" title="確信度">{conf.toFixed(2)}</span>
-        <span className={`risk risk-${a.risk_level}`}>{a.risk_level}</span>
-        {a.human_judgment_required && <span className="hjr-badge">人間判断必須</span>}
         <span className={`rb-badge ${rb.cls}`}>{rb.text}</span>
         <span className="action-text">{a.action}</span>
       </summary>
       <div className="action-detail">
-        <div className="action-detail-title">手順（ジュニア向け）</div>
+        <div className="action-detail-title">手順</div>
         {steps.length > 0 ? (
           <ol className="action-steps">
             {steps.map((s, i) => <li key={i}>{s}</li>)}

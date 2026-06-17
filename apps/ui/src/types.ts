@@ -362,6 +362,24 @@ export interface NodeAttachment {
 // nodeId → 添付ファイル群
 export type NodeAttachments = Record<string, NodeAttachment[]>
 
+// 1 ノードのログ取得元。'upload' = ファイルアップロード(従来) / 'bigquery' = BQ 取得
+export interface NodeLogSource {
+  type: 'upload' | 'bigquery'
+  host?: string        // BQ 上の host 値 (空なら node id)
+  table?: string       // テーブル名 (空なら環境変数の既定テーブル)
+  // 列構成はテーブルごとに異なる前提。空欄でその絞り込みを無効化できる
+  hostColumn?: string  // host で絞る列 (空ならテーブル全体 = 1 表 1 機器)
+  timeColumn?: string  // 期間で絞る列 (空なら期間で絞らない)
+  textColumn?: string  // キーワード検索する列 (空なら検索なし)
+  columns?: string     // 取得列 (カンマ区切り。空なら全列)
+  start?: string       // 取得既定の開始時刻 (ISO8601, 任意)
+  end?: string         // 取得既定の終了時刻 (ISO8601, 任意)
+  limit?: number       // 取得既定件数 (任意)
+}
+
+// nodeId → ログ取得元設定。未設定ノードは 'upload' 扱い
+export type NodeLogSources = Record<string, NodeLogSource>
+
 // 問診票 (Phase B) ─────────────────────────────────────
 export interface QuestionnaireItem {
   key: string

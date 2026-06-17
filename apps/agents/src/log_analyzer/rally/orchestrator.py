@@ -14,7 +14,6 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import time
 
@@ -22,6 +21,7 @@ import anthropic
 
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.rally.state import Config4State
+from log_analyzer.tracing import usage_components
 
 # config4 のロール別デフォルトモデル。
 # config-log 解析の評価方針 (2026-06) で Claude 系ノードは Opus に統一。
@@ -119,11 +119,15 @@ def orchestrator_select_first(state: Config4State) -> dict:
         },
     )
     decision = _normalize_decision(raw_decision)
+    uc = usage_components(response.usage)
     return {
         **decision,
         "model": model,
-        "tokens_in": response.usage.input_tokens,
-        "tokens_out": response.usage.output_tokens,
+        # tokens_in は cache 書込/読出を含む入力処理トークン総量
+        "tokens_in": uc["input"] + uc["cache_creation"] + uc["cache_read"],
+        "tokens_out": uc["output"],
+        "cache_creation": uc["cache_creation"],
+        "cache_read": uc["cache_read"],
         "latency_ms": latency_ms,
         "raw_output": raw,
         "user_input": user_input,

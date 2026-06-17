@@ -8,6 +8,8 @@ Phase 2 では実機 / 構成管理 DB を引く想定だが、PoC 期間中は
 提供ツール:
 - ``read_topology(target_ip)``: ネットワーク／FW 構成（hosts / policy / neighbors）
 - ``get_config(service_id)``: サービス別の構成（DNS / Auth / App 等の設定値・既知の問題）
+- ``bigquery_query(host, ...)``: BigQuery に投入済みのログを host + 期間で取得
+  （こちらは LLM 主導の native tool-use。監視ノードの tool-use ループから呼ばれる）
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import json
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 # `samples/topology/*.json` を解決する。本ファイルから 5 階層上が repo ルート。
 _TOPOLOGY_DIR = Path(__file__).resolve().parents[5] / "samples" / "topology"
@@ -104,3 +107,201 @@ def extract_target_service(log: str, fallback: str = "app-server-1") -> str:
     if not counts:
         return fallback
     return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
+# ─── BigQuery 取得ツール (LLM native tool-use) ──────────────────────
+
+# Anthropic Messages API の tools= に渡すスキーマ。raw SQL は受け取らず、
+# host / 期間 / 件数 / 部分一致のみをパラメータとして受ける (安全策)。
+# スキーマ確認ツール。テーブルは機器ごとに列構成が異なるので、取得前にこれで
+# 列名・型・サンプル行を確認してから bigquery_query を呼ぶ。
+BIGQUERY_SCHEMA_TOOL_SCHEMA: dict[str, Any] = {
+    "name": "bigquery_schema",
+    "description": (
+        "BigQuery テーブルの列構成 (列名・型) とサンプル行を確認する。テーブルは "
+        "機器ごとに列名や構造が異なるため、bigquery_query で取得する前に必ずこれを "
+        "呼び、どの列が時刻か・どの列が本文か・絞り込みに使える列は何かを把握する "
+        "こと。列定義の取得は課金されない。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "host": {
+                "type": "string",
+                "description": "対象ノードの host (= node id)。許可されたノードのみ指定可。",
+            },
+        },
+        "required": ["host"],
+    },
+}
+
+BIGQUERY_TOOL_SCHEMA: dict[str, Any] = {
+    "name": "bigquery_query",
+    "description": (
+        "BigQuery に投入済みのデバイスログを取得する。ログ取得元が BigQuery の "
+        "ノード (log_text 内で [ログ取得元: BigQuery] と記載) について、必要な "
+        "期間・キーワード・件数だけを絞って取得すること。全件を闇雲に取らず、疑わしい "
+        "時間帯・キーワードに絞ること。テーブルの列構成は機器ごとに異なるので、先に "
+        "bigquery_schema で列を確認し、time_column / text_column / columns に実在する "
+        "列名を指定すること (省略時はノード設定の既定列を使う)。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "host": {
+                "type": "string",
+                "description": "取得対象ノードの host (= node id)。許可されたノードのみ指定可。",
+            },
+            "start_time": {
+                "type": "string",
+                "description": "取得開始時刻 (ISO8601, 例 2026-06-10T09:00:00Z)。省略可。",
+            },
+            "end_time": {
+                "type": "string",
+                "description": "取得終了時刻 (ISO8601)。省略可。",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "最大取得件数。省略時は既定値。上限を超える指定はクランプされる。",
+            },
+            "contains": {
+                "type": "string",
+                "description": "本文列に対する部分一致フィルタ (大小無視)。省略可。",
+            },
+            "time_column": {
+                "type": "string",
+                "description": (
+                    "start_time/end_time を適用する時刻列名。bigquery_schema で確認した "
+                    "実在の列を指定。省略時はノード設定の既定 (timestamp)。"
+                ),
+            },
+            "text_column": {
+                "type": "string",
+                "description": (
+                    "contains を検索する本文列名。実在の列を指定。省略時はノード設定の "
+                    "既定 (message)。"
+                ),
+            },
+            "columns": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "取得する列名のリスト。省略時は全列。不要列を外すとトークン節約。",
+            },
+        },
+        "required": ["host"],
+    },
+}
+
+
+def _format_rows(host: str, rows: list[dict]) -> str:
+    """取得行を表形式テキストに整形する (LLM 向け)。
+
+    列構成はテーブルごとに異なるので列名を決め打ちせず、実際に返ってきた列を
+    そのまま使う。トークン節約のため (1) 列名はヘッダで 1 回だけ出し、(2) 全行で
+    値が空の列は出力から除外する。
+    """
+    if not rows:
+        return f"BigQuery 取得結果: host={host}, 0 件"
+    cols = list(rows[0].keys())
+
+    def _empty(v: Any) -> bool:
+        return v is None or str(v).strip() == ""
+
+    nonempty = [c for c in cols if any(not _empty(r.get(c)) for r in rows)]
+    lines = [
+        f"BigQuery 取得結果: host={host}, {len(rows)} 件",
+        f"列: {', '.join(nonempty)}",
+    ]
+    for r in rows:
+        lines.append(" | ".join("" if _empty(r.get(c)) else str(r.get(c)) for c in nonempty))
+    return "\n".join(lines)
+
+
+def run_bigquery_tool(tool_input: dict, allowed_sources: dict[str, dict]) -> str:
+    """``bigquery_query`` tool_use を実行し、tool_result 用の文字列を返す。
+
+    host は ``allowed_sources`` (= run の BQ ノードメタデータ) に含まれるものだけ許可。
+    table / 既定期間 / 既定件数は allowed_sources のエントリから補完する。
+    失敗時もエラー文字列を返し (例外は投げない)、LLM が graceful に判断できるようにする。
+    """
+    from log_analyzer import bigquery_client
+
+    host = str((tool_input or {}).get("host") or "").strip()
+    if not host:
+        return "エラー: host は必須です。"
+    if host not in allowed_sources:
+        allowed = ", ".join(sorted(allowed_sources)) or "(なし)"
+        return f"エラー: host={host!r} は取得が許可されていません。許可された host: {allowed}"
+    src = allowed_sources.get(host) or {}
+    start = tool_input.get("start_time") or src.get("start")
+    end = tool_input.get("end_time") or src.get("end")
+    limit = tool_input.get("limit") or src.get("limit")
+    contains = tool_input.get("contains")
+    table = src.get("table")
+    # 列構成はテーブルごとに異なる。エージェントが (bigquery_schema で確認した上で)
+    # 列を明示した場合はそれを優先し、無ければノード設定 → device_logs 既定 の順で補完。
+    host_column = src.get("host_column", "host")
+    agent_time = tool_input.get("time_column")
+    agent_text = tool_input.get("text_column")
+    agent_cols = tool_input.get("columns")
+    time_column = agent_time if agent_time not in (None, "") else src.get("time_column", "timestamp")
+    text_column = agent_text if agent_text not in (None, "") else src.get("text_column", "message")
+    select_columns = (agent_cols or None) or (src.get("columns") or None)
+    try:
+        rows = bigquery_client.query_logs(
+            host, start=start, end=end, limit=limit, contains=contains, table=table,
+            host_column=host_column, time_column=time_column, text_column=text_column,
+            select_columns=select_columns,
+        )
+    except Exception as e:  # noqa: BLE001 — LLM に失敗を伝えて継続させる
+        return f"エラー: BigQuery 取得に失敗しました: {e}"
+    if not rows:
+        return (
+            f"host={host} の該当ログは見つかりませんでした "
+            f"(start={start}, end={end}, contains={contains})。"
+        )
+    return _format_rows(host, rows)
+
+
+def _format_schema(host: str, table: str, schema: list[dict], rows: list[dict]) -> str:
+    lines = [f"host={host} のテーブル ({table or '既定テーブル'}) のスキーマ:"]
+    lines.append("列 (名前: 型):")
+    for c in schema:
+        lines.append(f"  - {c.get('name')}: {c.get('type')}")
+    if rows:
+        cols = list(rows[0].keys())
+        lines.append(f"サンプル {len(rows)} 行 (列: {', '.join(cols)}):")
+        for r in rows:
+            lines.append(" | ".join("" if r.get(c) is None else str(r.get(c)) for c in cols))
+    return "\n".join(lines)
+
+
+def run_bigquery_schema_tool(tool_input: dict, allowed_sources: dict[str, dict]) -> str:
+    """``bigquery_schema`` tool_use を実行し、列定義＋サンプル行の文字列を返す。
+
+    host 許可リスト検証は run_bigquery_tool と同じ。列定義の取得 (get_table) は
+    課金されないが、サンプル行は少量スキャンする (maximum_bytes_billed で上限あり)。
+    失敗時もエラー文字列を返す (例外は投げない)。
+    """
+    from log_analyzer import bigquery_client
+
+    host = str((tool_input or {}).get("host") or "").strip()
+    if not host:
+        return "エラー: host は必須です。"
+    if host not in allowed_sources:
+        allowed = ", ".join(sorted(allowed_sources)) or "(なし)"
+        return f"エラー: host={host!r} は取得が許可されていません。許可された host: {allowed}"
+    src = allowed_sources.get(host) or {}
+    table = src.get("table")
+    try:
+        schema = bigquery_client.table_schema(table=table)
+    except Exception as e:  # noqa: BLE001
+        return f"エラー: スキーマ取得に失敗しました: {e}"
+    rows: list[dict] = []
+    try:
+        rows = bigquery_client.sample_rows(table=table, limit=3)
+    except Exception as e:  # noqa: BLE001 — サンプルは任意。失敗してもスキーマは返す
+        rows = []
+        schema_note = f"\n(サンプル行の取得に失敗: {e})"
+        return _format_schema(host, table, schema, rows) + schema_note
+    return _format_schema(host, table, schema, rows)

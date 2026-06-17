@@ -13,6 +13,7 @@ import anthropic
 
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.rally.state import Config4State
+from log_analyzer.tracing import usage_components
 
 INTEGRATOR_PROMPT = """\
 あなたは構成4 ラリー型システムの最終統合エージェントです。
@@ -184,13 +185,17 @@ def integrator_node(state: Config4State) -> dict:
         parsed["_parse_error"] = parse_error
         parsed["_raw_truncated"] = raw[-500:]
 
+    uc = usage_components(response.usage)
     return {
         "result": parsed,
         "token_log_entry": {
             "role": "integrator",
             "model": model,
-            "tokens_in": response.usage.input_tokens,
-            "tokens_out": response.usage.output_tokens,
+            # tokens_in は cache 書込/読出を含む入力処理トークン総量
+            "tokens_in": uc["input"] + uc["cache_creation"] + uc["cache_read"],
+            "tokens_out": uc["output"],
+            "cache_creation": uc["cache_creation"],
+            "cache_read": uc["cache_read"],
             "latency_ms": latency_ms,
             "input": user_input[:2000],
             "raw_output": raw,

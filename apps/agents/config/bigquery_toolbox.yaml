@@ -1,0 +1,30 @@
+# Google 公式 BigQuery MCP (MCP Toolbox for Databases) のカスタム設定 (ハードニング版)。
+#
+# `--prebuilt bigquery` の代わりにこれを `--config` で読ませることで:
+#   - writeMode: blocked  … SELECT 文のみ許可 (INSERT/UPDATE/DDL 等を拒否)
+#   - allowedDatasets     … 参照可能なデータセットを限定 (dry_run で範囲外アクセスを拒否)
+#   - 公開ツールを execute_sql のみに最小化 (prebuilt の 9 ツールは公開しない)
+# を実現する。アプリ (bigquery_client/bigquery_mcp) は execute_sql しか使わない。
+#
+# project / location / allowedDatasets は .env の値を環境変数補間で取り込む
+# (toolbox は値を起動時に環境変数から展開する。アプリが os.environ を子プロセスへ
+# 引き継ぐので load_dotenv 後の BIGQUERY_PROJECT/LOCATION/DATASET が効く)。
+# 認証は ADC (GOOGLE_APPLICATION_CREDENTIALS) を使う。
+sources:
+  bq-logs:
+    kind: bigquery
+    project: ${BIGQUERY_PROJECT}
+    location: ${BIGQUERY_LOCATION}
+    writeMode: blocked
+    allowedDatasets:
+      - ${BIGQUERY_DATASET}
+
+tools:
+  execute_sql:
+    kind: bigquery-execute-sql
+    source: bq-logs
+    description: Execute a read-only (SELECT) BigQuery SQL query and return the rows.
+
+toolsets:
+  default:
+    - execute_sql

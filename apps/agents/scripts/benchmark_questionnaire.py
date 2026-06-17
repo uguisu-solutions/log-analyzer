@@ -60,11 +60,17 @@ _TYPE_HINT: dict[str, str] = {
 # デフォルト問診票 (シナリオ間で共通の汎用回答)。
 # 本来は scenario_dir/questionnaire.json で上書きする。
 _DEFAULT_ANSWERS_NONEMPTY: dict[str, str] = {
-    "symptom_onset": "今朝 09:00 頃から特定機能が応答しない",
-    "scope": "特定機能のみ (API 経路)",
-    "reproducibility": "常に再現",
-    "recent_changes": "前日 18:30 にネットワーク機器のポリシ変更があった",
-    "free_notes": "通常運用パスは健全だが、新しく追加した API 経路だけが断続的",
+    "event": "今朝から特定機能 (API 経路) が応答しない",
+    "onset": "今朝 09:00 頃から",
+    "occurred_at": "毎回同じ時間帯ではなく、API 呼び出し時に断続的",
+    "location": "API 経路 (api-01)",
+    "trigger_action": "新しく追加した API 経路へのリクエスト実行時",
+    "impact_scope": "特定機能のみ (API 経路)。通常運用パスは健全",
+    "past_occurrence": "前日 18:30 のネットワーク機器ポリシ変更後から",
+    "has_topology_diagram": "はい",
+    "has_device_list": "はい",
+    "has_device_roles": "はい",
+    "has_config_info": "はい",
 }
 
 

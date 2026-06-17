@@ -33,6 +33,14 @@ dist-ssr/
 .env.local
 .env.*.local
 
+# --- 秘密鍵 / サービスアカウント（絶対にコミットしない） ---
+# GOOGLE_APPLICATION_CREDENTIALS が指すサービスアカウント JSON キーの置き場所
+secrets/
+service-account*.json
+*-sa-key.json
+*sa-key.json
+*service_account*.json
+
 # --- ランタイムデータ ---
 # SQLite に保存されるユーザー定義構成は実行時データ扱い（リポジトリには含めない）
 apps/agents/data/
@@ -65,3 +73,5 @@ meeting/
 # reports/ の進捗レポートは経営判断材料を含む
 docs/preset/
 docs/reports/
+
+apps\agents\secrets\sa-key.json

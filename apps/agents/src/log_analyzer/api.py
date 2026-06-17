@@ -363,6 +363,25 @@ class NodeAttachmentDTO(BaseModel):
     content: str = ""
 
 
+class BigQuerySourceDTO(BaseModel):
+    """ノードのログ取得元が BigQuery の場合の指定。
+
+    ``node_bigquery[nodeId]`` に入る。アップロード (node_logs) の代わりに、
+    解析エージェントが ``bigquery_query`` tool で host + 期間を絞って取得する。
+    """
+
+    host: str = ""            # BQ 上の host 値。空なら node id を使う
+    table: str = ""           # テーブル名 (省略時は環境変数の既定テーブル)
+    # 列構成はテーブルごとに異なる前提。既定は自前 ingest した device_logs 用。
+    host_column: str = "host"      # host で絞る列。空ならテーブル全体 (1 表 1 機器)
+    time_column: str = "timestamp" # 期間で絞る列。空なら期間指定不可
+    text_column: str = "message"   # contains が検索する列。空なら contains 不可
+    columns: list[str] = []        # 取得列。空なら全列
+    start: str = ""           # 取得既定の開始時刻 (ISO8601, 任意)
+    end: str = ""             # 取得既定の終了時刻 (ISO8601, 任意)
+    limit: int | None = None  # 取得既定の件数 (任意)
+
+
 class TopologyRunRequest(BaseModel):
     """``POST /api/runs/topology-stream`` のリクエスト。
 
@@ -377,6 +396,8 @@ class TopologyRunRequest(BaseModel):
     node_logs: dict[str, list[NodeAttachmentDTO]] = {}
     # 1 ノードに複数の設定ファイルを添付できる。同上の形式
     node_configs: dict[str, list[NodeAttachmentDTO]] = {}
+    # ログ取得元が BigQuery のノード。{nodeId: {host, table, start, end, limit}}
+    node_bigquery: dict[str, BigQuerySourceDTO] = {}
     # 問診票回答 {key: value} (Phase B)。空でも OK
     questionnaire_answers: dict[str, str] = {}
     # 監査エージェント (Phase C) を integrator 後に走らせるか
@@ -421,6 +442,73 @@ def _normalize_attachments(
     return out
 
 
+def _normalize_bq_sources(raw: dict | None) -> dict[str, dict]:
+    """``{nodeId: BigQuerySourceDTO|dict}`` を正規化して返す。
+
+    返り値: ``{nodeId: {host, table, start, end, limit}}``。host が空なら nodeId を採用。
+    Pydantic / dict のどちらでも受け入れる (テスト・手動構築の便宜)。
+    """
+    if not raw:
+        return {}
+    out: dict[str, dict] = {}
+    for nid, item in raw.items():
+        if hasattr(item, "model_dump"):
+            d = item.model_dump()
+        elif isinstance(item, dict):
+            d = item
+        else:
+            continue
+        host = str(d.get("host") or "").strip() or str(nid)
+        table = str(d.get("table") or "").strip() or None
+        start = str(d.get("start") or "").strip() or None
+        end = str(d.get("end") or "").strip() or None
+        limit_raw = d.get("limit")
+        try:
+            limit = int(limit_raw) if limit_raw else None
+        except (TypeError, ValueError):
+            limit = None
+
+        # 列設定: キー未指定なら device_logs 用の既定、明示的に空文字なら「列なし=無効」。
+        def _col(key: str, default: str) -> str:
+            if key not in d:
+                return default
+            v = d.get(key)
+            return "" if v is None else str(v).strip()
+
+        columns_raw = d.get("columns") or []
+        if not isinstance(columns_raw, list):
+            columns_raw = []
+        columns = [str(c).strip() for c in columns_raw if str(c).strip()]
+
+        out[str(nid)] = {
+            "host": host, "table": table,
+            "host_column": _col("host_column", "host"),
+            "time_column": _col("time_column", "timestamp"),
+            "text_column": _col("text_column", "message"),
+            "columns": columns,
+            "start": start, "end": end, "limit": limit,
+        }
+    return out
+
+
+def _bq_allowlist(bq_norm: dict[str, dict]) -> dict[str, dict]:
+    """正規化済み node_bigquery を host キーの許可リスト (rally の bq_sources) に変換。"""
+    allow: dict[str, dict] = {}
+    for entry in bq_norm.values():
+        host = entry["host"]
+        allow[host] = {
+            "table": entry.get("table"),
+            "host_column": entry.get("host_column", "host"),
+            "time_column": entry.get("time_column", "timestamp"),
+            "text_column": entry.get("text_column", "message"),
+            "columns": entry.get("columns") or [],
+            "start": entry.get("start"),
+            "end": entry.get("end"),
+            "limit": entry.get("limit"),
+        }
+    return allow
+
+
 def _build_questionnaire_block(answers: dict | None) -> str:
     """問診票回答ブロック (Phase B)。
 
@@ -447,6 +535,7 @@ def _build_topology_log_text(
     node_logs: dict | None,
     node_configs: dict | None = None,
     questionnaire_answers: dict | None = None,
+    node_bigquery: dict | None = None,
 ) -> tuple[str, list[dict]]:
     """topology + ノード別添付 (logs / configs) から rally に渡す単一 log_text を構築。
 
@@ -501,6 +590,7 @@ def _build_topology_log_text(
 
     logs_map = _normalize_attachments(node_logs)
     configs_map = _normalize_attachments(node_configs)
+    bq_map = _normalize_bq_sources(node_bigquery)
 
     parts: list[str] = []
     parts.append("## トポロジー要約")
@@ -527,13 +617,25 @@ def _build_topology_log_text(
     for n in nodes:
         attached_logs = logs_map.get(n["id"], [])
         attached_configs = configs_map.get(n["id"], [])
-        if not attached_logs and not attached_configs:
+        bq = bq_map.get(n["id"])
+        if not attached_logs and not attached_configs and not bq:
             continue
+        header_suffix = " [ログ取得元: BigQuery]" if bq else ""
         header_attrs = [f"type={n['type'] or '?'}", f"label={n['label'] or '?'}"]
         if n["ip"]:
             header_attrs.append(f"ip={n['ip']}")
-        parts.append(f"=== NODE: {n['id']} ({', '.join(header_attrs)}) ===")
+        parts.append(f"=== NODE: {n['id']} ({', '.join(header_attrs)}){header_suffix} ===")
         parts.append("")
+        # BigQuery ノードは本文を inline せず、取得を促すマーカーを置く
+        if bq:
+            window = ""
+            if bq.get("start") or bq.get("end"):
+                window = f"（既定期間: {bq.get('start') or '-'} 〜 {bq.get('end') or '-'}）"
+            parts.append(
+                f'このノードのログは BigQuery にあります。bigquery_query ツールで '
+                f'host="{bq["host"]}" を指定し、必要な期間/件数だけ取得して分析してください。{window}'
+            )
+            parts.append("")
         for i, a in enumerate(attached_logs, 1):
             name = a["name"] or f"log_{i}"
             parts.append(f"[ログ] {name}:")
@@ -548,7 +650,8 @@ def _build_topology_log_text(
     # 未定義 ID への添付指定は警告として残す
     orphan_ids = sorted(
         ({nid for nid in logs_map if nid not in valid_ids}
-         | {nid for nid in configs_map if nid not in valid_ids})
+         | {nid for nid in configs_map if nid not in valid_ids}
+         | {nid for nid in bq_map if nid not in valid_ids})
     )
     if orphan_ids:
         parts.append("(注: 未定義の node_id に添付が指定されました: " + ", ".join(orphan_ids) + ")")
@@ -1405,16 +1508,21 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
     if p_overrides or m_overrides:
         _validate_overrides(base_config, p_overrides, m_overrides)
 
+    bq_norm = _normalize_bq_sources(req.node_bigquery)
+    bq_allow = _bq_allowlist(bq_norm)
     log_text, normalized_nodes = _build_topology_log_text(
         req.topology, req.node_logs, req.node_configs,
         questionnaire_answers=req.questionnaire_answers,
+        node_bigquery=bq_norm,
     )
     if not normalized_nodes:
         raise HTTPException(status_code=400, detail="topology.nodes が空")
-    # 少なくとも 1 ノードに 1 件以上の log または config が必要
+    # 少なくとも 1 ノードに 1 件以上の log / config / BigQuery 取得指定が必要
     def _has_any_content(bucket: list[NodeAttachmentDTO] | None) -> bool:
         return bool(bucket) and any((a.content or "").strip() for a in bucket)
-    has_any_attachment = any(
+    valid_node_ids = {n["id"] for n in normalized_nodes}
+    has_any_bq = any(nid in valid_node_ids for nid in bq_norm)
+    has_any_attachment = has_any_bq or any(
         _has_any_content(req.node_logs.get(n["id"]))
         or _has_any_content(req.node_configs.get(n["id"]))
         for n in normalized_nodes
@@ -1422,7 +1530,7 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
     if not has_any_attachment:
         raise HTTPException(
             status_code=400,
-            detail="いずれか 1 ノード以上にログまたは設定ファイルを設定してください",
+            detail="いずれか 1 ノード以上にログ・設定ファイル・BigQuery 取得指定を設定してください",
         )
 
     topology_context = {
@@ -1465,6 +1573,7 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
                 decision_waiter=_wait_for_decision,
                 append_queue=append_queue,
                 topology_context=topology_context,
+                bq_sources=bq_allow,
                 audit_after_integrator=req.audit_after_integrator,
             ):
                 yield _sse_bytes(ev.kind, ev.data)
@@ -1526,6 +1635,8 @@ class ConfigLogRunRequest(BaseModel):
     topology: dict
     node_logs: dict[str, list[NodeAttachmentDTO]] = {}
     node_configs: dict[str, list[NodeAttachmentDTO]] = {}
+    # ログ取得元が BigQuery のノード。{nodeId: {host, table, start, end, limit}}
+    node_bigquery: dict[str, BigQuerySourceDTO] = {}
     questionnaire_answers: dict[str, str] = {}
     audit_after_integrator: bool = False
     audit_system_prompt: str | None = None  # GPT 監査プロンプトの上書き (空/None なら既定)
@@ -1578,12 +1689,17 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         if not bucket:
             return False
         return any((a.content or "").strip() for a in bucket)
+    # BigQuery 取得ノード (host 許可リスト兼デフォルト)。BQ はログ取得ルート扱い。
+    bq_norm = _normalize_bq_sources(req.node_bigquery)
+    bq_allow = _bq_allowlist(bq_norm)
+    valid_node_ids = {n["id"] for n in normalized_nodes}
+    has_any_bq = any(nid in valid_node_ids for nid in bq_norm)
     has_any_config = any(
         _has_any_content(req.node_configs.get(n["id"])) for n in normalized_nodes
     )
     has_any_log = any(
         _has_any_content(req.node_logs.get(n["id"])) for n in normalized_nodes
-    )
+    ) or has_any_bq
 
     # 入力検証 (モードが要求するデータ種別が揃っているか):
     #   single+config / 2段階 config 始動 → Config が 1 件以上必要
@@ -1657,6 +1773,13 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         configs = req.node_configs if source in ("config", "both") else {}
         return logs, configs
 
+    # BigQuery はログ取得ルート。ログを含む source のときだけマーカー/tool を有効化。
+    def _bq_for(source: str) -> tuple[dict, dict]:
+        """(マーカー注入用 node_bigquery, rally 用 bq_sources 許可リスト) を返す。"""
+        if source in ("log", "both"):
+            return bq_norm, bq_allow
+        return {}, {}
+
     # ─── 1 段階モード ───────────────────────────────────────────
     async def _gen_single() -> AsyncIterator[bytes]:
         from log_analyzer.rally_two_stage import (
@@ -1664,9 +1787,11 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         )
         source = req.single_source
         logs, configs = _attachments_for(source)
+        bq_marker, bq_sources = _bq_for(source)
         single_log_text, _ = _build_topology_log_text(
             req.topology, logs, configs,
             questionnaire_answers=req.questionnaire_answers,
+            node_bigquery=bq_marker,
         )
         stage_label = _stage_label(1, source)
         yield _sse_bytes("run_id_assigned", {"run_id": run_id})
@@ -1690,6 +1815,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 rally_max_rounds=req.rally_max_rounds or 3,
                 decision_waiter=_wait_for_decision,
                 topology_context={**topology_context, "stage": source},
+                bq_sources=bq_sources,
                 audit_after_integrator=req.audit_after_integrator,
                 audit_system_prompt=req.audit_system_prompt,
             ):
@@ -1730,14 +1856,16 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         stage_one_kind = "config" if req.stage_order == "config_log" else "log"
         stage_two_kind = "log" if stage_one_kind == "config" else "config"
 
-        # Stage 1: 始動データ種別だけで合成
+        # Stage 1: 始動データ種別だけで合成 (BQ マーカーはログを含む Stage のみ)
         s1_logs, s1_configs = _attachments_for(stage_one_kind)
+        s1_bq_marker, _ = _bq_for(stage_one_kind)
         stage_one_log_text, _ = _build_topology_log_text(
             req.topology, s1_logs, s1_configs,
             questionnaire_answers=req.questionnaire_answers,
+            node_bigquery=s1_bq_marker,
         )
 
-        # Stage 2: Stage 1 仮説を冒頭に置き、両データ種別を投入して検証
+        # Stage 2: Stage 1 仮説を冒頭に置き、両データ種別を投入して検証 (BQ 含む)
         def _stage_two_log_text(stage_one_output: StageOutput) -> str:
             from log_analyzer.rally_two_stage import _build_stage_one_hypothesis_block
             hypothesis_block = _build_stage_one_hypothesis_block(
@@ -1746,6 +1874,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             stage_two_body, _ = _build_topology_log_text(
                 req.topology, req.node_logs, req.node_configs,
                 questionnaire_answers=req.questionnaire_answers,
+                node_bigquery=bq_norm,
             )
             return hypothesis_block + stage_two_body
 
@@ -1763,6 +1892,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 model_overrides=m_overrides,
                 rally_max_rounds=req.rally_max_rounds or 3,
                 decision_waiter=_wait_for_decision,
+                bq_sources=bq_allow,
                 audit_after_integrator=req.audit_after_integrator,
                 audit_system_prompt=req.audit_system_prompt,
             ):

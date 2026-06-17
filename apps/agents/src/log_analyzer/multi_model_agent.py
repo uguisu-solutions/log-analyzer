@@ -32,7 +32,7 @@ from log_analyzer.schema import (
     RecommendedAction,
     RootCauseCandidate,
 )
-from log_analyzer.tracing import flush, get_client
+from log_analyzer.tracing import flush, get_client, usage_for
 
 INTEGRATION_PROMPT = """\
 あなたは複数の LLM の分析結果を統合する上級アナリストです。
@@ -206,7 +206,7 @@ async def _run_multi_model_async(
             model=r.model,
             input=log_text[:2000],
             output=json.dumps(r.parsed, ensure_ascii=False),
-            usage_details={"input": r.tokens_in, "output": r.tokens_out},
+            usage=usage_for(r.model, r.tokens_in, r.tokens_out),
         )
 
     integrated = await _integrate(parallel_results, integrate_prompt, integrate_model)
@@ -218,7 +218,7 @@ async def _run_multi_model_async(
             ensure_ascii=False,
         )[:2000],
         output=json.dumps(integrated.parsed, ensure_ascii=False),
-        usage_details={"input": integrated.tokens_in, "output": integrated.tokens_out},
+        usage=usage_for(integrated.model, integrated.tokens_in, integrated.tokens_out),
     )
 
     total_tokens_in = sum(r.tokens_in for r in parallel_results) + integrated.tokens_in

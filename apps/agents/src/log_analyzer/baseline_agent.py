@@ -22,7 +22,7 @@ from log_analyzer.schema import (
     RecommendedAction,
     RootCauseCandidate,
 )
-from log_analyzer.tracing import flush, get_client
+from log_analyzer.tracing import flush, get_client, usage_for
 
 SYSTEM_PROMPT = """\
 あなたは経験豊富なネットワーク／システムエンジニアです。
@@ -127,10 +127,7 @@ def run_baseline(
         model=model,
         input=log_text[:2000],
         output=raw_text,
-        usage_details={
-            "input": response.usage.input_tokens,
-            "output": response.usage.output_tokens,
-        },
+        usage=usage_for(model, response.usage.input_tokens, response.usage.output_tokens),
     )
     trace.update(output=result.model_dump(mode="json"))
     flush()

@@ -38,8 +38,8 @@ def test_load_scenario_from_existing_dir():
     assert "lb-to-app-01" in s.node_configs["fw-01"][0]["content"] \
         or "api-backends" in s.node_configs["fw-01"][0]["content"]
     # デフォルト問診票
-    assert "symptom_onset" in s.questionnaire
-    assert s.questionnaire["symptom_onset"]
+    assert "event" in s.questionnaire
+    assert s.questionnaire["event"]
 
 
 def test_load_scenario_custom_questionnaire(tmp_path):

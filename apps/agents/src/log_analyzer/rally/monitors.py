@@ -32,7 +32,16 @@ import anthropic
 
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.rally.state import Config4State
-from log_analyzer.rally.tools import extract_target_service, get_config, read_topology
+from log_analyzer.tracing import usage_components
+from log_analyzer.rally.tools import (
+    BIGQUERY_SCHEMA_TOOL_SCHEMA,
+    BIGQUERY_TOOL_SCHEMA,
+    extract_target_service,
+    get_config,
+    read_topology,
+    run_bigquery_schema_tool,
+    run_bigquery_tool,
+)
 
 VALID_NEXT_NODES: set[str] = {"fw", "routing", "app", "dns", "sec", "integrator"}
 
@@ -40,6 +49,30 @@ VALID_NEXT_NODES: set[str] = {"fw", "routing", "app", "dns", "sec", "integrator"
 # config-log 解析の評価方針 (2026-06) で Claude 系ノードは Opus に統一。
 # RALLY_MONITOR_MODEL で個別に上書き可能。
 _DEFAULT_MONITOR_MODEL = "claude-opus-4-7"
+
+# BigQuery 取得 (native tool-use) の最大反復回数。これを超えたらツール無しで
+# 最終 JSON を出させて打ち切る (暴走・コスト暴発の防止)。
+# スキーマ確認 (bigquery_schema) → 取得 (bigquery_query) の 2 段になるため、
+# 1 ノードあたり最低 2 往復＋絞り込みの再取得を見込んで余裕を持たせる。
+_MAX_TOOL_ITERATIONS = 6
+
+# 監視 LLM の max_tokens。BigQuery 取得後は前置きの分析文＋findings/evidence が
+# 日本語で長くなり、小さすぎると最終 JSON が途中で切れて (truncation) parse 失敗 →
+# integrator フォールバックになる。実測で前置き+3 findings が ~3k tok に達したため
+# 余裕を持って 8000。Opus の非ストリーミング上限 (~16k) 内で安全。
+_MONITOR_MAX_TOKENS = 8000
+
+# bq_sources がある時に system prompt 末尾へ足すツール利用ガイダンス。
+_BQ_TOOL_GUIDANCE = """
+
+BigQuery 取得について（重要）:
+- ログ取得元が BigQuery のノード（上記ログ中に「[ログ取得元: BigQuery]」と記載）は、本文がここに含まれていません。
+- テーブルの列構成は機器ごとに異なります。まず bigquery_schema ツールで列名・型・サンプル行を確認し、どの列が時刻か・どの列が本文か・絞り込みに使える列は何かを把握してください。
+- そのうえで bigquery_query ツールを呼び、time_column / text_column / columns に実在する列名を指定し、host と期間/キーワードを絞ってログを取得してから分析してください。
+- 取得は最小限に。疑わしい時間帯・キーワードに絞ること（全件取得は避ける）。
+- 取得が済んだら、最終的に必ず上記スキーマの JSON を（ツールではなく）テキストで出力して終了してください。
+- **最終出力は前置き・説明文・コードフェンスを付けず、JSON オブジェクトのみ**を出力すること（分析の地の文を JSON の前後に書かない）。
+"""
 
 
 # ─── System Prompts ──────────────────────────────────────────────────
@@ -198,6 +231,117 @@ def _blocks_to_text(blocks: list[dict]) -> str:
     return "\n\n".join(b.get("text", "") for b in blocks)
 
 
+def _extract_text(content) -> str:
+    """Messages API レスポンスの content から text ブロックを連結して返す。
+
+    実 SDK の text ブロックは ``type == "text"``。``type`` を持たないブロック
+    (テストの SimpleNamespace 等) も text 属性があれば拾う。tool_use ブロックは除外。
+    """
+    parts = []
+    for block in content:
+        btype = getattr(block, "type", None)
+        if btype == "text" or (btype is None and hasattr(block, "text")):
+            parts.append(getattr(block, "text", "") or "")
+    return "".join(parts)
+
+
+def _run_monitor_llm(
+    *,
+    model: str,
+    system_prompt: str,
+    user_blocks: list[dict],
+    bq_sources: dict[str, dict],
+) -> tuple[str, int, int, int, int, list[str], list[dict]]:
+    """監視 LLM を呼ぶ。bq_sources があれば bigquery_query の tool-use ループを回す。
+
+    返り値: (最終テキスト, tokens_in 総量, tokens_out 合計, cache_creation 合計,
+    cache_read 合計, 実行した BQ ツール呼び出しの記録, BigQuery から取得した実ログ
+    ``[{host, content}]``)。``tokens_in`` は prompt caching の cache 書込/読出を
+    含む**入力処理トークン総量**。cache 内訳はコスト計算用に別途返す。
+
+    bq_sources が空の場合は従来通りツール無しの単発呼び出しと等価。
+    """
+    client = anthropic.Anthropic()
+    use_tools = bool(bq_sources)
+    system_text = system_prompt + (_BQ_TOOL_GUIDANCE if use_tools else "")
+    # system と user の安定ブロックに ephemeral キャッシュを設定（従来踏襲）。
+    system = [
+        {"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}
+    ]
+    messages: list[dict] = [{"role": "user", "content": user_blocks}]
+    total_in = 0
+    total_out = 0
+    total_cc = 0  # cache_creation 合計
+    total_cr = 0  # cache_read 合計
+    executed: list[str] = []
+    fetched: list[dict] = []  # bigquery_query で取得した実ログ (監査の証拠用)
+
+    def _accumulate(usage) -> None:
+        nonlocal total_in, total_out, total_cc, total_cr
+        c = usage_components(usage)
+        total_in += c["input"] + c["cache_creation"] + c["cache_read"]
+        total_out += c["output"]
+        total_cc += c["cache_creation"]
+        total_cr += c["cache_read"]
+
+    for _ in range(_MAX_TOOL_ITERATIONS):
+        kwargs: dict = {
+            "model": model,
+            "max_tokens": _MONITOR_MAX_TOKENS,
+            "system": system,
+            "messages": messages,
+        }
+        if use_tools:
+            kwargs["tools"] = [BIGQUERY_SCHEMA_TOOL_SCHEMA, BIGQUERY_TOOL_SCHEMA]
+        response = client.messages.create(**kwargs)
+        _accumulate(response.usage)
+
+        if use_tools and response.stop_reason == "tool_use":
+            # assistant の tool_use ターンをそのまま履歴に積む
+            messages.append({"role": "assistant", "content": response.content})
+            tool_results: list[dict] = []
+            for block in response.content:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                if block.name == "bigquery_query":
+                    result_str = run_bigquery_tool(dict(block.input or {}), bq_sources)
+                    executed.append(
+                        f"bigquery_query(host={ (block.input or {}).get('host')!r})"
+                    )
+                    # 取得した実ログを監査の証拠として保持 (エラー文字列は除く)
+                    if not result_str.startswith("エラー"):
+                        fetched.append({
+                            "host": str((block.input or {}).get("host") or ""),
+                            "content": result_str,
+                        })
+                elif block.name == "bigquery_schema":
+                    result_str = run_bigquery_schema_tool(dict(block.input or {}), bq_sources)
+                    executed.append(
+                        f"bigquery_schema(host={ (block.input or {}).get('host')!r})"
+                    )
+                else:
+                    result_str = f"エラー: 未知のツール {block.name}"
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_str,
+                    }
+                )
+            messages.append({"role": "user", "content": tool_results})
+            continue
+
+        # tool_use 以外 (end_turn 等) → 最終テキストを返す
+        return _extract_text(response.content), total_in, total_out, total_cc, total_cr, executed, fetched
+
+    # 反復上限に到達: ツール無しで呼び直し、最終 JSON を強制する
+    final = client.messages.create(
+        model=model, max_tokens=_MONITOR_MAX_TOKENS, system=system, messages=messages
+    )
+    _accumulate(final.usage)
+    return _extract_text(final.content), total_in, total_out, total_cc, total_cr, executed, fetched
+
+
 def _normalize_monitor_output(
     raw: dict,
     role: str,
@@ -272,24 +416,18 @@ def _make_monitor(
         )
         user_input = _blocks_to_text(user_blocks)
 
-        client = anthropic.Anthropic()
+        # ログ取得元が BigQuery のノードがあれば native tool-use ループを回す。
+        bq_sources = state.get("bq_sources") or {}
         started = time.perf_counter()
-        # system と user の安定ブロックに ephemeral キャッシュを設定。
-        # 同一監視が複数ラウンド呼ばれる際 / 同一ログの再実行で大幅に高速化される。
-        response = client.messages.create(
-            model=model,
-            max_tokens=2000,
-            system=[
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": user_blocks}],
+        raw, tokens_in, tokens_out, cache_creation, cache_read, bq_tool_calls, bq_fetched = (
+            _run_monitor_llm(
+                model=model,
+                system_prompt=system_prompt,
+                user_blocks=user_blocks,
+                bq_sources=bq_sources,
+            )
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        raw = response.content[0].text
         parsed_raw, parse_error = safe_extract_json(
             raw,
             fallback={
@@ -308,19 +446,27 @@ def _make_monitor(
             normalized["_parse_error"] = parse_error
         if violation:
             normalized["_routing_violation"] = violation
+        # 実際に実行した BigQuery 取得を tool_calls_made に追記 (トレース用)
+        if bq_tool_calls:
+            normalized["tool_calls_made"] = list(
+                normalized.get("tool_calls_made", []) or []
+            ) + bq_tool_calls
 
         return {
             **normalized,
             "role": role,
             "model": model,
-            "tokens_in": response.usage.input_tokens,
-            "tokens_out": response.usage.output_tokens,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "cache_creation": cache_creation,
+            "cache_read": cache_read,
             "latency_ms": latency_ms,
             "raw_output": raw,
             "user_input": user_input,
             "tool_target_ip": target_ip,
             "tool_target_service": target_service,
             "focus_hint_received": focus_hint,
+            "_bq_fetched": bq_fetched,
         }
 
     _monitor.__name__ = f"{role}_monitor"
