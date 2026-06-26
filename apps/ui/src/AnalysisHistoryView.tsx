@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChatHistoryView } from './ChatHistoryView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { buildReasoningReport, downloadText } from './reasoningReport'
+import { downloadTopologyDiagram } from './topologyImage'
 import type {
   AnalysisHistoryDetail,
   AnalysisHistoryListResponse,
@@ -266,8 +267,12 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
         <h2>解析履歴 #{detail.id}</h2>
         {result && (
           <button className="btn-secondary btn-small"
-            onClick={() => downloadText(`reasoning-${result.trace_id?.slice(0, 8) || detail.id}.md`, buildReasoningReport(result))}>
-            推論過程をレポート出力
+            onClick={() => {
+              const base = result.trace_id?.slice(0, 8) || String(detail.id)
+              downloadText(`reasoning-${base}.md`, buildReasoningReport(result))
+              void downloadTopologyDiagram(`topology-${base}.png`, topology, result)
+            }}>
+            レポート＋構成図を出力
           </button>
         )}
         <button className="btn-small btn-delete" onClick={onDelete}>削除</button>

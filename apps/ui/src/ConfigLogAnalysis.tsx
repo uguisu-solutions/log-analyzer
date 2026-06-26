@@ -28,6 +28,7 @@ import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import { buildReasoningReport, downloadText } from './reasoningReport'
+import { downloadTopologyDiagram } from './topologyImage'
 import { RecommendedActionList } from './RecommendedActionList'
 import type {
   AnalysisResult,
@@ -57,6 +58,23 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 type AnalysisMode = 'single' | 'two_stage'
 type SingleSource = 'config' | 'log' | 'both'
 type StageOrder = 'config_log' | 'log_config'
+
+// 連続実行する 1 パターン (段階 × 使用データ)。複数選択して順に流す。
+type RunPattern = { analysisMode: AnalysisMode; singleSource: SingleSource; stageOrder: StageOrder }
+
+// まとめて実行のチェックボックス候補。two_stage は singleSource を使わない (stage_order で決まる)
+const PATTERN_DEFS: { key: string; label: string; group: string; pattern: RunPattern }[] = [
+  { key: 'single:both',    label: 'config + log 同時', group: '1 段階',
+    pattern: { analysisMode: 'single', singleSource: 'both', stageOrder: 'config_log' } },
+  { key: 'single:config',  label: 'config のみ', group: '1 段階',
+    pattern: { analysisMode: 'single', singleSource: 'config', stageOrder: 'config_log' } },
+  { key: 'single:log',     label: 'log のみ', group: '1 段階',
+    pattern: { analysisMode: 'single', singleSource: 'log', stageOrder: 'config_log' } },
+  { key: 'two:config_log', label: 'config → log', group: '2 段階',
+    pattern: { analysisMode: 'two_stage', singleSource: 'both', stageOrder: 'config_log' } },
+  { key: 'two:log_config', label: 'log → config', group: '2 段階',
+    pattern: { analysisMode: 'two_stage', singleSource: 'both', stageOrder: 'log_config' } },
+]
 
 interface Props {
   configList: ConfigEntry[]
@@ -152,6 +170,10 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('single')
   const [singleSource, setSingleSource] = useState<SingleSource>('both')
   const [stageOrder, setStageOrder] = useState<StageOrder>('config_log')
+  // まとめて実行: 選択中パターン (key→bool) と進捗。連続実行中は abort フラグで全体停止
+  const [selectedPatterns, setSelectedPatterns] = useState<Record<string, boolean>>({})
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; label: string } | null>(null)
+  const batchAbortRef = useRef(false)
   // 問診票回答 (Phase B、揮発)
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
   // 問診票の必須項目 (事象など) がすべて埋まっているか。実行可否のゲートに使う
@@ -209,7 +231,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const showLogForm = !(analysisMode === 'single' && singleSource === 'config')
   const isRunning =
     stageStatus === 'single_running' || stageStatus === 'stage1_running' ||
-    stageStatus === 'stage2_running'
+    stageStatus === 'stage2_running' || batchProgress !== null
   // 2 段階の Stage 1/2 のデータ種別 (live ラベルや結果表示に使う)
   const stageKinds = useMemo<[string, string]>(
     () => (stageOrder === 'config_log' ? ['config', 'log'] : ['log', 'config']),
@@ -469,7 +491,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   // ─── 実行 ────────────────────────────────────────────────────
   // 解析完了時に「解析履歴」へ保存する (best-effort、本流は壊さない)
   // 構成図画像を含む完全な状態を送り、後で解析後画面を再現できるようにする。
-  const saveAnalysisHistory = async (rid: string | null, res: AnalysisResult) => {
+  const saveAnalysisHistory = async (rid: string | null, res: AnalysisResult, p: RunPattern) => {
     if (!rid) return
     try {
       await fetch(`${API_BASE}/api/analysis-history`, {
@@ -479,9 +501,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           run_id: rid,
           kind: 'config-log',
           config_id: selectedConfig,
-          analysis_mode: analysisMode,
-          single_source: singleSource,
-          stage_order: stageOrder,
+          analysis_mode: p.analysisMode,
+          single_source: p.singleSource,
+          stage_order: p.stageOrder,
           rally_max_rounds: rallyMaxRounds,
           view_mode: viewMode,
           questionnaire_answers: questionnaireAnswers,
@@ -494,12 +516,38 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     }
   }
 
-  const run = async () => {
-    if (!canRun) return
+  // レポート(.md) と構成図(.png・障害候補レイヤー色付き) をまとめて出力する。
+  // 単一実行 / 連続実行 / 履歴詳細のいずれからも同じ出力が得られるようにする。
+  const downloadAnalysisOutputs = (res: AnalysisResult, fileLabel?: string) => {
+    const trace = res.trace_id?.slice(0, 8) || 'result'
+    const base = fileLabel ? `${fileLabel}-${trace}` : trace
+    downloadText(`reasoning-${base}.md`, buildReasoningReport(res))
+    void downloadTopologyDiagram(`topology-${base}.png`, topology, res)
+  }
+
+  // パターン p が実行可能か (必須入力が揃っているか)。canRun のパターン版。
+  const patternAvailable = (p: RunPattern): boolean => {
+    if (!selectedConfig || topology.nodes.length === 0 || !questionnaireValid) return false
+    if (p.analysisMode === 'single') {
+      if (p.singleSource === 'config') return hasConfig
+      if (p.singleSource === 'log') return hasLog
+      return hasConfig || hasLog
+    }
+    // 2 段階: Stage 1 の始動データ種別が揃っていること
+    return p.stageOrder === 'config_log' ? hasConfig : hasLog
+  }
+
+  // 1 パターンを実行する (run() / runBatch() の両方から使う)。
+  // 段階/使用データは引数 p から導出し、現在の state には依存しない。
+  const runOne = async (p: RunPattern, opts?: { autoDownloadReport?: boolean }) => {
+    if (!patternAvailable(p)) return
+    const twoStage = p.analysisMode === 'two_stage'
+    const showCfg = !(p.analysisMode === 'single' && p.singleSource === 'log')
+    const showLog = !(p.analysisMode === 'single' && p.singleSource === 'config')
     setError(null)
     setStreamEvents([])
     setStageOneOutput(null); setStageTwoOutput(null); setFinalResult(null)
-    setStageStatus(isTwoStage ? 'stage1_running' : 'single_running')
+    setStageStatus(twoStage ? 'stage1_running' : 'single_running')
     setResultTab('combined')
     const ctrl = new AbortController(); abortRef.current = ctrl
     // run_id_assigned から取得した実際の run_id を保持 (state の runId は本クロージャでは
@@ -507,7 +555,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     let currentRunId: string | null = null
     // BigQuery 取得ノードはアップロード本文を送らず、取得指定 (node_bigquery) を送る
     const logsToSend = (() => {
-      if (!showLogForm) return {}
+      if (!showLog) return {}
       const f = filteredAttachments(nodeLogs)
       for (const nid of Object.keys(f)) {
         if (nodeLogSources[nid]?.type === 'bigquery') delete f[nid]
@@ -519,7 +567,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       host_column: string; time_column: string; text_column: string; columns: string[]
       start: string; end: string; limit: number | null
     }> = {}
-    if (showLogForm) {
+    if (showLog) {
       for (const nid of bigqueryNodeIds) {
         const s = nodeLogSources[nid]
         nodeBigquery[nid] = {
@@ -544,11 +592,11 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         },
         // フォーム非表示の種別は送らない (意図に忠実 + 無駄なトークン削減)
         node_logs: logsToSend,
-        node_configs: showConfigForm ? filteredAttachments(nodeConfigs) : {},
+        node_configs: showCfg ? filteredAttachments(nodeConfigs) : {},
         node_bigquery: nodeBigquery,
-        analysis_mode: analysisMode,
-        single_source: singleSource,
-        stage_order: stageOrder,
+        analysis_mode: p.analysisMode,
+        single_source: p.singleSource,
+        stage_order: p.stageOrder,
         questionnaire_answers: questionnaireAnswers,
         audit_after_integrator: auditAfterIntegrator,
         // 監査有効時のみプロンプト上書きを送る (空ならバックエンド既定)
@@ -600,9 +648,14 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
             if (s1) setStageOneOutput(s1)
             if (s2) setStageTwoOutput(s2)
             // 2 段階で Stage 2 が無い = abort、それ以外は完了
-            setStageStatus(isTwoStage && !s2 ? 'aborted' : 'completed')
+            setStageStatus(twoStage && !s2 ? 'aborted' : 'completed')
             // 解析履歴に保存 (完了した解析のみ。best-effort)
-            void saveAnalysisHistory(currentRunId, res)
+            void saveAnalysisHistory(currentRunId, res, p)
+            // まとめて実行時は解析ごとにレポート + 構成図(色付き)を出力する
+            if (opts?.autoDownloadReport) {
+              const fileLabel = `${p.analysisMode}-${p.analysisMode === 'single' ? p.singleSource : p.stageOrder}`
+              downloadAnalysisOutputs(res, fileLabel)
+            }
           }
         } else if (ev.kind === 'error') {
           setError(String(ev.data.message ?? 'unknown stream error'))
@@ -618,7 +671,44 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       abortRef.current = null
     }
   }
-  const cancel = () => { abortRef.current?.abort() }
+
+  // 単発実行: 画面で選んでいる現在の段階/データ設定で 1 回流す
+  const run = () => {
+    if (!canRun) return
+    void runOne({ analysisMode, singleSource, stageOrder })
+  }
+
+  // まとめて実行: チェックされたパターン (実行可否は問わない。実行時に判定)
+  const checkedPatterns = useMemo(
+    () => PATTERN_DEFS.filter(d => selectedPatterns[d.key]),
+    [selectedPatterns],
+  )
+  const runBatch = async () => {
+    if (isRunning) return
+    // チェック済みのうち、必要データが揃っているものだけ実行。揃っていないものはスキップ。
+    const runnable = checkedPatterns.filter(d => patternAvailable(d.pattern))
+    const skipped = checkedPatterns.filter(d => !patternAvailable(d.pattern))
+    if (runnable.length === 0) {
+      setError('選択したパターンに必要なデータ（config / log）または問診票が不足しています。'
+        + '入力を追加するか、別のパターンを選んでください。')
+      return
+    }
+    setError(skipped.length
+      ? `データ不足のため次をスキップします: ${skipped.map(d => `${d.group}・${d.label}`).join(' / ')}`
+      : null)
+    batchAbortRef.current = false
+    for (let i = 0; i < runnable.length; i++) {
+      if (batchAbortRef.current) break
+      setBatchProgress({ current: i + 1, total: runnable.length, label: `${runnable[i].group}・${runnable[i].label}` })
+      await runOne(runnable[i].pattern, { autoDownloadReport: true })
+    }
+    setBatchProgress(null)
+    // 中止で最後の run が「実行中」のまま残った場合に正規化 (完了済みは触らない)
+    setStageStatus(s =>
+      (s === 'single_running' || s === 'stage1_running' || s === 'stage2_running') ? 'aborted' : s)
+  }
+
+  const cancel = () => { batchAbortRef.current = true; abortRef.current?.abort() }
 
   // ─── decision API 呼び出し ────────────────────────────────────
   // continue/stop: rally_max_rounds 到達時の継続/停止用 (Stage 内部から発火)
@@ -795,6 +885,38 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         )}
       </div>
 
+      {/* まとめて実行: 段階×データの複数パターンをチェックして順に流す */}
+      <div className="topology-run-bar batch-run-bar" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className="muted" style={{ fontWeight: 600 }}>まとめて実行:</span>
+        {PATTERN_DEFS.map(d => {
+          const avail = patternAvailable(d.pattern)
+          return (
+            <label key={d.key} className="audit-toggle"
+              style={{ opacity: avail ? 1 : 0.6 }}
+              title={avail ? '' : '必要なデータ（config/log）または問診票が不足。実行時にスキップされます'}>
+              <input type="checkbox"
+                checked={!!selectedPatterns[d.key]}
+                disabled={isRunning}
+                onChange={e => setSelectedPatterns(prev => ({ ...prev, [d.key]: e.target.checked }))} />
+              <span>{d.group}・{d.label}{avail ? '' : '（データ不足）'}</span>
+            </label>
+          )
+        })}
+        <button onClick={runBatch}
+          disabled={isRunning || checkedPatterns.length === 0}
+          className="run-button">
+          {batchProgress
+            ? `連続実行中… (${batchProgress.current}/${batchProgress.total})`
+            : `選択パターンを連続実行 (${checkedPatterns.length})`}
+        </button>
+      </div>
+      {batchProgress && (
+        <p className="muted" style={{ margin: '0.2rem 0 0.4rem' }}>
+          実行中 {batchProgress.current}/{batchProgress.total}: {batchProgress.label}
+          （各解析は履歴に保存し、レポートを個別に出力します）
+        </p>
+      )}
+
       {!isRunning && !questionnaireValid && (
         <p className="muted" style={{ margin: '0.2rem 0 0.4rem' }}>
           ※ 問診票の必須項目（事象）を入力すると解析を開始できます。
@@ -901,9 +1023,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
             <button
               type="button"
               className="btn-secondary btn-small"
-              onClick={() => downloadText(`reasoning-${finalResult.trace_id?.slice(0, 8) || 'result'}.md`, buildReasoningReport(finalResult))}
+              onClick={() => downloadAnalysisOutputs(finalResult)}
             >
-              推論過程をレポート出力
+              レポート＋構成図を出力
             </button>
           </div>
           {viewMode === 'chat' ? (

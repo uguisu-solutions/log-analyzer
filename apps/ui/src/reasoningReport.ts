@@ -178,6 +178,7 @@ export function buildReasoningReport(result: AnalysisResult): string {
     const ar = result.audit_report
     lines.push('## GPT 監査')
     lines.push(`- verdict: **${ar.verdict}** (confidence ${ar.confidence.toFixed(2)}, model ${ar.model || '?'})`)
+    lines.push(`- 消費トークン (in / out): ${ar.tokens_in.toLocaleString()} / ${ar.tokens_out.toLocaleString()} · ${(ar.latency_ms / 1000).toFixed(1)}s`)
     if (ar.summary) lines.push(`- 総評: ${ar.summary}`)
     if (ar.concerns.length > 0) {
       lines.push('- 指摘事項:')
