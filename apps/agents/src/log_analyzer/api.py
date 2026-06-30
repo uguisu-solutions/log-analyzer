@@ -53,7 +53,10 @@ from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.rally_agent import run_rally_stream
 from log_analyzer.rally_two_stage import run_two_stage_stream
 from log_analyzer.schema import AnalysisResult, QuestionnaireItem, QuestionnaireTemplate, StageOutput
+from log_analyzer.rally import source_tools as source_tools_mod
 from log_analyzer.source import codebase as source_codebase
+from log_analyzer.source import db_schema as source_db_schema_mod
+from log_analyzer.source import indexer as source_indexer
 
 load_dotenv()
 storage.init_db()
@@ -1767,6 +1770,9 @@ class ConfigLogRunRequest(BaseModel):
     stage_order: str = "config_log"        # "config_log" | "log_config" (analysis_mode=="two_stage")
     # ネットワーク構成図 (Mermaid 記法)。テキスト文脈として log_text に注入する (任意)。
     mermaid: str | None = None
+    # 解析対象ソースコードのコードベース名 (samples/source/<name>)。指定時は監視ノードが
+    # source_search / source_read / db_schema ツールでオンデマンド参照する (任意)。
+    source_codebase: str | None = None
     # 解析方針の事前確認ゲート (Phase 2)。True なら orchestrator の前に方針プランナーを
     # 1 回実行し、policy_proposal を emit してユーザー承認 (decision) を待つ。
     # まとめて実行 (バッチ) はフロントが False を送って自動スキップする。
@@ -1856,6 +1862,27 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             if s and t
         ],
     }
+
+    # 解析対象ソースコード (任意)。指定時はインデックス + DB スキーマをロードし、
+    # log_text 先頭に「利用可能」マーカー + スキーマ要約を注入、rally に source tools を渡す。
+    source_index = None
+    source_db = None
+    source_block = ""
+    if req.source_codebase:
+        try:
+            cdir = source_codebase.safe_codebase_dir(req.source_codebase)
+        except source_codebase.SourceError as e:
+            raise HTTPException(status_code=e.status_code, detail=str(e))
+        if not cdir.is_dir():
+            raise HTTPException(
+                status_code=404,
+                detail=f"コードベースが見つかりません: {req.source_codebase}",
+            )
+        source_index = source_indexer.get_or_build_index(cdir)
+        source_db = source_db_schema_mod.extract_db_schema(cdir)
+        source_block = source_tools_mod.build_source_injection_block(
+            req.source_codebase, source_index, source_db
+        )
 
     run_id = uuid4().hex
     log_ref = f"config-log-run:{run_id[:8]}"
@@ -1974,8 +2001,8 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             questionnaire_answers=req.questionnaire_answers,
             node_bigquery=bq_marker, mermaid=req.mermaid,
         )
-        # 承認済み解析方針 (Phase 2) があれば log_text 先頭に差し込む
-        single_log_text = policy_prefix["text"] + single_log_text
+        # 承認済み解析方針 (Phase 2) ＋ ソース利用可能マーカー/スキーマ要約を先頭に差し込む
+        single_log_text = policy_prefix["text"] + source_block + single_log_text
         stage_label = _stage_label(1, source)
         yield _sse_bytes(
             "single_stage_start",
@@ -2000,6 +2027,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 bq_sources=bq_sources,
                 audit_after_integrator=req.audit_after_integrator,
                 audit_system_prompt=req.audit_system_prompt,
+                source_index=source_index,
+                source_db_schema=source_db,
+                source_codebase=req.source_codebase or "",
             ):
                 if "stage" not in ev.data:
                     ev.data["stage"] = source
@@ -2049,8 +2079,8 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             questionnaire_answers=req.questionnaire_answers,
             node_bigquery=s1_bq_marker, mermaid=req.mermaid,
         )
-        # 承認済み解析方針 (Phase 2) があれば Stage 1 log_text 先頭に差し込む
-        stage_one_log_text = policy_prefix["text"] + stage_one_log_text
+        # 承認済み解析方針 (Phase 2) ＋ ソースマーカー/スキーマ要約を Stage 1 先頭に差し込む
+        stage_one_log_text = policy_prefix["text"] + source_block + stage_one_log_text
 
         # Stage 2: Stage 1 仮説を冒頭に置き、両データ種別を投入して検証 (BQ 含む)
         def _stage_two_log_text(stage_one_output: StageOutput) -> str:
@@ -2063,8 +2093,8 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 questionnaire_answers=req.questionnaire_answers,
                 node_bigquery=bq_norm, mermaid=req.mermaid,
             )
-            # 承認済み解析方針は Stage 2 でも先頭に維持する
-            return policy_prefix["text"] + hypothesis_block + stage_two_body
+            # 承認済み解析方針・ソースマーカーは Stage 2 でも先頭に維持する
+            return policy_prefix["text"] + source_block + hypothesis_block + stage_two_body
 
         final_data: dict | None = None
         try:
@@ -2082,6 +2112,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 bq_sources=bq_allow,
                 audit_after_integrator=req.audit_after_integrator,
                 audit_system_prompt=req.audit_system_prompt,
+                source_index=source_index,
+                source_db_schema=source_db,
+                source_codebase=req.source_codebase or "",
             ):
                 if ev.kind == "final":
                     res = ev.data.get("result")

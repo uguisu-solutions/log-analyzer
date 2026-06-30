@@ -65,6 +65,68 @@ def _merge(acc: dict[str, _TableAcc], name: str) -> _TableAcc:
 # ─── 公開 API ─────────────────────────────────────────────────────────
 
 
+def summarize_db_schema(schema: DbSchema, *, max_tables: int = 40, max_cols: int = 8) -> str:
+    """log_text 注入用の **要約**（テーブル名＋主要列）。詳細は db_schema(table) ツールで。
+
+    input トークン肥大を避けるため、列は max_cols まで・テーブルは max_tables まで。
+    """
+    if not schema.tables:
+        return ""
+    lines = [
+        "## DB スキーマ（要約）",
+        "詳細な列定義は db_schema(table) ツールで取得できます。",
+    ]
+    for t in schema.tables[:max_tables]:
+        col_strs: list[str] = []
+        for c in t.columns[:max_cols]:
+            if c.primary_key:
+                col_strs.append(f"{c.name} PK")
+            elif c.foreign_key:
+                col_strs.append(f"{c.name} FK→{c.foreign_key}")
+            else:
+                col_strs.append(c.name)
+        more = "" if len(t.columns) <= max_cols else f", …(+{len(t.columns) - max_cols})"
+        src = "+".join(t.sources) if t.sources else "?"
+        lines.append(f"- {t.name}({', '.join(col_strs)}{more})  [{src}]")
+    if len(schema.tables) > max_tables:
+        lines.append(
+            f"（他 {len(schema.tables) - max_tables} テーブル省略。db_schema(table) で取得可）"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def format_db_schema_detail(schema: DbSchema, table: str | None = None) -> str:
+    """db_schema ツールが返す詳細表現（列の型・NOT NULL・PK/FK・default・index）。"""
+    if not schema.tables:
+        return "DB スキーマは検出されていません（DDL / ORM が見つかりません）。"
+    tables = schema.tables
+    if table:
+        tl = table.lower()
+        tables = [t for t in schema.tables if t.name.lower() == tl]
+        if not tables:
+            avail = ", ".join(t.name for t in schema.tables) or "(なし)"
+            return f"テーブル {table!r} は見つかりません。利用可能なテーブル: {avail}"
+    lines: list[str] = []
+    for t in tables:
+        src = "+".join(t.sources) if t.sources else "?"
+        lines.append(f"### table: {t.name}  [{src}]")
+        for c in t.columns:
+            flags: list[str] = []
+            if c.primary_key:
+                flags.append("PK")
+            if not c.nullable:
+                flags.append("NOT NULL")
+            if c.foreign_key:
+                flags.append(f"FK→{c.foreign_key}")
+            if c.default:
+                flags.append(f"default={c.default}")
+            suffix = (" " + " ".join(flags)) if flags else ""
+            lines.append(f"  - {c.name} {c.type}{suffix}".rstrip())
+        for idx in t.indexes:
+            lines.append(f"  index: ({', '.join(idx)})")
+    return "\n".join(lines)
+
+
 def extract_db_schema(root: Path) -> DbSchema:
     """root 配下から DDL ＋ ORM の DB スキーマを抽出・マージして返す。"""
     root = Path(root)

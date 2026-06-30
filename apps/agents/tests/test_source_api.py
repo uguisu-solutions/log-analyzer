@@ -164,6 +164,23 @@ def test_upload_with_no_indexable_files(client):
     assert r.status_code == 400
 
 
+def test_config_log_stream_rejects_unknown_codebase(client):
+    """config-log-stream に存在しない source_codebase を指定すると 404（ストリーム開始前）。"""
+    r = client.post(
+        "/api/runs/config-log-stream",
+        json={
+            "config": "config4",
+            "topology": {"nodes": [{"id": "app-01", "type": "Server"}], "links": []},
+            "node_configs": {"app-01": [{"name": "c.conf", "content": "key=value"}]},
+            "analysis_mode": "single",
+            "single_source": "config",
+            "source_codebase": "does_not_exist",
+        },
+    )
+    assert r.status_code == 404
+    assert "コードベースが見つかりません" in r.json()["detail"]
+
+
 def test_tree_404_on_missing(client):
     r = client.get("/api/source/nope/tree")
     assert r.status_code == 404

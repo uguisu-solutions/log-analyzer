@@ -4,13 +4,17 @@
 > 関連：[config_log_stages.md](./config_log_stages.md) / [mermaid_and_policy_gate.md](./mermaid_and_policy_gate.md) /
 > 既存のオンデマンド取得の先行例＝BigQuery ツール（[rally/tools.py](../../apps/agents/src/log_analyzer/rally/tools.py)）。
 
-> **状態（2026-07-01）**: **Phase 1 実装完了**（branch `feature/source-code-analysis`）。
-> 取り込み（複数アップロード・zip展開・除外・zip-slip・50MB）／決定論インデックス
-> （Python=ast, TS/JS=tree-sitter）／DBスキーマ抽出（DDL=sqlparse, ORM=SQLAlchemy/Django/Prisma）／
-> `/api/source` CRUD ＋ tree を実装。新規: `apps/agents/src/log_analyzer/source/`
-> （indexer / db_schema / codebase）、`schema.py` 拡張、`api.py` エンドポイント、
-> 検証用サンプル `samples/source/sample_payment_app/`、テスト3本（26 ケース）。
-> **Phase 2（オンデマンド参照ツールの rally 組み込み）以降は未着手。**
+> **状態（2026-07-01）**: **Phase 1・Phase 2 実装完了**（branch `feature/source-code-analysis`）。
+> - Phase 1: 取り込み（複数アップロード・zip展開・除外・zip-slip・50MB）／決定論インデックス
+>   （Python=ast, TS/JS=tree-sitter）／DBスキーマ抽出（DDL=sqlparse, ORM=SQLAlchemy/Django/Prisma）／
+>   `/api/source` CRUD ＋ tree。新規 `apps/agents/src/log_analyzer/source/`（indexer/db_schema/codebase）。
+> - Phase 2: オンデマンド参照ツールを rally 監視ループに組み込み。新規 `rally/source_tools.py`
+>   （`source_search`/`source_read`/`db_schema` ＋ 予算/重複ガード ＋ log_text 注入ブロック ＋ SourceContext）。
+>   `monitors.py` / `rally_agent.py` / `rally_two_stage.py` / `api.py`（`source_codebase` 受け）を結線。
+>   input トークン配慮（§3）: search は署名のみ／read は1回6000字＋関数スライス／run 全体40000字の
+>   ソフト上限／同一 path・symbol の重複ガード／DBスキーマは要約注入＋詳細はツール、を実装。
+> - テスト: source 系 5 本（67 ケース）、全 223 件通過。
+> **Phase 3（UI: コードベース選択 / 参照ビュー / SSE 可視化）以降は未着手。**
 
 ## 確定した前提（ユーザー確認済み 2026-07-01）
 
