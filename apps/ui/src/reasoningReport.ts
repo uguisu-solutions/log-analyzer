@@ -10,6 +10,7 @@ import type {
   AnalysisResult,
   DelegationEvent,
   RoundMetrics,
+  SourceToolCall,
   StageOutput,
 } from './types'
 
@@ -211,6 +212,40 @@ export function buildReasoningReport(result: AnalysisResult): string {
     if (ar.alternative_hypotheses.length > 0) {
       lines.push('- 別の仮説:')
       for (const h of ar.alternative_hypotheses) lines.push(`    - ${h}`)
+    }
+    lines.push('')
+  }
+
+  // 参照したソースコード (Phase 3)
+  const sc = result.source_context
+  if (sc) {
+    lines.push('## 参照したソースコード')
+    lines.push(
+      `- コードベース: ${sc.codebase || '—'} ` +
+      `(${sc.file_count} ファイル / ${sc.symbol_count} シンボル, ` +
+      `取得 ${sc.total_chars_fetched.toLocaleString()} 文字 / ${sc.tool_calls.length} 回)`,
+    )
+    // ノード別にグルーピング
+    const order: string[] = []
+    const byNode = new Map<string, SourceToolCall[]>()
+    for (const c of sc.tool_calls) {
+      const k = c.node || '(不明)'
+      if (!byNode.has(k)) { byNode.set(k, []); order.push(k) }
+      byNode.get(k)!.push(c)
+    }
+    const target = (c: SourceToolCall): string => {
+      const a = c.args ?? {}
+      if (c.tool === 'source_search') return `検索「${String(a.query ?? '')}」`
+      if (c.tool === 'source_read') return `取得 ${String(a.path ?? '')}${a.symbol ? ':' + String(a.symbol) : ''}`
+      if (c.tool === 'db_schema') return `DBスキーマ ${a.table ? String(a.table) : '(全テーブル)'}`
+      return c.tool
+    }
+    for (const node of order) {
+      lines.push(`- **${roleLabel(node)}**`)
+      for (const c of byNode.get(node)!) lines.push(`    - [r${c.round}] ${target(c)}`)
+    }
+    if (sc.db_schema && sc.db_schema.tables.length > 0) {
+      lines.push(`- DB スキーマ: ${sc.db_schema.tables.map(t => t.name).join(', ')}`)
     }
     lines.push('')
   }

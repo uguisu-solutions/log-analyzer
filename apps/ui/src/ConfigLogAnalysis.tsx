@@ -31,6 +31,8 @@ import { QuestionnairePanel } from './QuestionnairePanel'
 import { buildReasoningReport, downloadText } from './reasoningReport'
 import { downloadTopologyDiagram } from './topologyImage'
 import { RecommendedActionList } from './RecommendedActionList'
+import { SourceCodebasePanel } from './SourceCodebasePanel'
+import { SourceReferenceView } from './SourceReferenceView'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -183,6 +185,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   // 問診票の必須項目 (事象など) がすべて埋まっているか。実行可否のゲートに使う
   const [questionnaireValid, setQuestionnaireValid] = useState<boolean>(false)
   // 監査エージェント (Phase C): integrator 後に GPT で独立検証
+  // 解析対象ソースコード（空 = 使用しない）。監視ノードがオンデマンド参照する
+  const [sourceCodebase, setSourceCodebase] = useState<string>('')
+
   const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
   // GPT 監査プロンプト (編集可能。既定はバックエンドから取得して初期表示)
   const [auditPrompt, setAuditPrompt] = useState<string>('')
@@ -614,6 +619,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         audit_system_prompt: auditAfterIntegrator ? auditPrompt : undefined,
         // ネットワーク構成図 (Mermaid)。空なら送らない
         mermaid: topology.mermaid?.trim() ? topology.mermaid : undefined,
+        // 解析対象ソースコード。空なら送らない（監視ノードがツールで参照する）
+        source_codebase: sourceCodebase || undefined,
         // 解析方針の事前確認ゲート (バッチは false で自動スキップ)
         require_policy_approval: opts?.requirePolicyApproval ?? false,
       }
@@ -941,6 +948,13 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           onChange={e => setTopology(t => ({ ...t, mermaid: e.target.value }))}
         />
       </details>
+
+      {/* 解析対象ソースコード (任意)。選ぶと監視ノードがオンデマンド参照する */}
+      <SourceCodebasePanel
+        selected={sourceCodebase}
+        onSelect={setSourceCodebase}
+        disabled={isRunning}
+      />
 
       {/* standard モード時のみ実行バー直前に表示 (chat モードはチャット内に統合) */}
       {viewMode === 'standard' && (
@@ -1425,6 +1439,9 @@ function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTwoOutput
 
       <h4>推奨アクション（{result.recommended_actions.length}）</h4>
       <RecommendedActionList actions={result.recommended_actions} />
+
+      {/* 参照したソースコード (Phase 3) */}
+      {result.source_context && <SourceReferenceView context={result.source_context} />}
 
       {/* 監査エージェント (Phase C) の所見 */}
       {result.audit_report && <AuditReportView report={result.audit_report} />}

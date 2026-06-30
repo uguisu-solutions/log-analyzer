@@ -14,7 +14,12 @@
 >   input トークン配慮（§3）: search は署名のみ／read は1回6000字＋関数スライス／run 全体40000字の
 >   ソフト上限／同一 path・symbol の重複ガード／DBスキーマは要約注入＋詳細はツール、を実装。
 > - テスト: source 系 5 本（67 ケース）、全 223 件通過。
-> **Phase 3（UI: コードベース選択 / 参照ビュー / SSE 可視化）以降は未着手。**
+> - Phase 3（UI）: `SourceCodebasePanel.tsx`（コードベース一覧/選択/複数アップロード）、
+>   `SourceReferenceView.tsx`（ノード別「参照したソース」＋DBスキーマ）を追加。
+>   `ConfigLogAnalysis.tsx`（ソース選択パネル配置・`source_codebase` 送出・結果表示）、
+>   `types.ts`（SourceContext/DbSchema 等）、`reasoningReport.ts`（参照ソース節）、`App.css` を更新。
+>   tsc / vite build 通過。
+> **Phase 4（将来: 起点ダイジェスト / 言語追加 / 呼び出しグラフ / ノード単位マッピング）は未着手。**
 
 ## 確定した前提（ユーザー確認済み 2026-07-01）
 
