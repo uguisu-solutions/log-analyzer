@@ -23,6 +23,7 @@ from log_analyzer.source.db_schema import extract_db_schema
 from log_analyzer.source.indexer import (
     MAX_FILE_BYTES,
     build_source_index,
+    get_or_build_index,
     is_excluded_dir,
     is_excluded_file,
     language_for,
@@ -179,7 +180,12 @@ def list_codebases() -> list[dict]:
 
 
 def stats_for(name: str) -> dict:
-    """1 コードベースの統計。meta があればそれを、無ければ算出して返す。"""
+    """1 コードベースの統計。meta があればそれを、無ければ算出してキャッシュし返す。
+
+    直接配置されたコードベース（meta なし）では、毎回の一覧取得で tree-sitter
+    解析が走らないよう、インデックスは ``.index.json`` を使い回し、結果を
+    ``.meta.json`` に書き出しておく。
+    """
     dest = safe_codebase_dir(name)
     meta = dest / _META_FILENAME
     if meta.is_file():
@@ -187,8 +193,13 @@ def stats_for(name: str) -> dict:
             return json.loads(meta.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
-    index = build_source_index(dest)
-    return _build_stats(name, index, extract_db_schema(dest))
+    index = get_or_build_index(dest)
+    stats = _build_stats(name, index, extract_db_schema(dest))
+    try:
+        meta.write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return stats
 
 
 def exists(name: str) -> bool:

@@ -26,7 +26,9 @@ def _make_codebase(root: Path) -> None:
     (root / "web" / "api.ts").write_text(
         "export function postCharge(req){ return req }\n"
         "export const fmt = (n) => `${n}`\n"
-        "class Client { send(){ return 1 } }\n",
+        "class Client {\n"
+        "  send() { return 1 }\n"
+        "}\n",
         encoding="utf-8",
     )
     # 除外対象（走査されてはいけない）

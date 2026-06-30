@@ -20,6 +20,14 @@
 >   `types.ts`（SourceContext/DbSchema 等）、`reasoningReport.ts`（参照ソース節）、`App.css` を更新。
 >   tsc / vite build 通過。
 > **Phase 4（将来: 起点ダイジェスト / 言語追加 / 呼び出しグラフ / ノード単位マッピング）は未着手。**
+>
+> **既知の制約（2026-07-01・動作確認で判明）**: tree-sitter のネイティブ実装が
+> **Windows + uvicorn** で不安定で、稼働中イベントループ上での「最初の TS/JS 解析
+> 呼び出し」が segfault する（import 時 / startup フック / async 化 / グローバルロック
+> いずれでも回避できず）。このため **TS/JS のシンボル抽出は既定で正規表現** に変更
+> （Python は ast のまま）。tree-sitter は環境変数 `LOG_ANALYZER_TREE_SITTER=1` で
+> opt-in（Linux/Docker 等の安定環境向け）。正規表現でも関数/クラス/アロー代入/
+> メソッドを抽出でき、search/read/DBスキーマは問題なく動作する。
 
 ## 確定した前提（ユーザー確認済み 2026-07-01）
 

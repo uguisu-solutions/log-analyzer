@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -66,6 +68,14 @@ _TS_GRAMMAR: dict[str, str] = {
     "javascript": "javascript",
 }
 
+# TS/JS のシンボル抽出に tree-sitter を使うか。既定は **正規表現**（安定優先）。
+# tree-sitter のネイティブ実装は Windows + uvicorn の組み合わせで、稼働中イベント
+# ループ上での最初の解析呼び出しが segfault するため既定では使わない。Linux /
+# Docker 等で精度を取りたい場合は環境変数 LOG_ANALYZER_TREE_SITTER=1 で有効化する。
+_USE_TREE_SITTER = os.environ.get("LOG_ANALYZER_TREE_SITTER", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
 
 def language_for(path: Path) -> str | None:
     return LANGUAGE_BY_EXT.get(path.suffix.lower())
@@ -83,15 +93,48 @@ def is_excluded_file(path: Path) -> bool:
     return any(low.endswith(suf) for suf in EXCLUDED_SUFFIXES)
 
 
-# ─── tree-sitter パーサ（言語ごとに 1 個キャッシュ）─────────────────
+# ─── tree-sitter パーサ ───────────────────────────────────────────────
+# 注意: tree-sitter のネイティブ実装は **同時実行に対して安全でない**。
+# FastAPI の同期エンドポイントはスレッドプールで動くため、複数スレッドから
+# 同時に parse / ノード走査を行うと segfault する（Parser を分けても、Language
+# 共有・Node 走査もネイティブ呼び出しのため不可）。確実を期して、tree-sitter を
+# 使う区間全体をグローバルロックで直列化する。インデックスは .index.json に
+# キャッシュされるため、ロック競合が起きるのは初回構築時のみで実害は小さい。
+_TS_LOCK = threading.Lock()
 
 
 @lru_cache(maxsize=None)
-def _get_parser(grammar: str):
-    from tree_sitter import Parser
+def _get_language(grammar: str):
     from tree_sitter_language_pack import get_language
 
-    return Parser(get_language(grammar))
+    return get_language(grammar)
+
+
+def _new_parser(grammar: str):
+    from tree_sitter import Parser
+
+    return Parser(_get_language(grammar))
+
+
+_TS_GRAMMARS = ("typescript", "tsx", "javascript")
+
+
+def warmup_tree_sitter() -> None:
+    """tree-sitter のネイティブ実装を **メインスレッドで** 初期化する。
+
+    FastAPI の同期エンドポイントは anyio のワーカースレッドで実行される。
+    tree-sitter のネイティブ拡張は「初回呼び出しがワーカースレッド」だと
+    Windows で segfault する（メインスレッドで一度初期化済みなら以降の
+    ワーカースレッド呼び出しは安全）。そこで import 時（= サーバ起動時、
+    メインスレッド）に各文法で 1 回ダミー parse して初期化しておく。
+    失敗しても無視（解析時に個別 try/except で握りつぶされる）。
+    """
+    for grammar in _TS_GRAMMARS:
+        try:
+            with _TS_LOCK:
+                _new_parser(grammar).parse(b"const x = 1;")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ─── シンボル抽出 ─────────────────────────────────────────────────────
@@ -147,13 +190,9 @@ def _extract_ts_symbols(text: str, grammar: str) -> list[SourceSymbol]:
     """tree-sitter で TS/JS の関数・クラス・メソッド・アロー代入を抽出する。
 
     パース例外は握りつぶし、空リストで返す（解析全体は止めない）。
+    parse とノード走査は両方ネイティブ呼び出しなので、全体を ``_TS_LOCK`` で
+    直列化する（並行実行による segfault 回避）。
     """
-    try:
-        parser = _get_parser(grammar)
-        tree = parser.parse(text.encode("utf-8"))
-    except Exception:  # noqa: BLE001 — 1 ファイル失敗で全体を止めない
-        return []
-
     syms: list[SourceSymbol] = []
 
     def add(node, name: str, kind: str) -> None:
@@ -188,7 +227,99 @@ def _extract_ts_symbols(text: str, grammar: str) -> list[SourceSymbol]:
         for child in node.children:
             visit(child, class_name)
 
-    visit(tree.root_node, None)
+    try:
+        with _TS_LOCK:  # parse + ノード走査をまとめて直列化
+            tree = _new_parser(grammar).parse(text.encode("utf-8"))
+            visit(tree.root_node, None)
+    except Exception:  # noqa: BLE001 — 1 ファイル失敗で全体を止めない
+        return []
+    return syms
+
+
+# ─── TS/JS シンボル抽出（正規表現フォールバック・既定）──────────────
+
+_RX_FN = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\("
+)
+_RX_CLASS = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)"
+)
+_RX_ARROW = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)"
+    r"\s*(?::\s*[^=]+?)?=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+?)?=>"
+)
+_RX_METHOD = re.compile(
+    r"^\s+(?:public\s+|private\s+|protected\s+|static\s+|readonly\s+|async\s+|get\s+|set\s+|\*\s*)*"
+    r"([A-Za-z_$][\w$]*)\s*\([^;{)]*\)\s*(?::\s*[^={]+)?\{"
+)
+# メソッド誤検出を避ける制御構文キーワード
+_RX_NOT_METHOD = frozenset(
+    {"if", "for", "while", "switch", "catch", "return", "do", "else",
+     "function", "await", "with", "typeof", "throw", "new"}
+)
+
+
+def _find_block_end(lines: list[str], start_idx: int) -> int:
+    """start 行から最初の ``{`` を探し、対応する ``}`` の行番号(1始まり)を返す。
+
+    ブレースが無い（アロー 1 行など）場合は start 行のみ。
+    """
+    depth = 0
+    started = False
+    for j in range(start_idx, len(lines)):
+        for ch in lines[j]:
+            if ch == "{":
+                depth += 1
+                started = True
+            elif ch == "}":
+                depth -= 1
+                if started and depth == 0:
+                    return j + 1
+        if not started and j > start_idx and lines[j].rstrip().endswith((";", ",", ")")):
+            break  # 1 行で完結するアロー代入など
+    return start_idx + 1
+
+
+def _extract_ts_symbols_regex(text: str) -> list[SourceSymbol]:
+    """tree-sitter を使わず正規表現で TS/JS のシンボルを抽出する（安定・既定）。
+
+    関数・クラス・アロー代入・クラスメソッド（直近のクラス名で修飾）を拾う。
+    精度は tree-sitter に劣るが、ネイティブ依存が無く segfault しない。
+    """
+    lines = text.splitlines()
+    syms: list[SourceSymbol] = []
+    current_class: str | None = None
+    class_depth = 0  # クラス本体の開始ブレース深度（離脱判定用の概算）
+    depth = 0
+    for i, line in enumerate(lines):
+        m = _RX_CLASS.match(line)
+        if m:
+            end = _find_block_end(lines, i)
+            syms.append(SourceSymbol(name=m.group(1), kind="class", start_line=i + 1, end_line=end))
+            current_class = m.group(1)
+            class_depth = depth
+        else:
+            m = _RX_FN.match(line)
+            if m:
+                end = _find_block_end(lines, i)
+                syms.append(SourceSymbol(name=m.group(1), kind="function", start_line=i + 1, end_line=end))
+            else:
+                m = _RX_ARROW.match(line)
+                if m:
+                    end = _find_block_end(lines, i)
+                    syms.append(SourceSymbol(name=m.group(1), kind="function", start_line=i + 1, end_line=end))
+                else:
+                    m = _RX_METHOD.match(line)
+                    if m and m.group(1) not in _RX_NOT_METHOD and current_class:
+                        end = _find_block_end(lines, i)
+                        syms.append(SourceSymbol(
+                            name=f"{current_class}.{m.group(1)}", kind="method",
+                            start_line=i + 1, end_line=end,
+                        ))
+        # ブレース深度を更新し、クラス本体を抜けたら current_class を解除（概算）
+        depth += line.count("{") - line.count("}")
+        if current_class is not None and depth <= class_depth:
+            current_class = None
     return syms
 
 
@@ -196,9 +327,14 @@ def extract_symbols(text: str, language: str) -> list[SourceSymbol]:
     if language == "python":
         return _extract_python_symbols(text)
     grammar = _TS_GRAMMAR.get(language)
-    if grammar:
-        return _extract_ts_symbols(text, grammar)
-    return []
+    if not grammar:
+        return []
+    if _USE_TREE_SITTER:
+        syms = _extract_ts_symbols(text, grammar)
+        if syms:
+            return syms
+        # tree-sitter が空（パース失敗等）なら正規表現で再挑戦
+    return _extract_ts_symbols_regex(text)
 
 
 # ─── インデックス本体 ─────────────────────────────────────────────────
@@ -470,3 +606,9 @@ def get_or_build_index(root: Path) -> SourceIndex:
     except OSError:
         pass
     return index
+
+
+# tree-sitter を有効化した環境でのみ、import 時（メインスレッド）に初期化する。
+# 既定（正規表現）では何もしない（ネイティブを一切呼ばない）。
+if _USE_TREE_SITTER:
+    warmup_tree_sitter()
