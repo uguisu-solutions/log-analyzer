@@ -140,6 +140,8 @@ def extract_db_schema(root: Path) -> DbSchema:
                 _ingest_prisma(path.read_text(encoding="utf-8", errors="replace"), acc)
             elif suffix == ".py":
                 _ingest_python_orm(path.read_text(encoding="utf-8", errors="replace"), acc)
+            elif suffix in (".rb", ".rake"):
+                _ingest_ruby_schema(path.read_text(encoding="utf-8", errors="replace"), acc)
         except Exception:  # noqa: BLE001 — 1 ファイル失敗で全体を止めない
             continue
     tables = [acc[k].to_table() for k in sorted(acc)]
@@ -492,6 +494,112 @@ def _parse_django_model(cls: ast.ClassDef, acc: dict[str, _TableAcc]) -> None:
             if ref:
                 col.foreign_key = f"{ref.lower()}.id"
         table.add_column(col)
+
+
+# ─── ORM: Rails / ActiveRecord（db/schema.rb・migration の create_table）───
+
+_RB_CREATE_TABLE = re.compile(r'^(\s*)create_table\s+[:"]?(\w+)["]?(.*)$')
+_RB_COL = re.compile(r'^\s*t\.(\w+)\s+[:"]?(\w+)["]?(.*)$')
+_RB_ADD_FK = re.compile(
+    r'^\s*add_foreign_key\s+[:"]?(\w+)["]?\s*,\s*[:"]?(\w+)["]?(.*)$'
+)
+_RB_ADD_INDEX = re.compile(r'^\s*add_index\s+[:"]?(\w+)["]?\s*,\s*(.+)$')
+
+
+def _rb_plural(name: str) -> str:
+    return name if name.endswith("s") else name + "s"
+
+
+def _rb_singular(name: str) -> str:
+    return name[:-1] if name.endswith("s") else name
+
+
+def _parse_ruby_col(line: str, table: _TableAcc) -> None:
+    s = line.strip()
+    # 引数なしの t.timestamps（created_at / updated_at を生成）
+    if re.match(r"t\.timestamps\b", s):
+        for cn in ("created_at", "updated_at"):
+            c = _ensure_col(table, cn)
+            c.type = "datetime"
+            c.nullable = False
+        return
+    # ブロック内 t.index ["a","b"], ...
+    if re.match(r"t\.index\b", s):
+        bracket = re.search(r"\[([^\]]*)\]", s)
+        cols_src = bracket.group(1) if bracket else ""
+        cols = [_strip_ident(c).strip(": ") for c in cols_src.split(",") if c.strip()]
+        if cols:
+            table.indexes.append(cols)
+        return
+    m = _RB_COL.match(line)
+    if not m:
+        return
+    typ, name, rest = m.group(1), m.group(2), m.group(3)
+    low = rest.lower()
+    if typ == "check_constraint":
+        return
+    if typ in ("references", "belongs_to"):
+        col = _ensure_col(table, f"{name}_id")
+        col.type = "bigint"
+        if re.search(r"null:\s*false", low):
+            col.nullable = False
+        if "foreign_key" in low:
+            col.foreign_key = f"{_rb_plural(name)}.id"
+        return
+    col = _ensure_col(table, name)
+    col.type = typ
+    col.nullable = not bool(re.search(r"null:\s*false", low))
+    dm = re.search(r"""default:\s*("[^"]*"|'[^']*'|[^\s,]+)""", rest)
+    if dm:
+        col.default = dm.group(1)
+
+
+def _ingest_ruby_schema(text: str, acc: dict[str, _TableAcc]) -> None:
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = _RB_CREATE_TABLE.match(lines[i])
+        if m:
+            indent, tname, opts = m.group(1), m.group(2), m.group(3)
+            table = _merge(acc, tname)
+            table.sources.add("orm/activerecord")
+            # Rails は明示的に id: false でない限り暗黙の主キー id を作る
+            if not re.search(r"id:\s*false", opts):
+                c = _ensure_col(table, "id")
+                c.primary_key = True
+                c.nullable = False
+                if not c.type:
+                    c.type = "bigint"
+            end_pat = re.compile(r"^" + re.escape(indent) + r"end\b")
+            j = i + 1
+            while j < len(lines) and not end_pat.match(lines[j]):
+                _parse_ruby_col(lines[j], table)
+                j += 1
+            i = j + 1
+            continue
+        fk = _RB_ADD_FK.match(lines[i])
+        if fk:
+            from_table, to_table, rest = fk.group(1), fk.group(2), fk.group(3)
+            table = _merge(acc, from_table)
+            table.sources.add("orm/activerecord")
+            col_m = re.search(r"column:\s*[:\"]?(\w+)", rest)
+            colname = col_m.group(1) if col_m else f"{_rb_singular(to_table)}_id"
+            _ensure_col(table, colname).foreign_key = f"{to_table}.id"
+            i += 1
+            continue
+        idx = _RB_ADD_INDEX.match(lines[i])
+        if idx:
+            table = _merge(acc, idx.group(1))
+            raw = idx.group(2)  # 例: ["email"], unique: true / :email, ... / ["a","b"]
+            bracket = re.match(r"\s*\[([^\]]*)\]", raw)
+            cols_src = bracket.group(1) if bracket else raw.split(",")[0]
+            cols = [_strip_ident(c).strip(": ") for c in cols_src.split(",")]
+            cols = [c for c in cols if c]
+            if cols:
+                table.indexes.append(cols)
+            i += 1
+            continue
+        i += 1
 
 
 # ─── ORM: Prisma ──────────────────────────────────────────────────────

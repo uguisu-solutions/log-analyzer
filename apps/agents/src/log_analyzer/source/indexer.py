@@ -59,6 +59,7 @@ LANGUAGE_BY_EXT: dict[str, str] = {
     ".ts": "typescript", ".mts": "typescript", ".cts": "typescript",
     ".tsx": "tsx",
     ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".rb": "ruby", ".rake": "ruby",
 }
 
 # 言語 → tree-sitter 文法名
@@ -323,9 +324,63 @@ def _extract_ts_symbols_regex(text: str) -> list[SourceSymbol]:
     return syms
 
 
+# ─── Ruby シンボル抽出（正規表現）──────────────────────────────────
+
+_RB_CLASS = re.compile(r"^(\s*)class\s+([A-Z][\w:]*)")
+_RB_MODULE = re.compile(r"^(\s*)module\s+([A-Z][\w:]*)")
+_RB_DEF = re.compile(r"^(\s*)def\s+(self\.)?([A-Za-z_][\w]*[!?=]?)")
+
+
+def _ruby_block_end(lines: list[str], start_idx: int, indent: str) -> int:
+    """同じインデントの ``end`` 行までを 1 ブロックとみなし、その行番号(1始まり)を返す。
+
+    Ruby は def/class/module を ``end`` で閉じる。慣用的なインデントを前提に、
+    同列の ``end`` を終端とする（endless method / 1 行定義は start 行のみ）。
+    """
+    # 1 行で閉じている定義（def foo; end / def foo = expr）
+    head = lines[start_idx]
+    if re.search(r";\s*end\b", head) or re.search(r"def\s+[^;]*=", head):
+        return start_idx + 1
+    end_pat = re.compile(r"^" + re.escape(indent) + r"end\b")
+    for j in range(start_idx + 1, len(lines)):
+        if end_pat.match(lines[j]):
+            return j + 1
+    return start_idx + 1
+
+
+def _extract_ruby_symbols(text: str) -> list[SourceSymbol]:
+    """Ruby のクラス・モジュール・メソッドを正規表現で抽出する。
+
+    ``def`` はインデントがあれば method、無ければ function 扱い。``def self.x`` は
+    クラスメソッドとして ``self.x`` の形で記録する。
+    """
+    lines = text.splitlines()
+    syms: list[SourceSymbol] = []
+    for i, line in enumerate(lines):
+        m = _RB_CLASS.match(line) or _RB_MODULE.match(line)
+        if m:
+            indent, name = m.group(1), m.group(2)
+            syms.append(SourceSymbol(
+                name=name, kind="class",
+                start_line=i + 1, end_line=_ruby_block_end(lines, i, indent),
+            ))
+            continue
+        m = _RB_DEF.match(line)
+        if m:
+            indent, prefix, name = m.group(1), m.group(2) or "", m.group(3)
+            kind = "method" if indent else "function"
+            syms.append(SourceSymbol(
+                name=f"{prefix}{name}", kind=kind,
+                start_line=i + 1, end_line=_ruby_block_end(lines, i, indent),
+            ))
+    return syms
+
+
 def extract_symbols(text: str, language: str) -> list[SourceSymbol]:
     if language == "python":
         return _extract_python_symbols(text)
+    if language == "ruby":
+        return _extract_ruby_symbols(text)
     grammar = _TS_GRAMMAR.get(language)
     if not grammar:
         return []
@@ -468,7 +523,7 @@ def _tokenize(query: str) -> list[str]:
 
 
 def _normalize_lang(lang: str) -> str:
-    aliases = {"py": "python", "ts": "typescript", "js": "javascript"}
+    aliases = {"py": "python", "ts": "typescript", "js": "javascript", "rb": "ruby"}
     return aliases.get(lang.lower(), lang.lower())
 
 

@@ -125,6 +125,54 @@ def test_index_cache_roundtrip(tmp_path: Path):
     assert {f.path for f in again.files} == {f.path for f in idx.files}
 
 
+def test_index_extracts_ruby_symbols(tmp_path: Path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "order.rb").write_text(
+        "module Billing\n"
+        "  class Order < ApplicationRecord\n"
+        "    def total\n"
+        "      items.sum(&:price)\n"
+        "    end\n"
+        "    def self.recent\n"
+        "      all\n"
+        "    end\n"
+        "    def paid? = status == 'paid'\n"
+        "  end\n"
+        "end\n",
+        encoding="utf-8",
+    )
+    idx = build_source_index(tmp_path)
+    f = next(x for x in idx.files if x.path == "app/order.rb")
+    assert f.language == "ruby"
+    names = {(s.name, s.kind) for s in f.symbols}
+    assert ("Billing", "class") in names
+    assert ("Order", "class") in names
+    assert ("total", "method") in names
+    assert ("self.recent", "method") in names
+    assert ("paid?", "method") in names
+    # 関数本体の行範囲（end まで）
+    total = next(s for s in f.symbols if s.name == "total")
+    assert total.start_line == 3 and total.end_line == 5
+
+
+def test_ruby_read_slices_method(tmp_path: Path):
+    (tmp_path / "svc.rb").write_text(
+        "class Svc\n"
+        "  def run\n"
+        "    do_work\n"
+        "  end\n"
+        "  def other\n"
+        "    1\n"
+        "  end\n"
+        "end\n",
+        encoding="utf-8",
+    )
+    idx = build_source_index(tmp_path)
+    out = idx.read("svc.rb", symbol="run")
+    assert "def run" in out
+    assert "def other" not in out
+
+
 def test_syntax_error_file_yields_empty_symbols(tmp_path: Path):
     (tmp_path / "broken.py").write_text("def (((:\n", encoding="utf-8")
     idx = build_source_index(tmp_path)

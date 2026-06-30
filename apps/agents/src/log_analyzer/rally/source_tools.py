@@ -70,7 +70,7 @@ SOURCE_SEARCH_TOOL_SCHEMA: dict[str, Any] = {
             },
             "lang": {
                 "type": "string",
-                "enum": ["py", "ts", "js", "python", "typescript", "javascript"],
+                "enum": ["py", "ts", "js", "rb", "python", "typescript", "javascript", "ruby"],
                 "description": "言語で絞り込む場合に指定（任意）。",
             },
             "limit": {

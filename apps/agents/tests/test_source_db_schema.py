@@ -111,6 +111,62 @@ def test_prisma_model(tmp_path: Path):
     assert cols["bio"].nullable is True
 
 
+def test_rails_schema_rb(tmp_path: Path):
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.rb").write_text(
+        'ActiveRecord::Schema[7.1].define(version: 1) do\n'
+        '  create_table "users", force: :cascade do |t|\n'
+        '    t.string "email", null: false\n'
+        '    t.timestamps\n'
+        '    t.index ["email"], unique: true\n'
+        '  end\n'
+        '  create_table "orders", force: :cascade do |t|\n'
+        '    t.references :user, null: false, foreign_key: true\n'
+        '    t.integer "amount", default: 0, null: false\n'
+        '    t.string "status", default: "pending"\n'
+        '  end\n'
+        '  add_foreign_key "orders", "users"\n'
+        'end\n',
+        encoding="utf-8",
+    )
+    tables = _tables(extract_db_schema(tmp_path))
+    users = tables["users"]
+    ucols = {c.name: c for c in users.columns}
+    assert "orm/activerecord" in users.sources
+    assert ucols["id"].primary_key is True
+    assert ucols["email"].nullable is False
+    assert "created_at" in ucols and "updated_at" in ucols
+    assert ["email"] in users.indexes
+    orders = tables["orders"]
+    ocols = {c.name: c for c in orders.columns}
+    assert ocols["user_id"].foreign_key == "users.id"
+    assert ocols["user_id"].nullable is False
+    assert ocols["amount"].default == "0"
+    assert ocols["status"].default == '"pending"'
+
+
+def test_rails_migration_create_table(tmp_path: Path):
+    mig = tmp_path / "db" / "migrate"
+    mig.mkdir(parents=True)
+    (mig / "001_create_articles.rb").write_text(
+        "class CreateArticles < ActiveRecord::Migration[7.0]\n"
+        "  def change\n"
+        "    create_table :articles do |t|\n"
+        "      t.string :title, null: false\n"
+        "      t.references :author, foreign_key: true\n"
+        "      t.timestamps\n"
+        "    end\n"
+        "  end\n"
+        "end\n",
+        encoding="utf-8",
+    )
+    t = _tables(extract_db_schema(tmp_path))["articles"]
+    cols = {c.name: c for c in t.columns}
+    assert cols["id"].primary_key is True
+    assert cols["title"].nullable is False
+    assert cols["author_id"].foreign_key == "authors.id"
+
+
 def test_ddl_and_orm_merge_sources(tmp_path: Path):
     (tmp_path / "schema.sql").write_text(
         "CREATE TABLE users (id BIGINT PRIMARY KEY, email VARCHAR(255));",

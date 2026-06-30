@@ -35,8 +35,8 @@
 |---|---|
 | ソースと障害の結びつけ | **独立コードベースとして投入**（ノード非依存で取り込む）。 |
 | **参照フロー** | **オンデマンドツール方式（BigQuery と同型）**。各監視ノードが tool-use ループの中で、自分の観点で必要なソースだけを `source_search` / `source_read` で取得する。事前一括の静的注入はしない。 |
-| 対象言語 | **Python ＋ JavaScript/TypeScript**。 |
-| DBスキーマ源 | **SQL DDL ファイル（.sql / migrations）** ＋ **ORM モデル（SQLAlchemy / Django / Prisma 等）**。 |
+| 対象言語 | **Python ＋ JavaScript/TypeScript ＋ Ruby**（Ruby は 2026-07-01 追加）。 |
+| DBスキーマ源 | **SQL DDL ファイル（.sql / migrations）** ＋ **ORM モデル（SQLAlchemy / Django / Prisma / Rails ActiveRecord）**。 |
 | 取り込み | **複数ファイルアップロード**（zip / 単体ソース混在可）。**合計 50MB 上限**。サーバが `samples/source/<name>/` に展開・集約。 |
 | 選別モデル | 本解析モデル `claude-opus-4-7`。ソース選別は各ノード自身が tool-use で行うため、別建ての安価選別モデルは置かない（将来オプション、§7）。 |
 
