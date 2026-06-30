@@ -22,6 +22,7 @@ import { AuditReportView } from './AuditReportView'
 import { ChatHistoryView } from './ChatHistoryView'
 import { ChatInput } from './ChatInput'
 import { ConfirmationModal } from './ConfirmationModal'
+import { PolicyProposalModal } from './PolicyProposalModal'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { LiveChatView } from './LiveChatView'
 import { RoundMetricsView } from './RoundMetricsView'
@@ -39,6 +40,7 @@ import type {
   NodeAttachments,
   NodeLogSource,
   NodeLogSources,
+  PolicyProposal,
   QuestionnaireAnswers,
   SSEEvent,
   StageOutput,
@@ -94,6 +96,7 @@ const EMPTY_TOPOLOGY: TopologyDef = {
   imageHeight: 0,
   nodes: [],
   links: [],
+  mermaid: '',
 }
 
 function loadTopology(): TopologyDef {
@@ -107,6 +110,7 @@ function loadTopology(): TopologyDef {
       imageHeight: parsed.imageHeight ?? 0,
       nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
       links: Array.isArray(parsed.links) ? parsed.links : [],
+      mermaid: typeof parsed.mermaid === 'string' ? parsed.mermaid : '',
     }
   } catch {
     return EMPTY_TOPOLOGY
@@ -214,6 +218,10 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     rally_max_rounds: number
     delegation_history: DelegationEvent[]
   } | null>(null)
+  // 解析方針の事前確認 (Phase 2): トグル ON 既定。バッチ実行時は自動承認でスキップ
+  const [requirePolicyApproval, setRequirePolicyApproval] = useState<boolean>(true)
+  // 方針プランナーが提案した方針。policy_proposal 受信で表示、decision で解除
+  const [pendingPolicy, setPendingPolicy] = useState<PolicyProposal | null>(null)
   // 結果ペインで表示中の Stage タブ
   const [resultTab, setResultTab] = useState<'combined' | 'stage1' | 'stage2'>('combined')
 
@@ -539,7 +547,10 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
 
   // 1 パターンを実行する (run() / runBatch() の両方から使う)。
   // 段階/使用データは引数 p から導出し、現在の state には依存しない。
-  const runOne = async (p: RunPattern, opts?: { autoDownloadReport?: boolean }) => {
+  const runOne = async (
+    p: RunPattern,
+    opts?: { autoDownloadReport?: boolean; requirePolicyApproval?: boolean },
+  ) => {
     if (!patternAvailable(p)) return
     const twoStage = p.analysisMode === 'two_stage'
     const showCfg = !(p.analysisMode === 'single' && p.singleSource === 'log')
@@ -601,6 +612,10 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         audit_after_integrator: auditAfterIntegrator,
         // 監査有効時のみプロンプト上書きを送る (空ならバックエンド既定)
         audit_system_prompt: auditAfterIntegrator ? auditPrompt : undefined,
+        // ネットワーク構成図 (Mermaid)。空なら送らない
+        mermaid: topology.mermaid?.trim() ? topology.mermaid : undefined,
+        // 解析方針の事前確認ゲート (バッチは false で自動スキップ)
+        require_policy_approval: opts?.requirePolicyApproval ?? false,
       }
       const r = await fetch(`${API_BASE}/api/runs/config-log-stream`, {
         method: 'POST',
@@ -633,10 +648,20 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
             rally_max_rounds: Number(ev.data.rally_max_rounds ?? 0),
             delegation_history: (ev.data.delegation_history as DelegationEvent[]) ?? [],
           })
+        } else if (ev.kind === 'policy_proposal') {
+          // 解析方針の事前確認 → 方針提案モーダルを表示して承認/中止を待つ
+          const proposal = ev.data.proposal as PolicyProposal | undefined
+          if (proposal) setPendingPolicy(proposal)
+        } else if (ev.kind === 'policy_rejected') {
+          // 方針却下 → 解析は中止 (final は来ない)
+          setPendingPolicy(null)
+          setStageStatus('aborted')
         } else if (ev.kind === 'user_decision') {
           const action = String(ev.data.action ?? '')
           if (action === 'continue' || action === 'stop') {
             setPendingConfirmation(null)
+          } else if (action === 'approve_policy' || action === 'reject_policy') {
+            setPendingPolicy(null)
           }
         } else if (ev.kind === 'final') {
           const res = ev.data.result as AnalysisResult | undefined
@@ -675,7 +700,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   // 単発実行: 画面で選んでいる現在の段階/データ設定で 1 回流す
   const run = () => {
     if (!canRun) return
-    void runOne({ analysisMode, singleSource, stageOrder })
+    void runOne({ analysisMode, singleSource, stageOrder }, { requirePolicyApproval })
   }
 
   // まとめて実行: チェックされたパターン (実行可否は問わない。実行時に判定)
@@ -730,6 +755,32 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       }
     } catch (e) {
       setError(`decision 送信失敗: ${(e as Error).message}`)
+    } finally {
+      setDecisionBusy(false)
+    }
+  }
+
+  // 解析方針ゲートの応答 (Phase 2)。approve_policy / reject_policy。
+  const submitPolicyDecision = async (
+    action: 'approve_policy' | 'reject_policy',
+    editedFocus?: string | null,
+  ) => {
+    if (!runId) return
+    setDecisionBusy(true)
+    try {
+      const body: { action: string; edited_focus?: string } = { action }
+      if (action === 'approve_policy' && editedFocus != null) body.edited_focus = editedFocus
+      const r = await fetch(`${API_BASE}/api/runs/${runId}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!r.ok) {
+        const text = await r.text()
+        throw new Error(`HTTP ${r.status}: ${text}`)
+      }
+    } catch (e) {
+      setError(`方針 decision 送信失敗: ${(e as Error).message}`)
     } finally {
       setDecisionBusy(false)
     }
@@ -843,6 +894,54 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         </aside>
       </div>
 
+      {/* Mermaid 構成図入力 (任意)。テキスト文脈として AI 解析に渡す */}
+      <details className="mermaid-panel" open={!!topology.mermaid?.trim()}>
+        <summary>
+          <span className="qp-title">ネットワーク構成図 (Mermaid)</span>
+          <span className="qp-hint muted">
+            クリックで開閉。構成図を Mermaid 記法で記述/アップロードすると解析の文脈として使われます（任意）
+          </span>
+        </summary>
+        <div className="mermaid-controls">
+          <label className="btn-file btn-small">
+            ファイルから読込 (.mmd/.txt/.md)
+            <input
+              type="file" accept=".mmd,.txt,.md,text/plain" hidden
+              disabled={isRunning}
+              onChange={e => {
+                const f = e.target.files?.[0]
+                if (!f) return
+                if (f.size > MAX_UPLOAD_BYTES) {
+                  setError(`Mermaid ファイルは ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB 以下にしてください`)
+                  e.target.value = ''
+                  return
+                }
+                const reader = new FileReader()
+                reader.onload = () => setTopology(t => ({ ...t, mermaid: String(reader.result ?? '') }))
+                reader.onerror = () => setError('Mermaid ファイルの読み込みに失敗しました')
+                reader.readAsText(f)
+                e.target.value = ''
+              }}
+            />
+          </label>
+          {topology.mermaid?.trim() && (
+            <button type="button" className="btn-secondary btn-small" disabled={isRunning}
+              onClick={() => setTopology(t => ({ ...t, mermaid: '' }))}>
+              クリア
+            </button>
+          )}
+        </div>
+        <textarea
+          className="mermaid-textarea"
+          value={topology.mermaid ?? ''}
+          rows={8}
+          spellCheck={false}
+          disabled={isRunning}
+          placeholder={'graph LR\n  fw[Core FW] --> sw1[L2 SW]\n  sw1 --> app01[App Server]'}
+          onChange={e => setTopology(t => ({ ...t, mermaid: e.target.value }))}
+        />
+      </details>
+
       {/* standard モード時のみ実行バー直前に表示 (chat モードはチャット内に統合) */}
       {viewMode === 'standard' && (
         <QuestionnairePanel
@@ -873,6 +972,12 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
             onChange={e => setAuditAfterIntegrator(e.target.checked)}
             disabled={isRunning} />
           <span>GPT 監査も実行</span>
+        </label>
+        <label className="audit-toggle" title="解析開始前に方針を提案し、確認してから本解析に進みます（まとめて実行では自動でスキップ）">
+          <input type="checkbox" checked={requirePolicyApproval}
+            onChange={e => setRequirePolicyApproval(e.target.checked)}
+            disabled={isRunning} />
+          <span>解析方針を確認</span>
         </label>
         <button onClick={run} disabled={!canRun} className="run-button">
           {stageStatus === 'single_running' ? '解析中…'
@@ -1012,6 +1117,16 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           busy={decisionBusy}
           onContinue={(extendBy) => submitDecision('continue', extendBy)}
           onStop={() => submitDecision('stop')}
+        />
+      )}
+
+      {/* 解析方針の事前確認モーダル (Phase 2: orchestrator 前に発火) */}
+      {pendingPolicy && (
+        <PolicyProposalModal
+          proposal={pendingPolicy}
+          busy={decisionBusy}
+          onApprove={(editedFocus) => submitPolicyDecision('approve_policy', editedFocus)}
+          onReject={() => submitPolicyDecision('reject_policy')}
         />
       )}
 

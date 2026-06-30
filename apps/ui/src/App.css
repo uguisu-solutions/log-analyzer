@@ -3672,3 +3672,73 @@ code {
   color: #b3261e;
 }
 
+/* ─── Mermaid 構成図入力パネル ───────────────────────────── */
+.mermaid-panel {
+  margin: 0.5rem 0;
+  border: 1px solid var(--border, #e3e6ec);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  background: #fafbfc;
+}
+.mermaid-panel > summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.mermaid-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.mermaid-textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  resize: vertical;
+  border: 1px solid var(--border, #e3e6ec);
+  border-radius: 6px;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+/* ─── 解析方針の事前確認モーダル ─────────────────────────── */
+.policy-proposal-modal h3 {
+  margin: 0 0 0.5rem;
+  color: var(--primary, #0a5fb7);
+}
+.policy-section {
+  margin: 0.75rem 0;
+}
+.policy-section h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+.policy-section p,
+.policy-section ul,
+.policy-section ol {
+  margin: 0;
+  color: #222;
+}
+.policy-section ul,
+.policy-section ol {
+  padding-left: 1.25rem;
+}
+.policy-section-warn h4 {
+  color: #b8860b;
+}
+.policy-focus-textarea {
+  width: 100%;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  resize: vertical;
+  border: 1px solid var(--border, #e3e6ec);
+  border-radius: 6px;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
