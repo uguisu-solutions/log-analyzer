@@ -2056,9 +2056,10 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             trace_id=final_result.trace_id,
             log_ref=log_ref,
         )
-        # 監査結果は rally の最終 result に乗っている (run_rally_stream 内で実行)。
-        # _build_final_result は stage_outputs から再構築するため audit_report が落ちるので引き継ぐ。
+        # 監査結果・ソース参照記録は rally の最終 result に乗っている。
+        # _build_final_result は stage_outputs から再構築するため落ちるので引き継ぐ。
         final.audit_report = final_result.audit_report
+        final.source_context = final_result.source_context
         final_dict = final.model_dump(mode="json")
         # 承認された解析方針を結果に載せる (記録・レポート・履歴再現用)
         if policy_prefix.get("proposal"):

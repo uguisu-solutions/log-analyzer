@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 from log_analyzer import api as api_mod
@@ -555,3 +554,78 @@ def test_run_two_stage_stream_log_config_order(monkeypatch):
     s1_complete = next(e for e in events if e.kind == "stage_one_complete")
     assert s1_complete.data["stage"] == "log"
     assert s1_complete.data["stage_ordinal"] == 1
+
+
+# ─── 回帰: 1 段階モードで source_context が最終結果に保持されること ───
+
+
+def test_single_mode_preserves_source_context(monkeypatch, tmp_path):
+    """1 段階モードでも、rally が記録した source_context が final まで残る。
+
+    _build_final_result は stage_outputs から再構築するため source_context が
+    落ちやすい (audit_report と同じ症状)。ハンドラで明示的に引き継ぐ修正の回帰テスト。
+    """
+    import json
+    from log_analyzer.rally_agent import StreamEvent as RealStreamEvent
+    from log_analyzer.schema import SourceContext, SourceToolCall
+    from log_analyzer.source import codebase as source_cb
+
+    # コードベースを tmp に用意 (ハンドラの source ロードを通すため)
+    monkeypatch.setattr(source_cb, "SOURCE_ROOT", tmp_path)
+    cb = tmp_path / "demo_cb" / "app"
+    cb.mkdir(parents=True)
+    (cb / "charge.py").write_text("def charge(x):\n    return x\n", encoding="utf-8")
+
+    async def fake_run_rally_stream(*args, **kwargs):
+        ar = AnalysisResult(
+            config_id=ConfigId.CONFIG4,
+            input_log_ref="x",
+            root_cause_candidates=[RootCauseCandidate(category=Category.APP, summary="s")],
+            recommended_actions=[],
+            confidence=0.7,
+            metrics=Metrics(tokens_in=100, tokens_out=50, latency_ms_total=1000),
+            source_context=SourceContext(
+                codebase="demo_cb",
+                tool_calls=[
+                    SourceToolCall(round=1, node="app", tool="source_read",
+                                   args={"path": "app/charge.py", "symbol": "charge"},
+                                   result_chars=42),
+                ],
+                total_chars_fetched=42,
+                file_count=1,
+                symbol_count=1,
+            ),
+        )
+        yield RealStreamEvent("final", {"result": ar.model_dump(mode="json")})
+
+    monkeypatch.setattr("log_analyzer.api.run_rally_stream", fake_run_rally_stream)
+
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-log-stream",
+        json={
+            "config": "config4",
+            "topology": {"nodes": [{"id": "app-01", "type": "Server"}], "links": []},
+            "node_logs": {"app-01": [{"name": "a.log", "content": "[ERROR] boom"}]},
+            "analysis_mode": "single",
+            "single_source": "log",
+            "source_codebase": "demo_cb",
+        },
+    )
+    assert r.status_code == 200, r.text
+    # SSE から final の result を取り出す
+    final_result = None
+    for line in r.text.splitlines():
+        if line.startswith("data:"):
+            try:
+                obj = json.loads(line[len("data:"):].strip())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and "result" in obj:
+                final_result = obj["result"]
+    assert final_result is not None, "final result not found in SSE"
+    sc = final_result.get("source_context")
+    assert sc is not None, "source_context が final で脱落している"
+    assert sc["codebase"] == "demo_cb"
+    assert len(sc["tool_calls"]) == 1
+    assert sc["tool_calls"][0]["tool"] == "source_read"
