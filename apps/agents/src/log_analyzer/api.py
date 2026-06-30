@@ -34,6 +34,8 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,16 +43,17 @@ from typing import AsyncIterator
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from log_analyzer import pipeline_runner, prompt_slots, storage
 from log_analyzer.cli import CONFIG_RUNNERS
-from log_analyzer.rally_agent import StreamEvent, run_rally_stream
+from log_analyzer.rally_agent import run_rally_stream
 from log_analyzer.rally_two_stage import run_two_stage_stream
 from log_analyzer.schema import AnalysisResult, QuestionnaireItem, QuestionnaireTemplate, StageOutput
+from log_analyzer.source import codebase as source_codebase
 
 load_dotenv()
 storage.init_db()
@@ -1141,6 +1144,103 @@ def delete_log(name: str) -> dict:
         target.unlink()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"削除失敗: {e}")
+    return {"deleted": name}
+
+
+# ─── ソースコード（コードベース）────────────────────────────────────
+# 設計: docs/plan/source_code_analysis.md
+# 取り込み・展開・除外・index 生成は log_analyzer.source.codebase に委譲し、
+# ここは HTTP 境界（バリデーション → 4xx 変換、アップロードのストリーム読み込み）だけ持つ。
+
+
+class SourceCodebaseEntry(BaseModel):
+    name: str
+    file_count: int = 0
+    bytes: int = 0
+    symbol_count: int = 0
+    languages: dict[str, int] = {}
+    table_count: int = 0
+
+
+class SourceCodebasesResponse(BaseModel):
+    codebases: list[SourceCodebaseEntry]
+
+
+@app.get("/api/source", response_model=SourceCodebasesResponse)
+def list_source_codebases() -> SourceCodebasesResponse:
+    """``samples/source/`` 配下のコードベース一覧（名前 / ファイル数 / 言語内訳 / テーブル数）。"""
+    return SourceCodebasesResponse(
+        codebases=[SourceCodebaseEntry(**c) for c in source_codebase.list_codebases()]
+    )
+
+
+@app.post("/api/source", response_model=SourceCodebaseEntry)
+async def upload_source(
+    name: str = Form(...),
+    files: list[UploadFile] = File(...),
+) -> SourceCodebaseEntry:
+    """複数ファイル（zip / 単体ソース混在）をアップロードし、1 コードベースに集約する。
+
+    - 合計 50MB 上限（生アップロード・展開後の両方で加算チェック）。
+    - zip は展開（除外ルール＋zip-slip 検証）、単体ソースはそのまま配置。
+    - 同名既存は 409。
+    """
+    try:
+        source_codebase.safe_codebase_dir(name)  # 名前バリデーション
+    except source_codebase.SourceError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    if source_codebase.exists(name):
+        raise HTTPException(status_code=409, detail=f"同名のコードベースが既に存在します: {name}")
+
+    staging = Path(tempfile.mkdtemp(prefix="src_upload_"))
+    items: list[tuple[str, Path]] = []
+    total = 0
+    try:
+        for i, f in enumerate(files):
+            staged = staging / f"upload_{i}.bin"
+            with staged.open("wb") as out:
+                while True:
+                    chunk = await f.read(64 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > source_codebase.MAX_TOTAL_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"アップロード合計が上限を超えています "
+                                f"(> {source_codebase.MAX_TOTAL_BYTES} bytes)"
+                            ),
+                        )
+                    out.write(chunk)
+            items.append((f.filename or staged.name, staged))
+        try:
+            stats = source_codebase.materialize(name, items)
+        except source_codebase.SourceError as e:
+            raise HTTPException(status_code=e.status_code, detail=str(e))
+        return SourceCodebaseEntry(**stats)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+@app.get("/api/source/{name}/tree")
+def get_source_tree(name: str) -> dict:
+    """ファイルツリー＋シンボル署名＋DBスキーマを返す（本文は含めない、インデックスのプレビュー）。"""
+    try:
+        return source_codebase.tree(name)
+    except source_codebase.SourceError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+
+
+@app.delete("/api/source/{name}")
+def delete_source(name: str) -> dict:
+    """コードベースを削除（ディレクトリ＋キャッシュごと）。"""
+    try:
+        ok = source_codebase.delete_codebase(name)
+    except source_codebase.SourceError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"コードベースが見つかりません: {name}")
     return {"deleted": name}
 
 

@@ -252,6 +252,75 @@ class QuestionnaireTemplate(BaseModel):
     updated_at: str = ""
 
 
+class SourceSymbol(BaseModel):
+    """ソースファイル内のシンボル 1 件（関数・クラス・メソッド・export）。
+
+    本文は保持せず署名（名前・種別・行範囲）のみ。本文は read 時にディスクから読む
+    （input トークン肥大を避けるオンデマンド前提。設計: docs/plan/source_code_analysis.md）。
+    """
+
+    name: str
+    kind: str  # "function" | "class" | "method" | "export"
+    start_line: int
+    end_line: int
+
+
+class SourceFile(BaseModel):
+    """インデックス対象 1 ファイルの署名。"""
+
+    path: str  # コードベースルートからの相対パス（POSIX 区切り）
+    language: str  # "python" | "typescript" | "tsx" | "javascript" | ...
+    bytes: int = 0
+    lines: int = 0
+    symbols: list[SourceSymbol] = Field(default_factory=list)
+
+
+class DbColumn(BaseModel):
+    name: str
+    type: str = ""
+    nullable: bool = True
+    primary_key: bool = False
+    default: str = ""
+    foreign_key: str = ""  # "table.column" 形式。無ければ空
+
+
+class DbTable(BaseModel):
+    name: str
+    columns: list[DbColumn] = Field(default_factory=list)
+    indexes: list[list[str]] = Field(default_factory=list)  # 各 index の列名リスト
+    # 抽出元: "ddl" | "orm/sqlalchemy" | "orm/django" | "orm/prisma"
+    sources: list[str] = Field(default_factory=list)
+
+
+class DbSchema(BaseModel):
+    tables: list[DbTable] = Field(default_factory=list)
+
+
+class SourceToolCall(BaseModel):
+    """どの監視ノードが・どのラウンドで・何のソースを引いたかの記録（Phase 2/3）。
+
+    再現と UI のノード別「参照したソース」表示に使う。
+    """
+
+    round: int = 0
+    node: str = ""
+    tool: str = ""  # "source_search" | "source_read" | "db_schema"
+    args: dict[str, Any] = Field(default_factory=dict)
+    result_chars: int = 0
+
+
+class SourceContext(BaseModel):
+    """ソースコード解析のコンテキスト（解析履歴の完全再現用）。"""
+
+    codebase: str
+    db_schema: DbSchema | None = None
+    tool_calls: list[SourceToolCall] = Field(default_factory=list)
+    total_chars_fetched: int = 0
+    file_count: int = 0
+    symbol_count: int = 0
+    language_breakdown: dict[str, int] = Field(default_factory=dict)
+
+
 def _default_trace_id() -> str:
     """trace_id の既定値: UUID4 を文字列で返す。
 
@@ -295,6 +364,9 @@ class AnalysisResult(BaseModel):
     # ラウンド単位集計 (Phase D)。token_log を round 順に並べたもの。
     # 他構成 (config1-3,5) では空のまま。
     round_metrics: list[RoundMetrics] = Field(default_factory=list)
+    # ソースコード解析のコンテキスト。コードベース未指定の run では None。
+    # 設計: docs/plan/source_code_analysis.md
+    source_context: SourceContext | None = None
 
 
 # 前方参照の解決 (StageOutput が DelegationEventDTO を文字列参照しているため)
