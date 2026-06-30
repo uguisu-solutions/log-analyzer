@@ -30,7 +30,7 @@ from typing import Callable
 
 import anthropic
 
-from log_analyzer.rally._helpers import safe_extract_json
+from log_analyzer.rally._helpers import extract_json, safe_extract_json
 from log_analyzer.rally.state import Config4State
 from log_analyzer.tracing import usage_components
 from log_analyzer.rally.tools import (
@@ -284,6 +284,34 @@ def _run_monitor_llm(
         total_cc += c["cache_creation"]
         total_cr += c["cache_read"]
 
+    def _retry_if_not_json(text: str) -> str:
+        """最終応答から JSON が抽出できなければ「JSON のみ出力」と促して 1 回だけ
+        再生成する。大量の BQ コンテキストでモデルが散文を返し、parse 失敗 →
+        integrator フォールバックになるのを救済する (ツールは使わせない)。"""
+        try:
+            extract_json(text)
+            return text  # 既に JSON が取れる
+        except (ValueError, json.JSONDecodeError):
+            pass
+        messages.append({"role": "assistant", "content": text or "(空応答)"})
+        messages.append({
+            "role": "user",
+            "content": (
+                "前の応答から JSON オブジェクトを抽出できませんでした。"
+                "これまでの分析を踏まえ、指定スキーマに厳密に従って、説明文・前置き・"
+                "コードフェンスを一切付けず、JSON オブジェクトのみを出力してください。"
+            ),
+        })
+        try:
+            retry = client.messages.create(
+                model=model, max_tokens=_MONITOR_MAX_TOKENS, system=system, messages=messages
+            )
+        except Exception:
+            return text  # 再試行呼び出し自体が失敗したら元のテキストを返す
+        _accumulate(retry.usage)
+        retry_text = _extract_text(retry.content)
+        return retry_text or text
+
     for _ in range(_MAX_TOOL_ITERATIONS):
         kwargs: dict = {
             "model": model,
@@ -331,15 +359,17 @@ def _run_monitor_llm(
             messages.append({"role": "user", "content": tool_results})
             continue
 
-        # tool_use 以外 (end_turn 等) → 最終テキストを返す
-        return _extract_text(response.content), total_in, total_out, total_cc, total_cr, executed, fetched
+        # tool_use 以外 (end_turn 等) → 最終テキスト。JSON が取れなければ 1 回リトライ
+        final_text = _retry_if_not_json(_extract_text(response.content))
+        return final_text, total_in, total_out, total_cc, total_cr, executed, fetched
 
     # 反復上限に到達: ツール無しで呼び直し、最終 JSON を強制する
     final = client.messages.create(
         model=model, max_tokens=_MONITOR_MAX_TOKENS, system=system, messages=messages
     )
     _accumulate(final.usage)
-    return _extract_text(final.content), total_in, total_out, total_cc, total_cr, executed, fetched
+    final_text = _retry_if_not_json(_extract_text(final.content))
+    return final_text, total_in, total_out, total_cc, total_cr, executed, fetched
 
 
 def _normalize_monitor_output(

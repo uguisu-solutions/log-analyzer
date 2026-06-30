@@ -136,6 +136,30 @@ export function buildReasoningReport(result: AnalysisResult): string {
   if (result.trace_id) lines.push(`- trace_id: ${result.trace_id}`)
   lines.push('')
 
+  // 承認された解析方針 (Phase 2)。確認ゲートを使った場合のみ。
+  const policy = result.policy_proposal
+  if (policy) {
+    lines.push('## 承認済み解析方針' + (policy.focus_edited ? '（観点修正あり）' : ''))
+    if (policy.situation_summary) lines.push(`- 現象: ${policy.situation_summary}`)
+    if ((policy.primary_hypotheses?.length ?? 0) > 0) {
+      lines.push('- 想定原因:')
+      for (const h of policy.primary_hypotheses) lines.push(`    - ${h}`)
+    }
+    if ((policy.investigation_plan?.length ?? 0) > 0) {
+      lines.push('- 調査方針:')
+      policy.investigation_plan.forEach((p, i) => lines.push(`    ${i + 1}. ${p}`))
+    }
+    if (policy.suggested_first_node) lines.push(`- 起点: ${policy.suggested_first_node}`)
+    if (policy.focus) lines.push(`- 着目観点: ${policy.focus}`)
+    if (policy.missing_data_notes) lines.push(`- 不足データ・前提: ${policy.missing_data_notes}`)
+    if (policy.model) {
+      const ti = (policy.tokens_in ?? 0).toLocaleString()
+      const to = (policy.tokens_out ?? 0).toLocaleString()
+      lines.push(`- _(model: ${policy.model} · ${ti}/${to} tok · ${((policy.latency_ms ?? 0) / 1000).toFixed(1)}s)_`)
+    }
+    lines.push('')
+  }
+
   const stages: StageOutput[] = result.stage_outputs ?? []
   if (stages.length >= 2) {
     for (const s of stages) {

@@ -188,6 +188,47 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
           </ChatMessage>
         )
         return
+      case 'policy_start':
+        messages.push(
+          <ChatMessage key={`ev-${i}`} sender="agent" speaker="方針プランナー" tag="方針立案中">
+            <p className="muted">{String(d.message ?? '解析方針を立案しています…')}</p>
+          </ChatMessage>
+        )
+        return
+      case 'policy_proposal': {
+        const pr = (d.proposal ?? {}) as {
+          situation_summary?: string
+          investigation_plan?: string[]
+          suggested_first_node?: string
+          focus?: string
+        }
+        const plan = pr.investigation_plan ?? []
+        messages.push(
+          <ChatMessage key={`ev-${i}`} sender="agent" speaker="方針プランナー" tag="方針提案（承認待ち）">
+            {pr.situation_summary && <p className="chat-rationale">現象: {pr.situation_summary}</p>}
+            {plan.length > 0 && (
+              <ol className="chat-qa-list">
+                {plan.map((p, j) => <li key={j}>{p}</li>)}
+              </ol>
+            )}
+            {pr.suggested_first_node && (
+              <p className="chat-arrow">起点候補: <strong>{roleLabel(pr.suggested_first_node)}</strong></p>
+            )}
+            {pr.focus && <p className="chat-focus">観点: {pr.focus}</p>}
+            <p className="muted small">この方針で進めるかをモーダルで確認してください。</p>
+          </ChatMessage>
+        )
+        return
+      }
+      case 'policy_rejected':
+        messages.push(
+          <ChatMessage key={`ev-${i}`} sender="system" speaker="System" tag="方針却下">
+            <p className="chat-rationale" style={{ color: '#b3261e' }}>
+              {String(d.message ?? '解析方針が却下されました。解析を中止します。')}
+            </p>
+          </ChatMessage>
+        )
+        return
       case 'user_decision': {
         const action = String(d.action ?? '')
         // 自動進行 (advance + auto) は人間の操作ではないので System メッセージで表示
@@ -202,6 +243,8 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
         const labelMap: Record<string, string> = {
           continue: '継続を選択',
           stop: '停止を選択',
+          approve_policy: '解析方針を承認',
+          reject_policy: '解析方針を却下',
         }
         messages.push(
           <ChatMessage key={`ev-${i}`} sender="human" speaker="人間オペレータ" tag="決定">

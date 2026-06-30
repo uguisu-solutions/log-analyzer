@@ -277,6 +277,9 @@ export interface AnalysisResult {
   audit_report: AuditReport | null
   // ラウンド単位集計 (Phase D)
   round_metrics: RoundMetrics[]
+  // 解析方針の事前確認 (Phase 2) で承認された方針。確認ゲート未使用なら null/undefined。
+  // focus_edited=true はユーザーが観点を修正して承認したことを示す。
+  policy_proposal?: (PolicyProposal & { focus_edited?: boolean }) | null
 }
 
 export interface SuspectedNodeFinding {
@@ -351,6 +354,26 @@ export interface TopologyDef {
   imageHeight: number
   nodes: TopologyNode[]
   links: TopologyLink[]
+  // ネットワーク構成図を Mermaid 記法で記述したもの (任意)。
+  // AI 解析には log_text のテキスト文脈として渡す (パースはしない)。
+  mermaid?: string
+}
+
+// 解析方針プランナー (Phase 2) がユーザー確認用に提案する方針。
+// SSE `policy_proposal` の data.proposal として届く。
+export interface PolicyProposal {
+  situation_summary: string
+  primary_hypotheses: string[]
+  investigation_plan: string[]
+  suggested_first_node: string  // "fw" | "routing" | "app" | "dns" | "sec"
+  focus: string
+  data_to_use: string[]
+  missing_data_notes: string
+  // 計測 (記録用、任意)
+  model?: string
+  tokens_in?: number
+  tokens_out?: number
+  latency_ms?: number
 }
 
 // 1 ノードに添付する 1 ファイル (ログ or 設定ファイル) ─────────

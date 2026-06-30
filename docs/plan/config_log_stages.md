@@ -88,6 +88,34 @@
   これにより旧実装の `max_tokens` 非対応エラー (400 Unsupported parameter) を解消。
   usage は `input_tokens` / `output_tokens`、本文は `output_text` で取得。
 
+### 第5次改修 (2026-07 構成図(Mermaid)入力 ＋ 解析方針ゲート ＋ BQ堅牢化)
+
+設計は [mermaid_and_policy_gate.md](mermaid_and_policy_gate.md) を参照。実装で確定した内容を以下に要約する。
+
+- **機能1: Mermaid 構成図のテキスト投入**
+  - `TopologyDef.mermaid?: string` / `ConfigLogRunRequest.mermaid: str | None` を追加。localStorage 永続化・履歴再現・PNG 出力に自動で乗る (追加フィールドは非破壊)。
+  - `_build_topology_log_text(..., mermaid=...)` が、リンク一覧の直後 (ノード別添付の前) に
+    `## ネットワーク構成図 (Mermaid)` ブロックを `log_text` に挿入。パースはせず原文をそのまま渡し、
+    orchestrator 含む全エージェントが構成把握に利用できる。
+  - UI ([ConfigLogAnalysis.tsx](../../apps/ui/src/ConfigLogAnalysis.tsx)): 実行バー上に `<details>`「ネットワーク構成図 (Mermaid)」を新設 (textarea ＋ `.mmd/.txt/.md` 読込)。空なら送信ボディから省略。
+  - 後方互換: `mermaid=null` で従来挙動と完全一致。
+- **機能2: 解析方針の事前確認ゲート (Phase 2)**
+  - 解析開始直後・orchestrator の **前** に方針プランナー [rally/planner.py](../../apps/agents/src/log_analyzer/rally/planner.py) を **1 回** 実行 (`plan_policy`、既定 `claude-opus-4-7` / env `RALLY_PLANNER_MODEL`)。
+    `situation_summary` / `primary_hypotheses` / `investigation_plan` / `suggested_first_node` / `focus` / `data_to_use` / `missing_data_notes` を構造化 JSON で出力。
+  - ゲートは **config-log-stream ハンドラ側** に設置 (`_run_policy_gate`)。2 段階で二重発火しないよう stage ロジックの上 (1 段階/2 段階共通のラッパ `_gen`) に置く。
+    既存 `_wait_for_decision` / `/decision` 機構を再利用。
+  - 承認すると `build_approved_policy_block` が `## 承認済み解析方針` ブロックを生成し、**`log_text` 先頭に差し込む** (2 段階は Stage 1・Stage 2 双方の先頭に維持)。注入は api.py ハンドラ側で行い、rally_two_stage.py は変更なし。
+  - 却下 (`reject_policy`) すると本解析を実行せず終了 (`policy_rejected` emit → UI は `stageStatus="aborted"`)。
+  - **トグル**: UI 実行バーに「解析方針を確認」(初期値 ON)。単発はトグル値を送り、**まとめて実行 (バッチ) は常に `false`** で自動スキップ。
+    なお `ConfigLogRunRequest.require_policy_approval` のサーバ既定は **`False`** (安全側)。ON 既定はフロントのトグル初期値で担保。
+  - 承認方針は最終 `AnalysisResult.policy_proposal` に載せ (計測 model/tokens/latency 込み)、履歴・推論レポート ([reasoningReport.ts](../../apps/ui/src/reasoningReport.ts)) ・チャット結果 ([ChatHistoryView.tsx](../../apps/ui/src/ChatHistoryView.tsx)) に表示。`focus_edited=true` は観点修正済みを示す。
+    ※ round_metrics へ planner ロールは追加していない (policy_proposal 側に計測を保持)。
+  - 新規モーダル [PolicyProposalModal.tsx](../../apps/ui/src/PolicyProposalModal.tsx)。SSE: `policy_start` / `policy_proposal` / `policy_rejected` を追加、decision アクションに `approve_policy` / `reject_policy` (任意 `edited_focus`) を追加。
+  - ライブ表示 ([LiveChatView.tsx](../../apps/ui/src/LiveChatView.tsx)) も `policy_start` / `policy_proposal` / `policy_rejected` に対応。
+- **BQ 取得の堅牢化** (BigQuery ログ取得ルートのコンテキスト肥大化・parse 失敗対策)
+  - [rally/tools.py](../../apps/agents/src/log_analyzer/rally/tools.py): BQ 取得結果をコンテキストへ載せる際、**行数** (`RALLY_BQ_MAX_ROWS_IN_CONTEXT`、既定 200) と **全体文字数** (`RALLY_BQ_RESULT_MAX_CHARS`、既定 12000) に上限。超過分は省略注記を付す (取得自体は別途 bigquery_client 側でクランプ)。
+  - [rally/monitors.py](../../apps/agents/src/log_analyzer/rally/monitors.py): 監視の最終応答から JSON が抽出できない場合、「JSON のみ出力」と促して **1 回だけ再生成** (`_retry_if_not_json`)。大量 BQ コンテキストでモデルが散文を返し integrator フォールバックに落ちるのを救済。
+
 | 項目 | 変更後 |
 |---|---|
 | タブ名 / mode id | config-log 解析 / `config-log` |
@@ -280,8 +308,11 @@ schema_version は **v0.1 据置** (追加フィールドのみで破壊変更�
 | `user_decision` | 既存。`{action: "advance" \| "abort"}` を含む | `{action, ...}` |
 | `stage_two_start` | **新**。advance 選択後、Stage 2 開始直前 | `{stage_label, prior_hypothesis_summary}` |
 | `run_started` 〜 `integrator_done` | 既存。Stage 2 中。各イベント data に `stage: "log"` 含む | （既存） |
-| `final` | 既存。最終 AnalysisResult。`stage_outputs` 入り | `{result: AnalysisResult}` |
+| `final` | 既存。最終 AnalysisResult。`stage_outputs` 入り。方針ゲート使用時は `policy_proposal` 入り | `{result: AnalysisResult}` |
 | `error` | 既存 | `{stage, message}` |
+| `policy_start` | **第5次**。方針プランナー実行開始 (orchestrator の前、1 回) | `{message}` |
+| `policy_proposal` | **第5次**。方針提案。承認/却下のモーダルを開く | `{proposal: PolicyProposal}` |
+| `policy_rejected` | **第5次**。`reject_policy` 選択時。本解析は実行されず終了 | `{message}` |
 
 ---
 
@@ -291,7 +322,8 @@ schema_version は **v0.1 据置** (追加フィールドのみで破壊変更�
 
 - 既存: `{action: "continue" \| "stop", extend_by?: int}` — rally_max_rounds 上限到達時の延長 / 停止
 - **追加**: `{action: "advance" \| "abort"}` — Config-First の Stage 1→2 承認 / 中断
-- 4 アクションを 1 エンドポイントで受け、`rally_two_stage` 側のキューが適切に解釈する
+- **第5次追加**: `{action: "approve_policy" \| "reject_policy", edited_focus?: str}` — 解析方針ゲートの承認 / 却下 (承認時に観点を任意修正)
+- 全アクションを 1 エンドポイントで受け、`rally_two_stage` 側のキュー / 方針ゲートの Future が適切に解釈する
 
 ---
 

@@ -14,6 +14,7 @@ Phase 2 では実機 / 構成管理 DB を引く想定だが、PoC 期間中は
 from __future__ import annotations
 
 import json
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -193,6 +194,39 @@ BIGQUERY_TOOL_SCHEMA: dict[str, Any] = {
 }
 
 
+# ─── BQ 取得結果の予算化 (コンテキスト肥大化・parse 失敗の防止) ─────
+# 監視のツールループは最大数回 BQ を取得し、結果を全文コンテキストに積む。
+# 上限が無いと累積でコンテキストが肥大化し、最終 JSON 出力が壊れて parse 失敗
+# (→ integrator フォールバック) を招く。ここで「コンテキストに載せる行数」と
+# 「全体文字数」に上限を掛ける。いずれも環境変数で調整可能。
+def _bq_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _max_rows_in_context() -> int:
+    # コンテキストに載せる最大行数 (取得自体は bigquery_client 側で別途クランプ)
+    return _bq_env_int("RALLY_BQ_MAX_ROWS_IN_CONTEXT", 200)
+
+
+def _max_result_chars() -> int:
+    # 1 回の取得結果テキストの全体文字数上限 (最終セーフティネット)
+    return _bq_env_int("RALLY_BQ_RESULT_MAX_CHARS", 12000)
+
+
+def _truncate_chars(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    keep = max_chars // 2
+    omitted = len(text) - max_chars
+    return text[:keep] + f"\n...（全体で {omitted} 文字省略）...\n" + text[-keep:]
+
+
 def _format_rows(host: str, rows: list[dict]) -> str:
     """取得行を表形式テキストに整形する (LLM 向け)。
 
@@ -260,7 +294,18 @@ def run_bigquery_tool(tool_input: dict, allowed_sources: dict[str, dict]) -> str
             f"host={host} の該当ログは見つかりませんでした "
             f"(start={start}, end={end}, contains={contains})。"
         )
-    return _format_rows(host, rows)
+    # コンテキスト肥大化を防ぐため、載せる行数と全体文字数に上限を掛ける。
+    # 取得自体は最大件数まで行うが、モデルに渡すのは先頭の代表行＋省略注記とする。
+    total = len(rows)
+    cap = _max_rows_in_context()
+    shown = rows[:cap]
+    text = _format_rows(host, shown)
+    if total > cap:
+        text += (
+            f"\n...（全 {total} 件中 先頭 {cap} 件のみ表示。残り {total - cap} 件は省略。"
+            f"必要なら contains / 期間 でさらに絞り込んでください）..."
+        )
+    return _truncate_chars(text, _max_result_chars())
 
 
 def _format_schema(host: str, table: str, schema: list[dict], rows: list[dict]) -> str:

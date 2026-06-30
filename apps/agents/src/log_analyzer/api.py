@@ -334,10 +334,15 @@ class DecisionRequest(BaseModel):
     config-log 解析の 2 段階モードで Stage 1 → Stage 2 遷移時:
         - "advance": Stage 2 (検証) に進む
         - "abort":   Stage 1 で打ち切り、Stage 1 結果のみを最終とする
+
+    解析方針の事前確認ゲート (Phase 2):
+        - "approve_policy": 提案された方針 (必要なら edited_focus で観点を修正) で解析続行
+        - "reject_policy":  方針を却下し、解析を中止する
     """
 
-    action: str  # "continue" | "stop" | "advance" | "abort"
+    action: str  # "continue" | "stop" | "advance" | "abort" | "approve_policy" | "reject_policy"
     extend_by: int | None = None  # action="continue" のみ。既定 3
+    edited_focus: str | None = None  # action="approve_policy" のみ。観点の修正 (任意)
 
 
 class TopologyNode(BaseModel):
@@ -536,6 +541,7 @@ def _build_topology_log_text(
     node_configs: dict | None = None,
     questionnaire_answers: dict | None = None,
     node_bigquery: dict | None = None,
+    mermaid: str | None = None,
 ) -> tuple[str, list[dict]]:
     """topology + ノード別添付 (logs / configs) から rally に渡す単一 log_text を構築。
 
@@ -611,6 +617,18 @@ def _build_topology_log_text(
         for s, t in links:
             parts.append(f"  - {s} → {t}")
     parts.append("")
+
+    # ネットワーク構成図 (Mermaid) があればテキスト文脈として渡す。
+    # パースはせず、AI が構成把握に使えるよう原文をそのまま載せる。
+    mermaid_text = (mermaid or "").strip()
+    if mermaid_text:
+        parts.append("## ネットワーク構成図 (Mermaid)")
+        parts.append("以下はネットワーク構成図を Mermaid 記法で記述したものです。"
+                     "ノード間の接続関係の把握に利用してください。")
+        parts.append("```mermaid")
+        parts.append(mermaid_text)
+        parts.append("```")
+        parts.append("")
 
     # ノード別に複数の log / config ファイルを並べる
     valid_ids = {n["id"] for n in nodes}
@@ -1647,6 +1665,12 @@ class ConfigLogRunRequest(BaseModel):
     analysis_mode: str = "single"          # "single" | "two_stage"
     single_source: str = "both"            # "config" | "log" | "both"  (analysis_mode=="single")
     stage_order: str = "config_log"        # "config_log" | "log_config" (analysis_mode=="two_stage")
+    # ネットワーク構成図 (Mermaid 記法)。テキスト文脈として log_text に注入する (任意)。
+    mermaid: str | None = None
+    # 解析方針の事前確認ゲート (Phase 2)。True なら orchestrator の前に方針プランナーを
+    # 1 回実行し、policy_proposal を emit してユーザー承認 (decision) を待つ。
+    # まとめて実行 (バッチ) はフロントが False を送って自動スキップする。
+    require_policy_approval: bool = False
 
 
 _VALID_ANALYSIS_MODES = {"single", "two_stage"}
@@ -1780,6 +1804,63 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             return bq_norm, bq_allow
         return {}, {}
 
+    # 承認済み解析方針 (Phase 2) を log_text 先頭に差し込むためのプレフィックス。
+    # 方針ゲートが承認されたら "text" に方針ブロックを書き込む。"rejected" は中止シグナル。
+    policy_prefix: dict = {"text": "", "rejected": False}
+
+    # ─── 解析方針の事前確認ゲート (Phase 2) ─────────────────────
+    async def _run_policy_gate() -> AsyncIterator[bytes]:
+        """方針プランナーを 1 回実行し、policy_proposal を emit して承認を待つ。
+
+        承認なら policy_prefix["text"] に承認方針ブロックを書き込む。
+        却下なら policy_prefix["rejected"] = True を立てる (呼び出し側が中止)。
+        プランナー失敗時はゲートをスキップし、prefix 空のまま通常解析へ。
+        """
+        from log_analyzer.rally.planner import plan_policy, build_approved_policy_block
+
+        # プランナー入力: 全データ (logs + configs) + mermaid + 問診票を合成
+        planner_logs, planner_configs = req.node_logs, req.node_configs
+        planner_log_text, _ = _build_topology_log_text(
+            req.topology, planner_logs, planner_configs,
+            questionnaire_answers=req.questionnaire_answers,
+            node_bigquery=bq_norm, mermaid=req.mermaid,
+        )
+        yield _sse_bytes("policy_start", {"message": "解析方針を立案しています…"})
+        loop = asyncio.get_running_loop()
+        try:
+            proposal = await loop.run_in_executor(
+                None,
+                lambda: plan_policy(
+                    planner_log_text, model=(m_overrides or {}).get("planner")
+                ),
+            )
+        except Exception as e:
+            # 本流を止めない: ゲートをスキップして通常解析へ
+            yield _sse_bytes("error", {"stage": "policy", "message": str(e)})
+            return
+        yield _sse_bytes("policy_proposal", {"proposal": proposal})
+        decision = await _wait_for_decision()
+        yield _sse_bytes("user_decision", decision)
+        if decision.get("action") == "reject_policy":
+            policy_prefix["rejected"] = True
+            yield _sse_bytes(
+                "policy_rejected",
+                {"message": "解析方針が却下されました。解析を中止します。"},
+            )
+            return
+        edited_focus = decision.get("edited_focus")
+        policy_prefix["text"] = build_approved_policy_block(
+            proposal, edited_focus=edited_focus
+        )
+        # 記録用に承認方針を保持 (raw_output / parse_error は除外して軽量化)。
+        # 最終 AnalysisResult に policy_proposal として載せ、履歴・レポートに残す。
+        clean = {k: v for k, v in proposal.items() if k not in ("raw_output", "parse_error")}
+        if edited_focus is not None and str(edited_focus).strip():
+            # ユーザーが観点を修正した場合は、実際に使われた観点を記録する
+            clean["focus"] = str(edited_focus)
+            clean["focus_edited"] = True
+        policy_prefix["proposal"] = clean
+
     # ─── 1 段階モード ───────────────────────────────────────────
     async def _gen_single() -> AsyncIterator[bytes]:
         from log_analyzer.rally_two_stage import (
@@ -1791,10 +1872,11 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         single_log_text, _ = _build_topology_log_text(
             req.topology, logs, configs,
             questionnaire_answers=req.questionnaire_answers,
-            node_bigquery=bq_marker,
+            node_bigquery=bq_marker, mermaid=req.mermaid,
         )
+        # 承認済み解析方針 (Phase 2) があれば log_text 先頭に差し込む
+        single_log_text = policy_prefix["text"] + single_log_text
         stage_label = _stage_label(1, source)
-        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
         yield _sse_bytes(
             "single_stage_start",
             {
@@ -1848,6 +1930,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         # _build_final_result は stage_outputs から再構築するため audit_report が落ちるので引き継ぐ。
         final.audit_report = final_result.audit_report
         final_dict = final.model_dump(mode="json")
+        # 承認された解析方針を結果に載せる (記録・レポート・履歴再現用)
+        if policy_prefix.get("proposal"):
+            final_dict["policy_proposal"] = policy_prefix["proposal"]
         yield _sse_bytes("final", {"result": final_dict})
         _record_history(final_dict)
 
@@ -1862,8 +1947,10 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         stage_one_log_text, _ = _build_topology_log_text(
             req.topology, s1_logs, s1_configs,
             questionnaire_answers=req.questionnaire_answers,
-            node_bigquery=s1_bq_marker,
+            node_bigquery=s1_bq_marker, mermaid=req.mermaid,
         )
+        # 承認済み解析方針 (Phase 2) があれば Stage 1 log_text 先頭に差し込む
+        stage_one_log_text = policy_prefix["text"] + stage_one_log_text
 
         # Stage 2: Stage 1 仮説を冒頭に置き、両データ種別を投入して検証 (BQ 含む)
         def _stage_two_log_text(stage_one_output: StageOutput) -> str:
@@ -1874,11 +1961,11 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             stage_two_body, _ = _build_topology_log_text(
                 req.topology, req.node_logs, req.node_configs,
                 questionnaire_answers=req.questionnaire_answers,
-                node_bigquery=bq_norm,
+                node_bigquery=bq_norm, mermaid=req.mermaid,
             )
-            return hypothesis_block + stage_two_body
+            # 承認済み解析方針は Stage 2 でも先頭に維持する
+            return policy_prefix["text"] + hypothesis_block + stage_two_body
 
-        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
         final_data: dict | None = None
         try:
             async for ev in run_two_stage_stream(
@@ -1896,9 +1983,13 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 audit_after_integrator=req.audit_after_integrator,
                 audit_system_prompt=req.audit_system_prompt,
             ):
-                yield _sse_bytes(ev.kind, ev.data)
                 if ev.kind == "final":
-                    final_data = ev.data.get("result")
+                    res = ev.data.get("result")
+                    # 承認された解析方針を結果に載せる (記録・レポート・履歴再現用)
+                    if isinstance(res, dict) and policy_prefix.get("proposal"):
+                        res["policy_proposal"] = policy_prefix["proposal"]
+                    final_data = res
+                yield _sse_bytes(ev.kind, ev.data)
         except Exception as e:
             yield _sse_bytes("error", {"message": str(e), "stage": "config-log-stream"})
             return
@@ -1906,9 +1997,20 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         if final_data is not None:
             _record_history(final_data)
 
-    chosen_gen = _gen_single if req.analysis_mode == "single" else _gen_two_stage
+    # ─── ラッパ: run_id 通知 → (任意) 方針ゲート → 本解析 ───────
+    async def _gen() -> AsyncIterator[bytes]:
+        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
+        if req.require_policy_approval:
+            async for b in _run_policy_gate():
+                yield b
+            if policy_prefix.get("rejected"):
+                return  # 方針却下 → 本解析は実行しない
+        inner = _gen_single() if req.analysis_mode == "single" else _gen_two_stage()
+        async for b in inner:
+            yield b
+
     return StreamingResponse(
-        chosen_gen(),
+        _gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1957,7 +2059,9 @@ async def runs_append_log(run_id: str, req: AppendLogRequest) -> dict:
     }
 
 
-_VALID_DECISION_ACTIONS = {"continue", "stop", "advance", "abort"}
+_VALID_DECISION_ACTIONS = {
+    "continue", "stop", "advance", "abort", "approve_policy", "reject_policy",
+}
 
 
 @app.post("/api/runs/{run_id}/decision")
@@ -1988,6 +2092,8 @@ async def runs_decision(run_id: str, req: DecisionRequest) -> dict:
     if req.action == "continue":
         extend_by = req.extend_by if (req.extend_by and req.extend_by > 0) else 3
         payload["extend_by"] = extend_by
+    if req.action == "approve_policy" and req.edited_focus is not None:
+        payload["edited_focus"] = req.edited_focus
     fut.set_result(payload)
     return {"ok": True, "run_id": run_id}
 

@@ -180,6 +180,29 @@ export function ChatHistoryView({ result, questionnaireAnswers, showQuestionnair
     }
   }
 
+  // 2. 承認された解析方針 (Phase 2)。確認ゲートを使った場合のみ。
+  const policy = result.policy_proposal
+  if (policy) {
+    const plan = policy.investigation_plan ?? []
+    messages.push(
+      <ChatMessage key="policy" sender="agent" speaker="方針プランナー" tag={policy.focus_edited ? '承認済み方針（観点修正あり）' : '承認済み方針'}>
+        {policy.situation_summary && <p className="chat-rationale">現象: {policy.situation_summary}</p>}
+        {plan.length > 0 && (
+          <>
+            <p className="chat-section-title">調査方針</p>
+            <ol className="chat-qa-list">
+              {plan.map((p, i) => <li key={i}>{p}</li>)}
+            </ol>
+          </>
+        )}
+        {policy.suggested_first_node && (
+          <p className="chat-arrow">起点: <strong>{roleLabel(policy.suggested_first_node)}</strong></p>
+        )}
+        {policy.focus && <p className="chat-focus">観点: {policy.focus}</p>}
+      </ChatMessage>
+    )
+  }
+
   const stages = result.stage_outputs ?? []
   if (stages.length >= 2) {
     // 2 段階解析: Stage ごとに推論過程 + その Stage の結論を展開する
