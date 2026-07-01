@@ -30,6 +30,7 @@ from typing import Callable
 
 import anthropic
 
+from log_analyzer.rally import source_tools
 from log_analyzer.rally._helpers import extract_json, safe_extract_json
 from log_analyzer.rally.state import Config4State
 from log_analyzer.tracing import usage_components
@@ -251,8 +252,9 @@ def _run_monitor_llm(
     system_prompt: str,
     user_blocks: list[dict],
     bq_sources: dict[str, dict],
+    source_runtime: dict | None = None,
 ) -> tuple[str, int, int, int, int, list[str], list[dict]]:
-    """監視 LLM を呼ぶ。bq_sources があれば bigquery_query の tool-use ループを回す。
+    """監視 LLM を呼ぶ。bq_sources / source_runtime があれば tool-use ループを回す。
 
     返り値: (最終テキスト, tokens_in 総量, tokens_out 合計, cache_creation 合計,
     cache_read 合計, 実行した BQ ツール呼び出しの記録, BigQuery から取得した実ログ
@@ -262,8 +264,14 @@ def _run_monitor_llm(
     bq_sources が空の場合は従来通りツール無しの単発呼び出しと等価。
     """
     client = anthropic.Anthropic()
-    use_tools = bool(bq_sources)
-    system_text = system_prompt + (_BQ_TOOL_GUIDANCE if use_tools else "")
+    use_bq = bool(bq_sources)
+    use_source = source_tools.has_source_tools(source_runtime)
+    use_tools = use_bq or use_source
+    system_text = (
+        system_prompt
+        + (_BQ_TOOL_GUIDANCE if use_bq else "")
+        + (source_tools.SOURCE_TOOL_GUIDANCE if use_source else "")
+    )
     # system と user の安定ブロックに ephemeral キャッシュを設定（従来踏襲）。
     system = [
         {"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}
@@ -320,7 +328,12 @@ def _run_monitor_llm(
             "messages": messages,
         }
         if use_tools:
-            kwargs["tools"] = [BIGQUERY_SCHEMA_TOOL_SCHEMA, BIGQUERY_TOOL_SCHEMA]
+            tool_list: list[dict] = []
+            if use_bq:
+                tool_list += [BIGQUERY_SCHEMA_TOOL_SCHEMA, BIGQUERY_TOOL_SCHEMA]
+            if use_source:
+                tool_list += source_tools.source_tool_schemas(source_runtime)
+            kwargs["tools"] = tool_list
         response = client.messages.create(**kwargs)
         _accumulate(response.usage)
 
@@ -347,6 +360,13 @@ def _run_monitor_llm(
                     executed.append(
                         f"bigquery_schema(host={ (block.input or {}).get('host')!r})"
                     )
+                elif block.name in source_tools.SOURCE_TOOL_NAMES:
+                    args = dict(block.input or {})
+                    result_str = source_tools.dispatch_source_tool(
+                        block.name, args, source_runtime or {}
+                    )
+                    label = args.get("path") or args.get("query") or args.get("table") or ""
+                    executed.append(f"{block.name}({label!r})")
                 else:
                     result_str = f"エラー: 未知のツール {block.name}"
                 tool_results.append(
@@ -446,8 +466,9 @@ def _make_monitor(
         )
         user_input = _blocks_to_text(user_blocks)
 
-        # ログ取得元が BigQuery のノードがあれば native tool-use ループを回す。
+        # ログ取得元が BigQuery のノード / 解析対象ソースがあれば native tool-use を回す。
         bq_sources = state.get("bq_sources") or {}
+        source_runtime = state.get("source_runtime")
         started = time.perf_counter()
         raw, tokens_in, tokens_out, cache_creation, cache_read, bq_tool_calls, bq_fetched = (
             _run_monitor_llm(
@@ -455,6 +476,7 @@ def _make_monitor(
                 system_prompt=system_prompt,
                 user_blocks=user_blocks,
                 bq_sources=bq_sources,
+                source_runtime=source_runtime,
             )
         )
         latency_ms = int((time.perf_counter() - started) * 1000)

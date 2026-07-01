@@ -34,6 +34,8 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,16 +43,20 @@ from typing import AsyncIterator
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from log_analyzer import pipeline_runner, prompt_slots, storage
 from log_analyzer.cli import CONFIG_RUNNERS
-from log_analyzer.rally_agent import StreamEvent, run_rally_stream
+from log_analyzer.rally_agent import run_rally_stream
 from log_analyzer.rally_two_stage import run_two_stage_stream
 from log_analyzer.schema import AnalysisResult, QuestionnaireItem, QuestionnaireTemplate, StageOutput
+from log_analyzer.rally import source_tools as source_tools_mod
+from log_analyzer.source import codebase as source_codebase
+from log_analyzer.source import db_schema as source_db_schema_mod
+from log_analyzer.source import indexer as source_indexer
 
 load_dotenv()
 storage.init_db()
@@ -1144,6 +1150,103 @@ def delete_log(name: str) -> dict:
     return {"deleted": name}
 
 
+# ─── ソースコード（コードベース）────────────────────────────────────
+# 設計: docs/plan/source_code_analysis.md
+# 取り込み・展開・除外・index 生成は log_analyzer.source.codebase に委譲し、
+# ここは HTTP 境界（バリデーション → 4xx 変換、アップロードのストリーム読み込み）だけ持つ。
+
+
+class SourceCodebaseEntry(BaseModel):
+    name: str
+    file_count: int = 0
+    bytes: int = 0
+    symbol_count: int = 0
+    languages: dict[str, int] = {}
+    table_count: int = 0
+
+
+class SourceCodebasesResponse(BaseModel):
+    codebases: list[SourceCodebaseEntry]
+
+
+@app.get("/api/source", response_model=SourceCodebasesResponse)
+def list_source_codebases() -> SourceCodebasesResponse:
+    """``samples/source/`` 配下のコードベース一覧（名前 / ファイル数 / 言語内訳 / テーブル数）。"""
+    return SourceCodebasesResponse(
+        codebases=[SourceCodebaseEntry(**c) for c in source_codebase.list_codebases()]
+    )
+
+
+@app.post("/api/source", response_model=SourceCodebaseEntry)
+async def upload_source(
+    name: str = Form(...),
+    files: list[UploadFile] = File(...),
+) -> SourceCodebaseEntry:
+    """複数ファイル（zip / 単体ソース混在）をアップロードし、1 コードベースに集約する。
+
+    - 合計 50MB 上限（生アップロード・展開後の両方で加算チェック）。
+    - zip は展開（除外ルール＋zip-slip 検証）、単体ソースはそのまま配置。
+    - 同名既存は 409。
+    """
+    try:
+        source_codebase.safe_codebase_dir(name)  # 名前バリデーション
+    except source_codebase.SourceError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    if source_codebase.exists(name):
+        raise HTTPException(status_code=409, detail=f"同名のコードベースが既に存在します: {name}")
+
+    staging = Path(tempfile.mkdtemp(prefix="src_upload_"))
+    items: list[tuple[str, Path]] = []
+    total = 0
+    try:
+        for i, f in enumerate(files):
+            staged = staging / f"upload_{i}.bin"
+            with staged.open("wb") as out:
+                while True:
+                    chunk = await f.read(64 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > source_codebase.MAX_TOTAL_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"アップロード合計が上限を超えています "
+                                f"(> {source_codebase.MAX_TOTAL_BYTES} bytes)"
+                            ),
+                        )
+                    out.write(chunk)
+            items.append((f.filename or staged.name, staged))
+        try:
+            stats = source_codebase.materialize(name, items)
+        except source_codebase.SourceError as e:
+            raise HTTPException(status_code=e.status_code, detail=str(e))
+        return SourceCodebaseEntry(**stats)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+@app.get("/api/source/{name}/tree")
+def get_source_tree(name: str) -> dict:
+    """ファイルツリー＋シンボル署名＋DBスキーマを返す（本文は含めない、インデックスのプレビュー）。"""
+    try:
+        return source_codebase.tree(name)
+    except source_codebase.SourceError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+
+
+@app.delete("/api/source/{name}")
+def delete_source(name: str) -> dict:
+    """コードベースを削除（ディレクトリ＋キャッシュごと）。"""
+    try:
+        ok = source_codebase.delete_codebase(name)
+    except source_codebase.SourceError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"コードベースが見つかりません: {name}")
+    return {"deleted": name}
+
+
 class BuiltinStructureResponse(BaseModel):
     base_config: str
     nodes: list[dict]
@@ -1667,6 +1770,9 @@ class ConfigLogRunRequest(BaseModel):
     stage_order: str = "config_log"        # "config_log" | "log_config" (analysis_mode=="two_stage")
     # ネットワーク構成図 (Mermaid 記法)。テキスト文脈として log_text に注入する (任意)。
     mermaid: str | None = None
+    # 解析対象ソースコードのコードベース名 (samples/source/<name>)。指定時は監視ノードが
+    # source_search / source_read / db_schema ツールでオンデマンド参照する (任意)。
+    source_codebase: str | None = None
     # 解析方針の事前確認ゲート (Phase 2)。True なら orchestrator の前に方針プランナーを
     # 1 回実行し、policy_proposal を emit してユーザー承認 (decision) を待つ。
     # まとめて実行 (バッチ) はフロントが False を送って自動スキップする。
@@ -1756,6 +1862,27 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             if s and t
         ],
     }
+
+    # 解析対象ソースコード (任意)。指定時はインデックス + DB スキーマをロードし、
+    # log_text 先頭に「利用可能」マーカー + スキーマ要約を注入、rally に source tools を渡す。
+    source_index = None
+    source_db = None
+    source_block = ""
+    if req.source_codebase:
+        try:
+            cdir = source_codebase.safe_codebase_dir(req.source_codebase)
+        except source_codebase.SourceError as e:
+            raise HTTPException(status_code=e.status_code, detail=str(e))
+        if not cdir.is_dir():
+            raise HTTPException(
+                status_code=404,
+                detail=f"コードベースが見つかりません: {req.source_codebase}",
+            )
+        source_index = source_indexer.get_or_build_index(cdir)
+        source_db = source_db_schema_mod.extract_db_schema(cdir)
+        source_block = source_tools_mod.build_source_injection_block(
+            req.source_codebase, source_index, source_db
+        )
 
     run_id = uuid4().hex
     log_ref = f"config-log-run:{run_id[:8]}"
@@ -1874,8 +2001,8 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             questionnaire_answers=req.questionnaire_answers,
             node_bigquery=bq_marker, mermaid=req.mermaid,
         )
-        # 承認済み解析方針 (Phase 2) があれば log_text 先頭に差し込む
-        single_log_text = policy_prefix["text"] + single_log_text
+        # 承認済み解析方針 (Phase 2) ＋ ソース利用可能マーカー/スキーマ要約を先頭に差し込む
+        single_log_text = policy_prefix["text"] + source_block + single_log_text
         stage_label = _stage_label(1, source)
         yield _sse_bytes(
             "single_stage_start",
@@ -1900,6 +2027,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 bq_sources=bq_sources,
                 audit_after_integrator=req.audit_after_integrator,
                 audit_system_prompt=req.audit_system_prompt,
+                source_index=source_index,
+                source_db_schema=source_db,
+                source_codebase=req.source_codebase or "",
             ):
                 if "stage" not in ev.data:
                     ev.data["stage"] = source
@@ -1926,9 +2056,10 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             trace_id=final_result.trace_id,
             log_ref=log_ref,
         )
-        # 監査結果は rally の最終 result に乗っている (run_rally_stream 内で実行)。
-        # _build_final_result は stage_outputs から再構築するため audit_report が落ちるので引き継ぐ。
+        # 監査結果・ソース参照記録は rally の最終 result に乗っている。
+        # _build_final_result は stage_outputs から再構築するため落ちるので引き継ぐ。
         final.audit_report = final_result.audit_report
+        final.source_context = final_result.source_context
         final_dict = final.model_dump(mode="json")
         # 承認された解析方針を結果に載せる (記録・レポート・履歴再現用)
         if policy_prefix.get("proposal"):
@@ -1949,8 +2080,8 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             questionnaire_answers=req.questionnaire_answers,
             node_bigquery=s1_bq_marker, mermaid=req.mermaid,
         )
-        # 承認済み解析方針 (Phase 2) があれば Stage 1 log_text 先頭に差し込む
-        stage_one_log_text = policy_prefix["text"] + stage_one_log_text
+        # 承認済み解析方針 (Phase 2) ＋ ソースマーカー/スキーマ要約を Stage 1 先頭に差し込む
+        stage_one_log_text = policy_prefix["text"] + source_block + stage_one_log_text
 
         # Stage 2: Stage 1 仮説を冒頭に置き、両データ種別を投入して検証 (BQ 含む)
         def _stage_two_log_text(stage_one_output: StageOutput) -> str:
@@ -1963,8 +2094,8 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 questionnaire_answers=req.questionnaire_answers,
                 node_bigquery=bq_norm, mermaid=req.mermaid,
             )
-            # 承認済み解析方針は Stage 2 でも先頭に維持する
-            return policy_prefix["text"] + hypothesis_block + stage_two_body
+            # 承認済み解析方針・ソースマーカーは Stage 2 でも先頭に維持する
+            return policy_prefix["text"] + source_block + hypothesis_block + stage_two_body
 
         final_data: dict | None = None
         try:
@@ -1982,6 +2113,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 bq_sources=bq_allow,
                 audit_after_integrator=req.audit_after_integrator,
                 audit_system_prompt=req.audit_system_prompt,
+                source_index=source_index,
+                source_db_schema=source_db,
+                source_codebase=req.source_codebase or "",
             ):
                 if ev.kind == "final":
                     res = ev.data.get("result")

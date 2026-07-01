@@ -3742,3 +3742,19 @@ code {
   box-sizing: border-box;
 }
 
+/* ソースコード解析の結果ブロック (Phase 3) */
+.source-reference {
+  margin-top: 1rem;
+  padding: 0.8rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--border, #e3e6ec);
+  border-left: 5px solid #3b6ea5;
+  background: #f5f8fc;
+}
+.source-reference h4 {
+  margin: 0 0 0.4rem;
+}
+.source-reference .mono {
+  word-break: break-all;
+}
+

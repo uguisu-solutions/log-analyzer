@@ -33,6 +33,21 @@ from log_analyzer.tracing import usage_components
 # Claude 系は Opus に統一。RALLY_PLANNER_MODEL で個別に上書き可能。
 _DEFAULT_PLANNER_MODEL = "claude-opus-4-7"
 
+# 方針 JSON の出力上限。複雑なインシデントでは situation_summary + 想定原因 +
+# 多段の investigation_plan で出力が伸び、1500 では途中切断 → JSON パース失敗 →
+# 既定フォールバックが多発する。余裕を持たせる (RALLY_PLANNER_MAX_TOKENS で調整可)。
+_DEFAULT_PLANNER_MAX_TOKENS = 4000
+
+
+def _planner_max_tokens() -> int:
+    raw = os.environ.get("RALLY_PLANNER_MAX_TOKENS")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_PLANNER_MAX_TOKENS
+
 VALID_FIRST_NODES: set[str] = {"fw", "routing", "app", "dns", "sec"}
 
 PLANNER_PROMPT = """\
@@ -117,42 +132,67 @@ def plan_policy(
     chosen_model = model or os.environ.get("RALLY_PLANNER_MODEL", _DEFAULT_PLANNER_MODEL)
     sys_prompt = (system_prompt or "").strip() or PLANNER_PROMPT
     user_input = f"## 与えられた情報（構成図 / ログ / 設定 / 問診票）\n{log_text}\n"
+    max_toks = _planner_max_tokens()
+    system = [{"type": "text", "text": sys_prompt, "cache_control": {"type": "ephemeral"}}]
+    _FALLBACK = {
+        "situation_summary": "方針 JSON の解析に失敗しました。既定方針 (fw 起点) で進めます。",
+        "primary_hypotheses": [],
+        "investigation_plan": [],
+        "suggested_first_node": "fw",
+        "focus": "",
+        "data_to_use": [],
+        "missing_data_notes": "",
+    }
 
     client = anthropic.Anthropic()
+    messages: list[dict] = [{"role": "user", "content": user_input}]
+    total_in = 0
+    total_out = 0
     started = time.perf_counter()
+
     response = client.messages.create(
-        model=chosen_model,
-        max_tokens=1500,
-        system=[
-            {
-                "type": "text",
-                "text": sys_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_input}],
+        model=chosen_model, max_tokens=max_toks, system=system, messages=messages
     )
-    latency_ms = int((time.perf_counter() - started) * 1000)
     raw = response.content[0].text
-    raw_proposal, parse_error = safe_extract_json(
-        raw,
-        fallback={
-            "situation_summary": "方針 JSON の解析に失敗しました。既定方針 (fw 起点) で進めます。",
-            "primary_hypotheses": [],
-            "investigation_plan": [],
-            "suggested_first_node": "fw",
-            "focus": "",
-            "data_to_use": [],
-            "missing_data_notes": "",
-        },
-    )
-    proposal = _normalize_proposal(raw_proposal)
     uc = usage_components(response.usage)
+    total_in += uc["input"] + uc["cache_creation"] + uc["cache_read"]
+    total_out += uc["output"]
+    raw_proposal, parse_error = safe_extract_json(raw, fallback=_FALLBACK)
+
+    # パース失敗（多くは max_tokens 切断 or 散文混入）→ JSON のみ・簡潔に 1 回だけ再生成
+    if parse_error:
+        messages.append({"role": "assistant", "content": raw or "(空応答)"})
+        messages.append({
+            "role": "user",
+            "content": (
+                "前の応答から JSON を抽出できませんでした（途中で切れた可能性があります）。"
+                "primary_hypotheses は最大3件、investigation_plan は最大5件に抑え、"
+                "situation_summary / primary_hypotheses / investigation_plan / "
+                "suggested_first_node / focus / data_to_use / missing_data_notes だけを、"
+                "前置き・説明文・コードフェンスを一切付けず JSON オブジェクトのみで簡潔に出力してください。"
+            ),
+        })
+        try:
+            retry = client.messages.create(
+                model=chosen_model, max_tokens=max_toks, system=system, messages=messages
+            )
+            rtext = retry.content[0].text
+            ruc = usage_components(retry.usage)
+            total_in += ruc["input"] + ruc["cache_creation"] + ruc["cache_read"]
+            total_out += ruc["output"]
+            retry_proposal, retry_err = safe_extract_json(rtext, fallback=_FALLBACK)
+            if retry_err is None:
+                raw_proposal, parse_error, raw = retry_proposal, None, rtext
+        except Exception:  # noqa: BLE001 — 再試行失敗時は初回フォールバックのまま継続
+            pass
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    proposal = _normalize_proposal(raw_proposal)
     proposal.update(
         {
             "model": chosen_model,
-            "tokens_in": uc["input"] + uc["cache_creation"] + uc["cache_read"],
-            "tokens_out": uc["output"],
+            "tokens_in": total_in,
+            "tokens_out": total_out,
             "latency_ms": latency_ms,
             "raw_output": raw,
             "parse_error": parse_error,

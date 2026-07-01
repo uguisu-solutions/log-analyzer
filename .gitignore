@@ -45,6 +45,14 @@ service-account*.json
 # SQLite に保存されるユーザー定義構成は実行時データ扱い（リポジトリには含めない）
 apps/agents/data/
 
+# --- ソースコード解析（コードベース取り込み） ---
+# UI からアップロードされたコードベースは実行時データ。検証用サンプルだけ追跡する。
+samples/source/*
+!samples/source/sample_payment_app/
+# 生成キャッシュ（決定論インデックス / 統計メタ）は追跡しない
+**/.index.json
+**/.meta.json
+
 # --- IDE / OS ---
 .vscode/
 .idea/

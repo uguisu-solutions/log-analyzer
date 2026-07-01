@@ -28,13 +28,12 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator, Callable, Awaitable
 
+from log_analyzer.rally import source_tools
 from log_analyzer.rally_agent import StreamEvent, run_rally_stream
 from log_analyzer.schema import (
     AnalysisResult,
     ConfigId,
-    DelegationEventDTO,
     StageOutput,
-    SuspectedNodeFinding,
 )
 
 # Phase A の decision_waiter は 4 アクションを受ける:
@@ -144,6 +143,9 @@ async def _run_one_stage(
     decision_waiter: TwoStageDecisionWaiter | None,
     bq_sources: dict[str, dict] | None = None,
     evidence_sink: list[dict] | None = None,
+    source_index: Any = None,
+    source_db_schema: Any = None,
+    source_codebase: str = "",
 ) -> AsyncIterator[StreamEvent | AnalysisResult]:
     """単一 Stage の rally を実行し、SSE イベントを順次 yield する。
 
@@ -165,6 +167,9 @@ async def _run_one_stage(
         decision_waiter=decision_waiter,
         topology_context=topology_context,
         bq_sources=bq_sources,
+        source_index=source_index,
+        source_db_schema=source_db_schema,
+        source_codebase=source_codebase,
     ):
         # stage 情報を data に注入 (UI 側で Stage 1/2 の区別に使う)
         if "stage" not in ev.data:
@@ -256,6 +261,9 @@ async def run_two_stage_stream(
     audit_system_prompt: str | None = None,
     require_approval: bool = False,
     bq_sources: dict[str, dict] | None = None,
+    source_index: Any = None,
+    source_db_schema: Any = None,
+    source_codebase: str = "",
 ) -> AsyncIterator[StreamEvent]:
     """config-log 解析の 2 段階 SSE ストリーミング実行。
 
@@ -314,6 +322,9 @@ async def run_two_stage_stream(
         decision_waiter=decision_waiter,
         bq_sources=stage_one_bq,
         evidence_sink=bq_evidence,
+        source_index=source_index,
+        source_db_schema=source_db_schema,
+        source_codebase=source_codebase,
     ):
         if isinstance(item, AnalysisResult):
             stage_one_result = item
@@ -365,6 +376,9 @@ async def run_two_stage_stream(
                 trace_id=overall_trace_id,
                 log_ref=log_ref,
             )
+            final.source_context = source_tools.merge_source_contexts(
+                [stage_one_result.source_context]
+            )
             if audit_after_integrator:
                 async for ev in _attach_audit(final, stage_one_log_text, topology_context,
                                               audit_system_prompt, bq_evidence):
@@ -415,6 +429,9 @@ async def run_two_stage_stream(
         decision_waiter=decision_waiter,
         bq_sources=stage_two_bq,
         evidence_sink=bq_evidence,
+        source_index=source_index,
+        source_db_schema=source_db_schema,
+        source_codebase=source_codebase,
     ):
         if isinstance(item, AnalysisResult):
             stage_two_result = item
@@ -434,6 +451,9 @@ async def run_two_stage_stream(
         stage_outputs=stage_outputs,
         trace_id=overall_trace_id or stage_two_output.trace_id,
         log_ref=log_ref,
+    )
+    final.source_context = source_tools.merge_source_contexts(
+        [stage_one_result.source_context, stage_two_result.source_context]
     )
     if audit_after_integrator:
         # Stage 2 まで進んだ場合は Stage 2 のログテキストで監査

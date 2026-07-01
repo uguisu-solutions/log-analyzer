@@ -280,12 +280,65 @@ export interface AnalysisResult {
   // 解析方針の事前確認 (Phase 2) で承認された方針。確認ゲート未使用なら null/undefined。
   // focus_edited=true はユーザーが観点を修正して承認したことを示す。
   policy_proposal?: (PolicyProposal & { focus_edited?: boolean }) | null
+  // ソースコード解析のコンテキスト。コードベース未指定なら null/undefined。
+  source_context?: SourceContext | null
 }
 
 export interface SuspectedNodeFinding {
   node_id: string
   summary: string
   severity: string  // "primary" | "secondary" | "info" | ""
+}
+
+// ソースコード解析 (Phase 2/3) ─────────────────────────
+export interface DbColumn {
+  name: string
+  type: string
+  nullable: boolean
+  primary_key: boolean
+  default: string
+  foreign_key: string  // "table.column" / ""
+}
+
+export interface DbTable {
+  name: string
+  columns: DbColumn[]
+  indexes: string[][]
+  sources: string[]  // "ddl" | "orm/sqlalchemy" | "orm/django" | "orm/prisma"
+}
+
+export interface DbSchema {
+  tables: DbTable[]
+}
+
+// 監視ノードが行ったソース参照 1 件
+export interface SourceToolCall {
+  round: number
+  node: string  // "fw" | "routing" | "app" | "dns" | "sec" | ""
+  tool: string  // "source_search" | "source_read" | "db_schema"
+  args: Record<string, unknown>
+  result_chars: number
+}
+
+// 解析で使われたソースコードのコンテキスト (どのノードが何を参照したか)
+export interface SourceContext {
+  codebase: string
+  db_schema: DbSchema | null
+  tool_calls: SourceToolCall[]
+  total_chars_fetched: number
+  file_count: number
+  symbol_count: number
+  language_breakdown: Record<string, number>
+}
+
+// /api/source 一覧の 1 エントリ
+export interface SourceCodebaseEntry {
+  name: string
+  file_count: number
+  bytes: number
+  symbol_count: number
+  languages: Record<string, number>
+  table_count: number
 }
 
 // ラウンド単位集計 (Phase D) ─────────────────────────

@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from log_analyzer.rally import source_tools
 from log_analyzer.rally.integrator import integrator_node
 from log_analyzer.rally.monitors import MONITOR_FNS
 from log_analyzer.rally.orchestrator import orchestrator_select_first
@@ -346,6 +347,9 @@ async def run_rally_stream(
     audit_after_integrator: bool = False,
     audit_system_prompt: str | None = None,
     bq_sources: dict[str, dict] | None = None,
+    source_index: Any = None,
+    source_db_schema: Any = None,
+    source_codebase: str = "",
 ) -> AsyncIterator[StreamEvent]:
     """委譲チェーンを 1 ステップずつ実行しながら ``StreamEvent`` を yield する。
 
@@ -381,6 +385,15 @@ async def run_rally_stream(
         # 監視が BigQuery から実際に取得した行 [{host, content}]。監査の証拠として渡す
         # (rally 本体には再投入しない = コスト増を避ける)。
         "bq_evidence": [],
+        # 解析対象ソースのオンデマンド参照ツールの実行時状態 (1 run 共有・予算/重複管理)。
+        # index も db_schema も無ければ None (= source tool は無効・後方互換)。
+        "source_runtime": (
+            source_tools.make_source_runtime(
+                source_index, source_db_schema, codebase=source_codebase
+            )
+            if (source_index is not None or source_db_schema is not None)
+            else None
+        ),
     }
 
     langfuse = get_client()
@@ -565,6 +578,11 @@ async def run_rally_stream(
         next_round = state["rally_round"] + 1
         state["rally_round"] = next_round
 
+        # ソースツールの記録に「どの監視が・どのラウンドで」を付けるための attribution
+        if state.get("source_runtime"):
+            state["source_runtime"]["current_node"] = current
+            state["source_runtime"]["current_round"] = next_round
+
         yield StreamEvent(
             "monitor_start",
             {
@@ -728,6 +746,10 @@ async def run_rally_stream(
         wall_ms=wall_ms,
         topology_node_ids=topology_node_ids or None,
     )
+
+    # ソースツールが使われていれば、参照記録を SourceContext として結果に載せる
+    if state.get("source_runtime"):
+        result.source_context = source_tools.build_source_context(state["source_runtime"])
 
     # ─── 5. 監査エージェント (Phase C, オプション) ─────────────────
     if audit_after_integrator:
