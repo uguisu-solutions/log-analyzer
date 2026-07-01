@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
@@ -37,6 +38,9 @@ from log_analyzer.schema import (
     SuspectedNodeFinding,
 )
 from log_analyzer.tracing import flush, get_client, usage_for
+
+# uvicorn 起動時にコンソールへ確実に出るよう uvicorn のロガーに載せる。
+_logger = logging.getLogger("uvicorn.error")
 
 # decision_waiter コールバックの戻り値型:
 #   {"action": "continue", "extend_by": int}  rally_max_rounds を +extend_by 延長して再開
@@ -309,13 +313,22 @@ def _build_analysis_result(
     confidence, grounding = evidence_grounding.apply_grounding(
         integrator_result.get("root_cause_candidates", []) or [], confidence, corpus
     )
+    # 常に結果を出す（全接地でも「2-b が動いた」ことを確認できるように）。
     if grounding.has_ungrounded:
         shown = ", ".join(grounding.ungrounded[:10])
         more = " ほか" if len(grounding.ungrounded) > 10 else ""
-        info_loss.append(
+        msg = (
             f"ungrounded_evidence: 提供ログに無い具体値を検出 ({grounding.grounded}/"
             f"{grounding.total_atoms} 接地) — {shown}{more}（確信度に上限を適用）"
         )
+        info_loss.append(msg)
+        _logger.info("[evidence_grounding] %s", msg)
+    elif grounding.total_atoms > 0:
+        msg = f"evidence_grounding: 引用された具体値 {grounding.total_atoms} 件すべて接地（でっち上げなし）"
+        info_loss.append(msg)
+        _logger.info("[evidence_grounding] %s", msg)
+    else:
+        _logger.info("[evidence_grounding] 照合対象の具体値なし")
 
     return AnalysisResult(
         trace_id=trace_id,

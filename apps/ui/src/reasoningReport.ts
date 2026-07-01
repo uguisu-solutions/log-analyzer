@@ -135,6 +135,15 @@ export function buildReasoningReport(result: AnalysisResult): string {
   lines.push(`- 合計トークン (in / out): ${result.metrics.tokens_in.toLocaleString()} / ${result.metrics.tokens_out.toLocaleString()}`)
   lines.push(`- 合計レイテンシ: ${(result.metrics.latency_ms_total / 1000).toFixed(1)}s`)
   if (result.trace_id) lines.push(`- trace_id: ${result.trace_id}`)
+  // 証拠グラウンディング (グループ2-b) の結果を概要に出す。info_loss_flags に
+  // backend が入れた evidence_grounding / ungrounded_evidence 行を拾って表示。
+  const grounding = (result.info_loss_flags ?? []).find(
+    f => f.startsWith('evidence_grounding:') || f.startsWith('ungrounded_evidence:'),
+  )
+  if (grounding) {
+    const warn = grounding.startsWith('ungrounded_evidence:') ? '⚠ ' : ''
+    lines.push(`- 証拠グラウンディング: ${warn}${grounding.replace(/^[a-z_]+:\s*/, '')}`)
+  }
   lines.push('')
 
   // 承認された解析方針 (Phase 2)。確認ゲートを使った場合のみ。
