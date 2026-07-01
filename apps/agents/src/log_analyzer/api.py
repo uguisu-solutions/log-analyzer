@@ -2322,3 +2322,34 @@ def delete_questionnaire_endpoint(qid: int) -> dict:
     if not ok:
         raise HTTPException(status_code=404, detail=f"questionnaire id={qid} not found")
     return {"deleted": qid}
+
+
+# ─── 解答シナリオ (解析評価の正解データ) ──────────────────────────
+# Excel「テストケース2」D-K列から取込 (scripts/import_answers.py)。UI で解析履歴と
+# 突き合わせて評価する際のシナリオ選択に使う。設計: 評価機能 Phase 1。
+
+
+class AnswerScenario(BaseModel):
+    id: int | None = None
+    scenario_key: str
+    title: str = ""
+    trigger: str = ""
+    initial_hypothesis: str = ""
+    path: str = ""
+    decision_points: str = ""
+    evidence_source: str = ""
+    conclusion: str = ""
+    junior_pitfall: str = ""
+    notes: str = ""
+    source_file: str = ""
+    imported_at: str = ""
+
+
+class AnswerScenariosResponse(BaseModel):
+    scenarios: list[AnswerScenario]
+
+
+@app.get("/api/answer-scenarios", response_model=AnswerScenariosResponse)
+def list_answer_scenarios_endpoint() -> AnswerScenariosResponse:
+    rows = storage.list_answer_scenarios()
+    return AnswerScenariosResponse(scenarios=[AnswerScenario(**r) for r in rows])

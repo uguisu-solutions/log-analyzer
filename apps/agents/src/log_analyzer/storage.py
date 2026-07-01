@@ -152,6 +152,28 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_analysis_history_created "
             "ON analysis_history(created_at DESC)"
         )
+        # answer_scenarios テーブル (解析評価の正解データ: Excel「テストケース2」D-K列から取込)
+        # scenario_key はグループ単位 (A〜N)。①〜⑦＋補足を保持し、⑥(conclusion)=真因が
+        # 採点の主軸。設計: [[project_accuracy_cost_2026-07-01]] / reference_ibc_testcase_excel
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS answer_scenarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scenario_key TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                trigger TEXT NOT NULL DEFAULT '',
+                initial_hypothesis TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                decision_points TEXT NOT NULL DEFAULT '',
+                evidence_source TEXT NOT NULL DEFAULT '',
+                conclusion TEXT NOT NULL DEFAULT '',
+                junior_pitfall TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                source_file TEXT NOT NULL DEFAULT '',
+                imported_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
         # デフォルトテンプレを idempotent に投入 (初回起動時のみ)
@@ -533,6 +555,87 @@ def get_analysis_history(entry_id: int) -> dict | None:
 def delete_analysis_history(entry_id: int) -> bool:
     with _connect() as conn:
         cursor = conn.execute("DELETE FROM analysis_history WHERE id = ?", (entry_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+# ─── answer_scenarios (解析評価の正解データ) ──────────────────────
+
+_ANSWER_COLS = (
+    "id, scenario_key, title, trigger, initial_hypothesis, path, decision_points, "
+    "evidence_source, conclusion, junior_pitfall, notes, source_file, imported_at"
+)
+
+# 取込時に受け付ける本文フィールド (scenario_key/source_file 以外)
+_ANSWER_BODY_FIELDS = (
+    "title", "trigger", "initial_hypothesis", "path", "decision_points",
+    "evidence_source", "conclusion", "junior_pitfall", "notes",
+)
+
+
+def upsert_answer_scenario(
+    scenario_key: str,
+    *,
+    source_file: str = "",
+    **fields: str,
+) -> dict:
+    """scenario_key で解答シナリオを upsert (既存なら本文を上書き)。
+
+    Excel は Drive 管理で取込直しがあるため、常に scenario_key 一意で上書きする。
+    ``fields`` は ``_ANSWER_BODY_FIELDS`` のいずれか (未指定は空文字)。
+    """
+    key = str(scenario_key).strip()
+    if not key:
+        raise ValueError("scenario_key は必須")
+    body = {f: str(fields.get(f, "") or "") for f in _ANSWER_BODY_FIELDS}
+    now = _now_iso()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO answer_scenarios "
+            "(scenario_key, title, trigger, initial_hypothesis, path, decision_points, "
+            " evidence_source, conclusion, junior_pitfall, notes, source_file, imported_at) "
+            "VALUES (:scenario_key, :title, :trigger, :initial_hypothesis, :path, "
+            " :decision_points, :evidence_source, :conclusion, :junior_pitfall, :notes, "
+            " :source_file, :imported_at) "
+            "ON CONFLICT(scenario_key) DO UPDATE SET "
+            " title=excluded.title, trigger=excluded.trigger, "
+            " initial_hypothesis=excluded.initial_hypothesis, path=excluded.path, "
+            " decision_points=excluded.decision_points, evidence_source=excluded.evidence_source, "
+            " conclusion=excluded.conclusion, junior_pitfall=excluded.junior_pitfall, "
+            " notes=excluded.notes, source_file=excluded.source_file, "
+            " imported_at=excluded.imported_at",
+            {"scenario_key": key, "source_file": source_file, "imported_at": now, **body},
+        )
+        conn.commit()
+    saved = get_answer_scenario(key)
+    if saved is None:
+        raise RuntimeError("failed to retrieve answer scenario after upsert")
+    return saved
+
+
+def list_answer_scenarios() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_ANSWER_COLS} FROM answer_scenarios ORDER BY scenario_key ASC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_answer_scenario(scenario_key: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_ANSWER_COLS} FROM answer_scenarios WHERE scenario_key = ?",
+            (str(scenario_key).strip(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_answer_scenario(scenario_key: str) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM answer_scenarios WHERE scenario_key = ?",
+            (str(scenario_key).strip(),),
+        )
         conn.commit()
         return cursor.rowcount > 0
 
