@@ -3821,7 +3821,7 @@ code {
 .eval-score-low  { background: #fee2e2; color: #991b1b; }
 .eval-scenario { font-size: 0.95rem; }
 .eval-meta { font-size: 0.8rem; }
-.eval-card-head .btn-delete { margin-left: auto; }
+.eval-card-actions { margin-left: auto; display: flex; gap: 0.4rem; }
 .eval-summary {
   margin: 0.6rem 0;
   font-size: 0.9rem;

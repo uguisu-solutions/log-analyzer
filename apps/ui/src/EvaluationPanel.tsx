@@ -5,7 +5,8 @@
  * LLM (既定 Opus4.7) にレポートの真因到達度を 10 段階採点させる。良い点/悪い点/
  * ⑦罠の回避を表示し、過去の評価も履歴に紐づけて後から確認できる。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { downloadText } from './reasoningReport'
 import type { AnswerScenario, EvaluationDTO } from './types'
 
 const API_BASE = 'http://localhost:8000'
@@ -18,6 +19,38 @@ function formatDate(iso: string): string {
   }
 }
 
+/** 1 評価を md レポートに整形する (個別出力用)。使用トークンも含める。 */
+function buildEvaluationReport(ev: EvaluationDTO, scenarioTitle: string): string {
+  const L: string[] = []
+  L.push('# 解析評価レポート（解答との比較）')
+  L.push('')
+  L.push('## 概要')
+  L.push(`- 解答シナリオ: ${ev.scenario_key}${scenarioTitle ? ` — ${scenarioTitle}` : ''}`)
+  L.push(`- スコア: **${ev.score == null ? '-' : ev.score} / 10**`)
+  L.push(`- 判定モデル: ${ev.model || '-'}`)
+  L.push(`- 使用トークン (in / out): ${(ev.tokens_in ?? 0).toLocaleString()} / ${(ev.tokens_out ?? 0).toLocaleString()}`)
+  if (ev.latency_ms != null) L.push(`- レイテンシ: ${(ev.latency_ms / 1000).toFixed(1)}s`)
+  L.push(`- 評価日時: ${formatDate(ev.created_at)}`)
+  L.push(`- 解析履歴 ID: #${ev.analysis_history_id}`)
+  L.push('')
+  if (ev.summary) {
+    L.push('## 総評')
+    L.push(ev.summary)
+    L.push('')
+  }
+  const sec = (title: string, items: string[], prefix = '') => {
+    if (items.length === 0) return
+    L.push(`## ${title}`)
+    for (const it of items) L.push(`- ${prefix}${it}`)
+    L.push('')
+  }
+  sec('良い点', ev.good_points)
+  sec('悪い点', ev.bad_points)
+  sec('避けた罠 (⑦)', ev.pitfalls_avoided, '✓ ')
+  sec('踏んだ罠 (⑦)', ev.pitfalls_hit, '✗ ')
+  return L.join('\n')
+}
+
 function scoreClass(score: number | null): string {
   const s = score ?? 0
   if (s >= 7) return 'eval-score-high'
@@ -25,7 +58,14 @@ function scoreClass(score: number | null): string {
   return 'eval-score-low'
 }
 
-function EvaluationCard({ ev, onDelete }: { ev: EvaluationDTO; onDelete: (id: number) => void }) {
+function EvaluationCard(
+  { ev, scenarioTitle, onDelete }:
+  { ev: EvaluationDTO; scenarioTitle: string; onDelete: (id: number) => void },
+) {
+  const exportReport = () => {
+    const fname = `evaluation-${ev.scenario_key}-h${ev.analysis_history_id}-${ev.id}.md`
+    downloadText(fname, buildEvaluationReport(ev, scenarioTitle))
+  }
   return (
     <div className="eval-card">
       <div className="eval-card-head">
@@ -36,10 +76,14 @@ function EvaluationCard({ ev, onDelete }: { ev: EvaluationDTO; onDelete: (id: nu
         <span className="eval-scenario">解答: <strong>{ev.scenario_key}</strong></span>
         <span className="eval-meta muted">
           {ev.model}
+          {` · ${(ev.tokens_in ?? 0).toLocaleString()}/${(ev.tokens_out ?? 0).toLocaleString()} tok`}
           {ev.latency_ms != null && ` · ${(ev.latency_ms / 1000).toFixed(1)}s`}
           {' · '}{formatDate(ev.created_at)}
         </span>
-        <button className="btn-small btn-delete" onClick={() => onDelete(ev.id)}>削除</button>
+        <span className="eval-card-actions">
+          <button className="btn-small" onClick={exportReport}>レポート出力</button>
+          <button className="btn-small btn-delete" onClick={() => onDelete(ev.id)}>削除</button>
+        </span>
       </div>
 
       {ev.summary && <p className="eval-summary">{ev.summary}</p>}
@@ -85,6 +129,11 @@ export function EvaluationPanel({ historyId }: { historyId: number }) {
   const [evals, setEvals] = useState<EvaluationDTO[]>([])
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const titleByKey = useMemo(
+    () => Object.fromEntries(scenarios.map(s => [s.scenario_key, s.title])),
+    [scenarios],
+  )
 
   useEffect(() => {
     let alive = true
@@ -169,7 +218,14 @@ export function EvaluationPanel({ historyId }: { historyId: number }) {
         </div>
       ) : (
         <div className="eval-cards">
-          {evals.map(ev => <EvaluationCard key={ev.id} ev={ev} onDelete={del} />)}
+          {evals.map(ev => (
+            <EvaluationCard
+              key={ev.id}
+              ev={ev}
+              scenarioTitle={titleByKey[ev.scenario_key] ?? ''}
+              onDelete={del}
+            />
+          ))}
         </div>
       )}
     </section>
