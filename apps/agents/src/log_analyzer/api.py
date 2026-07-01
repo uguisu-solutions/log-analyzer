@@ -49,6 +49,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from log_analyzer import pipeline_runner, prompt_slots, storage
+from log_analyzer.log_compaction import compact_log_text
 from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.rally_agent import run_rally_stream
 from log_analyzer.rally_two_stage import run_two_stage_stream
@@ -663,7 +664,9 @@ def _build_topology_log_text(
         for i, a in enumerate(attached_logs, 1):
             name = a["name"] or f"log_{i}"
             parts.append(f"[ログ] {name}:")
-            parts.append(a["content"].rstrip())
+            # 反復行を畳み込んで入力トークンを削減（設定は log_compaction 側の
+            # 環境変数で調整、既定 ON。config は構造的に重要なので圧縮しない）。
+            parts.append(compact_log_text(a["content"]).rstrip())
             parts.append("")
         for i, a in enumerate(attached_configs, 1):
             name = a["name"] or f"config_{i}"
