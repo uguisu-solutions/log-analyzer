@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -49,7 +50,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from log_analyzer import pipeline_runner, prompt_slots, storage
-from log_analyzer.log_compaction import compact_log_text
+from log_analyzer.log_compaction import compact_log_reporting
 from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.rally_agent import run_rally_stream
 from log_analyzer.rally_two_stage import run_two_stage_stream
@@ -60,6 +61,11 @@ from log_analyzer.source import db_schema as source_db_schema_mod
 from log_analyzer.source import indexer as source_indexer
 
 load_dotenv()
+
+# uvicorn 起動時にコンソールへ確実に出るよう uvicorn のロガーに載せる
+# （root ロガーは未設定のため INFO が握り潰される）。ログ圧縮の適用状況/圧縮率の
+# トレースはここに出す。
+_logger = logging.getLogger("uvicorn.error")
 storage.init_db()
 
 app = FastAPI(title="log-analyzer API", version="0.2.0")
@@ -666,7 +672,22 @@ def _build_topology_log_text(
             parts.append(f"[ログ] {name}:")
             # 反復行を畳み込んで入力トークンを削減（設定は log_compaction 側の
             # 環境変数で調整、既定 ON。config は構造的に重要なので圧縮しない）。
-            parts.append(compact_log_text(a["content"]).rstrip())
+            compacted, stats = compact_log_reporting(a["content"])
+            if stats is None:
+                _logger.info("[log_compaction] %s: 無効(LOG_COMPACT_ENABLED=0)", name)
+            elif stats.dropped_lines > 0:
+                _logger.info(
+                    "[log_compaction] %s: %d行→%d行 (%.1fKB→%.1fKB, %.1f%%), %d行畳み込み",
+                    name, stats.original_lines, stats.kept_lines,
+                    stats.original_bytes / 1024, stats.compacted_bytes / 1024,
+                    stats.compression_ratio * 100, stats.dropped_lines,
+                )
+            else:
+                _logger.info(
+                    "[log_compaction] %s: 非圧縮 (%d行、反復なし/閾値未満)",
+                    name, stats.original_lines,
+                )
+            parts.append(compacted.rstrip())
             parts.append("")
         for i, a in enumerate(attached_configs, 1):
             name = a["name"] or f"config_{i}"

@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import pytest
 
-from log_analyzer.log_compaction import compact_log, compact_log_text
+from log_analyzer.log_compaction import (
+    compact_log,
+    compact_log_reporting,
+    compact_log_text,
+)
 
 
 def _make_repetitive_log(n: int) -> str:
@@ -97,3 +101,23 @@ def test_wrapper_enabled_by_default(monkeypatch):
     out = compact_log_text(text)
     assert len(out) < len(text)
     assert "省略サマリ" in out
+
+
+def test_reporting_returns_stats_when_enabled(monkeypatch):
+    """有効時は (圧縮text, CompactionResult) を返す。"""
+    monkeypatch.delenv("LOG_COMPACT_ENABLED", raising=False)
+    text = _make_repetitive_log(1000)
+    out, stats = compact_log_reporting(text)
+    assert stats is not None
+    assert stats.original_lines == 1000
+    assert stats.dropped_lines > 0
+    assert out == stats.text
+
+
+def test_reporting_returns_none_when_disabled(monkeypatch):
+    """無効時は (原文, None) を返す（未適用の判別用）。"""
+    monkeypatch.setenv("LOG_COMPACT_ENABLED", "0")
+    text = _make_repetitive_log(1000)
+    out, stats = compact_log_reporting(text)
+    assert stats is None
+    assert out == text

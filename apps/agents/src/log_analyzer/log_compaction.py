@@ -213,3 +213,17 @@ def compact_log_text(text: str) -> str:
     if not _enabled():
         return text
     return compact_log(text).text
+
+
+def compact_log_reporting(text: str) -> tuple[str, CompactionResult | None]:
+    """環境変数ゲート付き。圧縮テキストと統計をタプルで返す。
+
+    トレース出力（圧縮率のログ等）を出したい呼び出し側向け。無効時は
+    ``(原文, None)`` を返す（None＝圧縮が適用されなかったことを表す）。
+    有効時は常に ``CompactionResult`` を返し、反復が無く畳み込めなかった
+    場合も統計（dropped_lines=0）で判別できる。
+    """
+    if not _enabled():
+        return text, None
+    res = compact_log(text)
+    return res.text, res
