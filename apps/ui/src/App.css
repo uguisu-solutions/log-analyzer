@@ -3822,6 +3822,22 @@ code {
 .eval-scenario { font-size: 0.95rem; }
 .eval-meta { font-size: 0.8rem; }
 .eval-card-actions { margin-left: auto; display: flex; gap: 0.4rem; }
+.eval-breakdown {
+  margin: 0.6rem 0 0.2rem;
+  padding: 0.5rem 0.7rem;
+  background: #f1f5f9;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.eval-breakdown-title {
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+.eval-breakdown ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  line-height: 1.5;
+}
 .eval-summary {
   margin: 0.6rem 0;
   font-size: 0.9rem;

@@ -33,6 +33,10 @@ function buildEvaluationReport(ev: EvaluationDTO, scenarioTitle: string): string
   L.push(`- 評価日時: ${formatDate(ev.created_at)}`)
   L.push(`- 解析履歴 ID: #${ev.analysis_history_id}`)
   L.push('')
+  L.push('## 配点内訳')
+  L.push(`- 真因到達度（⑥・採点主軸）: **${ev.score == null ? '-' : ev.score} / 10** — ${scoreBand(ev.score)}`)
+  L.push(`- 副軸（⑦ ジュニアの落とし穴）: スコアに非反映（参考のみ） — 避けた ${ev.pitfalls_avoided.length}件 / 踏んだ ${ev.pitfalls_hit.length}件`)
+  L.push('')
   if (ev.summary) {
     L.push('## 総評')
     L.push(ev.summary)
@@ -56,6 +60,17 @@ function scoreClass(score: number | null): string {
   if (s >= 7) return 'eval-score-high'
   if (s >= 4) return 'eval-score-mid'
   return 'eval-score-low'
+}
+
+/** スコア → ⑥真因到達度のルーブリック帯ラベル (配点内訳の説明用)。 */
+function scoreBand(score: number | null): string {
+  const s = score ?? -1
+  if (s >= 9) return '真因を的確に特定'
+  if (s >= 7) return '主要因は正しいが機序/対処が不足'
+  if (s >= 5) return '方向は合うが機序が違う/部分的'
+  if (s >= 3) return 'かすっている/派生症状に留まり真因を外す'
+  if (s >= 1) return '真因とは別物'
+  return '評価失敗/未採点'
 }
 
 function EvaluationCard(
@@ -84,6 +99,20 @@ function EvaluationCard(
           <button className="btn-small" onClick={exportReport}>レポート出力</button>
           <button className="btn-small btn-delete" onClick={() => onDelete(ev.id)}>削除</button>
         </span>
+      </div>
+
+      <div className="eval-breakdown">
+        <div className="eval-breakdown-title">配点内訳</div>
+        <ul>
+          <li>
+            真因到達度（⑥・採点主軸）: <strong>{ev.score == null ? '-' : ev.score}/10</strong>
+            {' — '}{scoreBand(ev.score)}
+          </li>
+          <li>
+            副軸（⑦ 落とし穴）: <span className="muted">スコアに非反映（参考のみ）</span>
+            {` — 避けた ${ev.pitfalls_avoided.length} / 踏んだ ${ev.pitfalls_hit.length}`}
+          </li>
+        </ul>
       </div>
 
       {ev.summary && <p className="eval-summary">{ev.summary}</p>}
