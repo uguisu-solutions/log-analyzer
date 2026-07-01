@@ -157,6 +157,9 @@ def run_evaluation(
         response = client.messages.create(
             model=chosen_model,
             max_tokens=_env_int("EVAL_MAX_TOKENS", 2000),
+            # 採点の再現性のため temperature=0 で固定 (同一入力→同一スコア)。
+            # LLM なので完全決定的ではないがブレを最小化する。
+            temperature=0,
             system=sys_prompt,
             messages=[{"role": "user", "content": _build_user_input(result, scenario)}],
         )
