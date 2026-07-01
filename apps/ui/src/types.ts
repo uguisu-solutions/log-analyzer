@@ -477,3 +477,36 @@ export interface QuestionnaireTemplate {
 
 // {key: answer} の辞書
 export type QuestionnaireAnswers = Record<string, string>
+
+// ─── 解析評価 (解析レポート × 解答 の比較採点) ──────────────────
+export interface AnswerScenario {
+  scenario_key: string
+  title: string
+  trigger?: string
+  initial_hypothesis?: string
+  path?: string
+  decision_points?: string
+  evidence_source?: string
+  conclusion?: string
+  junior_pitfall?: string
+  notes?: string
+  source_file?: string
+  imported_at?: string
+}
+
+export interface EvaluationDTO {
+  id: number
+  analysis_history_id: number
+  scenario_key: string
+  score: number | null
+  good_points: string[]
+  bad_points: string[]
+  pitfalls_avoided: string[]
+  pitfalls_hit: string[]
+  summary: string
+  model: string
+  tokens_in: number | null
+  tokens_out: number | null
+  latency_ms: number | null
+  created_at: string
+}
