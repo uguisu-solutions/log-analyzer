@@ -174,6 +174,33 @@ def init_db() -> None:
             )
             """
         )
+
+        # analysis_evaluations テーブル (解析レポート × 解答 の評価結果、履歴に紐付け)
+        # 1 履歴に複数評価を許可 (別シナリオ / 再評価は追記して全部残す)。
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_history_id INTEGER NOT NULL,
+                scenario_key TEXT NOT NULL,
+                score INTEGER,
+                good_points_json TEXT NOT NULL DEFAULT '[]',
+                bad_points_json TEXT NOT NULL DEFAULT '[]',
+                pitfalls_avoided_json TEXT NOT NULL DEFAULT '[]',
+                pitfalls_hit_json TEXT NOT NULL DEFAULT '[]',
+                summary TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                tokens_in INTEGER,
+                tokens_out INTEGER,
+                latency_ms INTEGER,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_analysis_evaluations_history "
+            "ON analysis_evaluations(analysis_history_id, created_at DESC)"
+        )
         conn.commit()
 
         # デフォルトテンプレを idempotent に投入 (初回起動時のみ)
@@ -635,6 +662,97 @@ def delete_answer_scenario(scenario_key: str) -> bool:
         cursor = conn.execute(
             "DELETE FROM answer_scenarios WHERE scenario_key = ?",
             (str(scenario_key).strip(),),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+# ─── analysis_evaluations (解析レポート × 解答 の評価結果) ──────────
+
+_EVAL_COLS = (
+    "id, analysis_history_id, scenario_key, score, good_points_json, bad_points_json, "
+    "pitfalls_avoided_json, pitfalls_hit_json, summary, model, tokens_in, tokens_out, "
+    "latency_ms, created_at"
+)
+_EVAL_LIST_FIELDS = ("good_points", "bad_points", "pitfalls_avoided", "pitfalls_hit")
+
+
+def _row_to_evaluation(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    for f in _EVAL_LIST_FIELDS:
+        raw = d.pop(f"{f}_json", None)
+        try:
+            d[f] = json.loads(raw) if raw else []
+        except Exception:  # noqa: BLE001
+            d[f] = []
+    return d
+
+
+def insert_evaluation(
+    *,
+    analysis_history_id: int,
+    scenario_key: str,
+    score: int | None,
+    good_points: list[str],
+    bad_points: list[str],
+    pitfalls_avoided: list[str],
+    pitfalls_hit: list[str],
+    summary: str,
+    model: str,
+    tokens_in: int | None = None,
+    tokens_out: int | None = None,
+    latency_ms: int | None = None,
+) -> dict:
+    """評価を 1 件保存し、保存後の行 (リストはパース済み) を返す。"""
+    now = _now_iso()
+
+    def _j(v: list[str]) -> str:
+        return json.dumps([str(x) for x in (v or [])], ensure_ascii=False)
+
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO analysis_evaluations "
+            "(analysis_history_id, scenario_key, score, good_points_json, bad_points_json, "
+            " pitfalls_avoided_json, pitfalls_hit_json, summary, model, tokens_in, tokens_out, "
+            " latency_ms, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                analysis_history_id, str(scenario_key), score,
+                _j(good_points), _j(bad_points), _j(pitfalls_avoided), _j(pitfalls_hit),
+                summary, model, tokens_in, tokens_out, latency_ms, now,
+            ),
+        )
+        conn.commit()
+        eval_id = int(cur.lastrowid or 0)
+    saved = get_evaluation(eval_id)
+    if saved is None:
+        raise RuntimeError("failed to retrieve evaluation after insert")
+    return saved
+
+
+def get_evaluation(eval_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_EVAL_COLS} FROM analysis_evaluations WHERE id = ?", (eval_id,)
+        ).fetchone()
+    return _row_to_evaluation(row) if row else None
+
+
+def list_evaluations(analysis_history_id: int) -> list[dict]:
+    """指定履歴に紐付く評価を新しい順で返す (後から確認用)。"""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_EVAL_COLS} FROM analysis_evaluations "
+            "WHERE analysis_history_id = ? ORDER BY created_at DESC, id DESC",
+            (analysis_history_id,),
+        ).fetchall()
+    return [_row_to_evaluation(r) for r in rows]
+
+
+def delete_evaluation(eval_id: int) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM analysis_evaluations WHERE id = ?", (eval_id,)
         )
         conn.commit()
         return cursor.rowcount > 0
