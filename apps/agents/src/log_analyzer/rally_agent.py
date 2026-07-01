@@ -15,10 +15,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from log_analyzer import evidence_grounding
 from log_analyzer.rally import source_tools
 from log_analyzer.rally.integrator import integrator_node
 from log_analyzer.rally.monitors import MONITOR_FNS
@@ -36,6 +38,9 @@ from log_analyzer.schema import (
     SuspectedNodeFinding,
 )
 from log_analyzer.tracing import flush, get_client, usage_for
+
+# uvicorn 起動時にコンソールへ確実に出るよう uvicorn のロガーに載せる。
+_logger = logging.getLogger("uvicorn.error")
 
 # decision_waiter コールバックの戻り値型:
 #   {"action": "continue", "extend_by": int}  rally_max_rounds を +extend_by 延長して再開
@@ -206,6 +211,8 @@ def _build_analysis_result(
     rally_max_rounds: int,
     wall_ms: int,
     topology_node_ids: list[str] | None = None,
+    log_text: str = "",
+    bq_evidence: list[dict] | None = None,
 ) -> AnalysisResult:
     """final イベント用の AnalysisResult を組み立てる。"""
     total_in = sum(e["tokens_in"] for e in token_log)
@@ -295,6 +302,34 @@ def _build_analysis_result(
                     )
                     seen.add(s)
 
+    # 証拠グラウンディング検証 (グループ2-b・決定的/LLM不使用): 候補に引用された
+    # 具体的識別子 (id=N / IP / MAC 等) が、AI が実際に見た入力 (圧縮後 log_text ＋
+    # 取得ログ) に実在するか照合。実在しなければでっち上げの疑いとして警告し、
+    # 確信度に上限をかける安全ネット。
+    confidence = float(integrator_result.get("confidence", 0.0))
+    corpus = log_text
+    if bq_evidence:
+        corpus += "\n" + "\n".join(str(e.get("content") or "") for e in bq_evidence)
+    confidence, grounding = evidence_grounding.apply_grounding(
+        integrator_result.get("root_cause_candidates", []) or [], confidence, corpus
+    )
+    # 常に結果を出す（全接地でも「2-b が動いた」ことを確認できるように）。
+    if grounding.has_ungrounded:
+        shown = ", ".join(grounding.ungrounded[:10])
+        more = " ほか" if len(grounding.ungrounded) > 10 else ""
+        msg = (
+            f"ungrounded_evidence: 提供ログに無い具体値を検出 ({grounding.grounded}/"
+            f"{grounding.total_atoms} 接地) — {shown}{more}（確信度に上限を適用）"
+        )
+        info_loss.append(msg)
+        _logger.info("[evidence_grounding] %s", msg)
+    elif grounding.total_atoms > 0:
+        msg = f"evidence_grounding: 引用された具体値 {grounding.total_atoms} 件すべて接地（でっち上げなし）"
+        info_loss.append(msg)
+        _logger.info("[evidence_grounding] %s", msg)
+    else:
+        _logger.info("[evidence_grounding] 照合対象の具体値なし")
+
     return AnalysisResult(
         trace_id=trace_id,
         config_id=ConfigId.CONFIG4,
@@ -305,7 +340,7 @@ def _build_analysis_result(
         recommended_actions=[
             RecommendedAction(**a) for a in integrator_result.get("recommended_actions", [])
         ],
-        confidence=float(integrator_result.get("confidence", 0.0)),
+        confidence=confidence,
         metrics=Metrics(
             tokens_in=total_in,
             tokens_out=total_out,
@@ -745,6 +780,8 @@ async def run_rally_stream(
         rally_max_rounds=state["rally_max_rounds"],
         wall_ms=wall_ms,
         topology_node_ids=topology_node_ids or None,
+        log_text=state["log_text"],
+        bq_evidence=state.get("bq_evidence"),
     )
 
     # ソースツールが使われていれば、参照記録を SourceContext として結果に載せる
