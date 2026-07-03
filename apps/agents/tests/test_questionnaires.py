@@ -23,32 +23,32 @@ def isolated_db(tmp_path: Path, monkeypatch):
 
 
 def test_default_questionnaire_seeded(isolated_db):
-    """init_db で default テンプレが自動投入されること。"""
+    """init_db で新問診票 (障害状況問診票) の default テンプレが自動投入されること。"""
     rows = storage.list_questionnaires()
     assert len(rows) == 1
     assert rows[0]["name"] == "default"
     items = rows[0]["items"]
-    assert len(items) == 11
-    # 概要(必須) + 問診項目が揃っている
+    assert len(items) == 9
     keys = {it["key"] for it in items}
-    assert keys == {
-        "event", "onset", "occurred_at", "location", "trigger_action",
-        "impact_scope", "past_occurrence", "has_topology_diagram",
-        "has_device_list", "has_device_roles", "has_config_info",
-    }
-    # 概要は先頭かつ必須
-    assert items[0]["key"] == "event"
-    assert items[0]["label"] == "概要"
+    assert "事象" in keys
+    assert "まだ確認していないこと" in keys
+    assert "いま一番迷っていること" in keys
+    # 事象は先頭かつ必須
+    assert items[0]["key"] == "事象"
     assert items[0]["required"] is True
+    # 必須は 事象 / いつから / 影響を受ける対象 の 3 つ
+    required = {it["key"] for it in items if it["required"]}
+    assert required == {"事象", "いつから（その前は正常だったか）", "影響を受ける対象と、受けない対象"}
 
 
-def test_default_questionnaire_migration_adds_event(isolated_db):
-    """event 無しの旧 default テンプレに init_db を再実行すると event が先頭に補われる。"""
+def test_default_questionnaire_migration_upgrades_old(isolated_db):
+    """旧デフォルト構造の default に init_db を再実行すると新問診票へ置き換わる。"""
     import json
-    # default の items を旧スキーマ (event 無し) に差し替える
     with storage._connect() as conn:
         old_items = [
-            {"key": "symptom_onset", "label": "x", "type": "text",
+            {"key": "event", "label": "概要", "type": "textarea",
+             "options": [], "placeholder": "", "required": True},
+            {"key": "occurred_at", "label": "x", "type": "text",
              "options": [], "placeholder": "", "required": False},
         ]
         conn.execute(
@@ -56,12 +56,28 @@ def test_default_questionnaire_migration_adds_event(isolated_db):
             (json.dumps(old_items, ensure_ascii=False),),
         )
         conn.commit()
-    storage.init_db()  # マイグレーションが走る
+    storage.init_db()  # 旧→新へアップグレード
     default = next(r for r in storage.list_questionnaires() if r["name"] == "default")
     keys = [it["key"] for it in default["items"]]
-    assert keys[0] == "event"
-    assert default["items"][0]["required"] is True
-    assert "symptom_onset" in keys  # 既存項目は保持
+    assert keys[0] == "事象"
+    assert "いま一番迷っていること" in keys
+    assert "occurred_at" not in keys  # 旧項目は置き換えられている
+
+
+def test_default_questionnaire_custom_not_overwritten(isolated_db):
+    """旧マーカーキーを含まない独自 default は上書きしない。"""
+    import json
+    with storage._connect() as conn:
+        custom = [{"key": "my_custom", "label": "x", "type": "text",
+                   "options": [], "placeholder": "", "required": False}]
+        conn.execute(
+            "UPDATE questionnaire_templates SET items_json = ? WHERE name = 'default'",
+            (json.dumps(custom, ensure_ascii=False),),
+        )
+        conn.commit()
+    storage.init_db()
+    default = next(r for r in storage.list_questionnaires() if r["name"] == "default")
+    assert [it["key"] for it in default["items"]] == ["my_custom"]
 
 
 def test_default_seed_idempotent(isolated_db):

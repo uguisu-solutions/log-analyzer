@@ -209,67 +209,82 @@ def init_db() -> None:
 
 
 _DEFAULT_QUESTIONNAIRE_NAME = "default"
+# 障害状況問診票 (2026-07 改訂)。key は日本語フィールド名 = プロンプトが参照する呼称。
+# log_text の問診票ブロックは `- **{key}**: {answer}` で描画されるため、key を
+# そのまま LLM が読む (プランナー/監視/統合の「②まだ確認していないこと」「③いま一番
+# 迷っていること」等の参照と一致させる)。必須度は required(bool)へ写像 (必須→True)。
 _DEFAULT_QUESTIONNAIRE_ITEMS: list[dict] = [
-    {"key": "event", "label": "概要",
+    {"key": "事象", "label": "【事象】何が起きているか／発生頻度は？",
      "type": "textarea", "options": [],
-     "placeholder": "発生している事象の概要を記述（必須）", "required": True},
-    {"key": "onset", "label": "いつから発生していますか",
-     "type": "text", "options": [], "placeholder": "", "required": False},
-    {"key": "occurred_at", "label": "特定の日時で発生しますか",
-     "type": "text", "options": [], "placeholder": "", "required": False},
-    {"key": "location", "label": "どこで発生しましたか",
-     "type": "text", "options": [], "placeholder": "", "required": False},
-    {"key": "trigger_action", "label": "何を実行した際に発生しましたか",
-     "type": "textarea", "options": [], "placeholder": "", "required": False},
-    {"key": "impact_scope", "label": "障害発生の範囲はどの程度ですか",
-     "type": "textarea", "options": [], "placeholder": "", "required": False},
-    {"key": "past_occurrence", "label": "過去にも同様の事象が発生していますか",
-     "type": "text", "options": [], "placeholder": "", "required": False},
-    {"key": "has_topology_diagram", "label": "システム構成図はお手元にございますか",
-     "type": "choice", "options": ["はい", "いいえ"], "placeholder": "", "required": False},
-    {"key": "has_device_list", "label": "機器の一覧はお手元にございますか",
-     "type": "choice", "options": ["はい", "いいえ"], "placeholder": "", "required": False},
-    {"key": "has_device_roles", "label": "機器の役割を記載した情報はございますか",
-     "type": "choice", "options": ["はい", "いいえ"], "placeholder": "", "required": False},
-    {"key": "has_config_info", "label": "設定情報はお手元にございますか",
-     "type": "choice", "options": ["はい", "いいえ"], "placeholder": "", "required": False},
+     "placeholder": "何が・誰に・どんな症状か、発生頻度はどうか。1〜2文で。（必須）", "required": True},
+    {"key": "いつから（その前は正常だったか）", "label": "【①変化点】いつから／その前は正常だったか",
+     "type": "textarea", "options": [],
+     "placeholder": "「昨日まで正常→今朝から」のように前後で書く。目安でよい。（必須）", "required": True},
+    {"key": "その頃に変わったこと", "label": "【①変化点】その頃に変わったこと",
+     "type": "textarea", "options": [],
+     "placeholder": "設定変更・更新・新規利用・人員/拠点の変化など。心当たりなければ『なし』。（推奨）",
+     "required": False},
+    {"key": "影響を受ける対象と、受けない対象", "label": "【②対照・否定】影響を受ける／受けない対象",
+     "type": "textarea", "options": [],
+     "placeholder": "『Aは起きるがBは大丈夫』の対で。例：無線NG/有線OK、3Fだけ、午前だけ、特定アプリだけ。（必須）",
+     "required": True},
+    {"key": "確認して問題なかったこと", "label": "【②対照・否定】確認して問題なかったこと",
+     "type": "textarea", "options": [],
+     "placeholder": "自分で確認してOKだったこと（＝確定した手がかり）。（推奨）", "required": False},
+    {"key": "まだ確認していないこと", "label": "【②対照・否定】まだ確認していないこと",
+     "type": "textarea", "options": [],
+     "placeholder": "未確認のもの。『正常』とは区別して書く。（推奨）", "required": False},
+    {"key": "原因の見当", "label": "【③見立て】原因の見当",
+     "type": "textarea", "options": [],
+     "placeholder": "思い当たる原因。なければ空欄でよい。（任意）", "required": False},
+    {"key": "やろうとしている打ち手", "label": "【③打ち手】やろうとしている打ち手",
+     "type": "textarea", "options": [],
+     "placeholder": "やりたい対処。なければ空欄でよい。（任意）", "required": False},
+    {"key": "いま一番迷っていること", "label": "【③迷い】いま一番迷っていること",
+     "type": "textarea", "options": [],
+     "placeholder": "うまく決められない・進められない点をそのまま書く。ここが相談の核。（推奨）",
+     "required": False},
 ]
+
+# 新問診票のキー集合と、旧デフォルト特有キー (アップグレード判定用)
+_NEW_DEFAULT_KEYS = {it["key"] for it in _DEFAULT_QUESTIONNAIRE_ITEMS}
+_OLD_DEFAULT_MARKER_KEYS = {"occurred_at", "has_topology_diagram", "trigger_action", "event"}
 
 
 def _ensure_default_questionnaire(conn: sqlite3.Connection) -> None:
-    """name='default' のテンプレが無ければ作成 (初回起動時のみ)。
+    """name='default' のテンプレを新問診票 (障害状況問診票) に揃える。
 
-    既に存在する場合でも、必須項目 ``event`` (事象) が欠けていれば先頭に補う
-    (旧スキーマからのマイグレーション。既存の他項目・回答テンプレ構造は保持)。
+    - 無ければ新問診票で作成。
+    - 既存が旧デフォルト構造 (occurred_at / has_topology_diagram 等を含む) なら
+      新問診票へ置き換える (2026-07 改訂。PoC 期間中の旧互換は保証しない方針)。
+    - 上記以外 (利用者が独自に編集した default) は触らない。
     """
     row = conn.execute(
         "SELECT id, items_json FROM questionnaire_templates WHERE name = ?",
         (_DEFAULT_QUESTIONNAIRE_NAME,),
     ).fetchone()
     now = _now_iso()
+    payload = json.dumps(_DEFAULT_QUESTIONNAIRE_ITEMS, ensure_ascii=False)
     if row is None:
         conn.execute(
             "INSERT INTO questionnaire_templates "
             "(name, description, items_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (
-                _DEFAULT_QUESTIONNAIRE_NAME,
-                "デフォルトの問診票",
-                json.dumps(_DEFAULT_QUESTIONNAIRE_ITEMS, ensure_ascii=False),
-                now,
-                now,
-            ),
+            (_DEFAULT_QUESTIONNAIRE_NAME, "障害状況問診票", payload, now, now),
         )
         return
-    # マイグレーション: event (事象) 必須項目が無ければ先頭に追加
     try:
         items = json.loads(row[1]) if row[1] else []
-    except Exception:
+    except Exception:  # noqa: BLE001
         items = []
-    if not any(isinstance(it, dict) and it.get("key") == "event" for it in items):
-        items = [_DEFAULT_QUESTIONNAIRE_ITEMS[0], *items]
+    keys = {it.get("key") for it in items if isinstance(it, dict)}
+    if keys == _NEW_DEFAULT_KEYS:
+        return  # 既に新問診票
+    # 旧デフォルト構造なら新問診票へアップグレード
+    if keys & _OLD_DEFAULT_MARKER_KEYS:
         conn.execute(
-            "UPDATE questionnaire_templates SET items_json = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(items, ensure_ascii=False), now, row[0]),
+            "UPDATE questionnaire_templates SET items_json = ?, description = ?, updated_at = ? "
+            "WHERE id = ?",
+            (payload, "障害状況問診票", now, row[0]),
         )
 
 
