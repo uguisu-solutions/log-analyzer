@@ -438,9 +438,9 @@ export interface NodeAttachment {
 // nodeId → 添付ファイル群
 export type NodeAttachments = Record<string, NodeAttachment[]>
 
-// 1 ノードのログ取得元。'upload' = ファイルアップロード(従来) / 'bigquery' = BQ 取得
-export interface NodeLogSource {
-  type: 'upload' | 'bigquery'
+// 1 つの BigQuery テーブル指定 (type フィールドは持たない)。
+// アップロードは常に有効なので、ここは「追加で BQ から取得するテーブル」を表す。
+export interface NodeBqTable {
   host?: string        // BQ 上の host 値 (空なら node id)
   table?: string       // テーブル名 (空なら環境変数の既定テーブル)
   // 列構成はテーブルごとに異なる前提。空欄でその絞り込みを無効化できる
@@ -453,8 +453,8 @@ export interface NodeLogSource {
   limit?: number       // 取得既定件数 (任意)
 }
 
-// nodeId → ログ取得元設定。未設定ノードは 'upload' 扱い
-export type NodeLogSources = Record<string, NodeLogSource>
+// nodeId → その節点に紐づく BQ テーブル群 (1 ノードに複数テーブル可)
+export type NodeBigquerySources = Record<string, NodeBqTable[]>
 
 // 問診票 (Phase B) ─────────────────────────────────────
 export interface QuestionnaireItem {

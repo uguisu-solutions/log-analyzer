@@ -3866,3 +3866,19 @@ code {
 .eval-list.good li { color: #14532d; }
 .eval-list.bad li  { color: #7f1d1d; }
 
+
+/* ─── BigQuery テーブル (複数可) カード ─────────────────────── */
+.bq-tables-block { margin-top: 0.8rem; }
+.bq-table-card {
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  margin-bottom: 0.6rem;
+  background: #fafbfc;
+}
+.bq-table-card .attach-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+}
