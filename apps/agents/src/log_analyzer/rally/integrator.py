@@ -121,6 +121,20 @@ INTEGRATOR_PROMPT = """\
 """
 
 
+def _integrator_max_tokens() -> int:
+    """統合の出力上限。プロンプト改訂で候補の確定/棄却条件・暫定/本質の詳細手順・
+    迷いへの回答・suspected_nodes が加わり出力が増えたため既定 10000。旧 6000 では
+    途中切断→parse 失敗→候補0/conf0 の空フォールバックが頻発した。
+    RALLY_INTEGRATOR_MAX_TOKENS で調整可。"""
+    raw = os.environ.get("RALLY_INTEGRATOR_MAX_TOKENS")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return 10000
+
+
 def integrator_node(state: Config4State) -> dict:
     p_overrides = state.get("prompt_overrides", {}) or {}
     m_overrides = state.get("model_overrides", {}) or {}
@@ -174,20 +188,25 @@ def integrator_node(state: Config4State) -> dict:
     client = anthropic.Anthropic()
     started = time.perf_counter()
     # 複数ラウンドのラリーで monitor_results が肥大すると応答も長くなりやすい。
-    # 推奨アクションに手順/リスク/ロールバックが加わり出力が増えるため余裕を持たせる
+    # 推奨アクションに手順/リスク/ロールバックが加わり出力が増えるため余裕を持たせる。
+    system = [
+        {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
+    ]
+    messages: list[dict] = [{"role": "user", "content": user_blocks}]
+    total_in = total_out = total_cc = total_cr = 0
+
+    def _accumulate(usage) -> None:
+        nonlocal total_in, total_out, total_cc, total_cr
+        c = usage_components(usage)
+        total_in += c["input"] + c["cache_creation"] + c["cache_read"]
+        total_out += c["output"]
+        total_cc += c["cache_creation"]
+        total_cr += c["cache_read"]
+
     response = client.messages.create(
-        model=model,
-        max_tokens=6000,
-        system=[
-            {
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_blocks}],
+        model=model, max_tokens=_integrator_max_tokens(), system=system, messages=messages
     )
-    latency_ms = int((time.perf_counter() - started) * 1000)
+    _accumulate(response.usage)
     raw = response.content[0].text
     parsed, parse_error = safe_extract_json(
         raw,
@@ -197,22 +216,48 @@ def integrator_node(state: Config4State) -> dict:
             "confidence": 0.0,
         },
     )
+    # パース失敗 (多くは出力切断) → JSON のみで簡潔に 1 回だけ再生成して救済する。
+    # 統合が「候補0・conf0」の空フォールバックで完了するのを防ぐ。
+    if parse_error:
+        messages.append({"role": "assistant", "content": raw or "(空応答)"})
+        messages.append({
+            "role": "user",
+            "content": (
+                "前の応答から JSON を抽出できませんでした（途中で切れた可能性があります）。"
+                "これまでの分析を踏まえ、指定スキーマ（root_cause_candidates / "
+                "recommended_actions / confidence、トポロジ時は suspected_nodes）に厳密に従い、"
+                "前置き・説明文・コードフェンスを一切付けず JSON オブジェクトのみを出力してください。"
+                "収まらない場合は各アクションの steps / risks を要点に絞って簡潔にすること。"
+            ),
+        })
+        try:
+            retry = client.messages.create(
+                model=model, max_tokens=_integrator_max_tokens(), system=system, messages=messages
+            )
+            _accumulate(retry.usage)
+            rtext = retry.content[0].text
+            retry_parsed, retry_err = safe_extract_json(rtext, fallback=parsed)
+            if retry_err is None:
+                parsed, parse_error, raw = retry_parsed, None, rtext
+        except Exception:  # noqa: BLE001 — 再試行失敗時は初回フォールバックのまま継続
+            pass
+
     if parse_error:
         # 後段が info_loss_flags に転記できるようマークしておく
         parsed["_parse_error"] = parse_error
         parsed["_raw_truncated"] = raw[-500:]
 
-    uc = usage_components(response.usage)
+    latency_ms = int((time.perf_counter() - started) * 1000)
     return {
         "result": parsed,
         "token_log_entry": {
             "role": "integrator",
             "model": model,
             # tokens_in は cache 書込/読出を含む入力処理トークン総量
-            "tokens_in": uc["input"] + uc["cache_creation"] + uc["cache_read"],
-            "tokens_out": uc["output"],
-            "cache_creation": uc["cache_creation"],
-            "cache_read": uc["cache_read"],
+            "tokens_in": total_in,
+            "tokens_out": total_out,
+            "cache_creation": total_cc,
+            "cache_read": total_cr,
             "latency_ms": latency_ms,
             "input": user_input[:2000],
             "raw_output": raw,
