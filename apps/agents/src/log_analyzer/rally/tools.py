@@ -131,6 +131,14 @@ BIGQUERY_SCHEMA_TOOL_SCHEMA: dict[str, Any] = {
                 "type": "string",
                 "description": "対象ノードの host (= node id)。許可されたノードのみ指定可。",
             },
+            "table": {
+                "type": "string",
+                "description": (
+                    "同一 host に複数テーブルが紐づく場合に、確認するテーブル名を指定する。"
+                    "テーブルが 1 つだけなら省略可。指定可能なテーブルは log_text の "
+                    "[ログ取得元: BigQuery] 記載を参照。"
+                ),
+            },
         },
         "required": ["host"],
     },
@@ -152,6 +160,14 @@ BIGQUERY_TOOL_SCHEMA: dict[str, Any] = {
             "host": {
                 "type": "string",
                 "description": "取得対象ノードの host (= node id)。許可されたノードのみ指定可。",
+            },
+            "table": {
+                "type": "string",
+                "description": (
+                    "同一 host に複数テーブルが紐づく場合に、取得対象テーブル名を指定する。"
+                    "テーブルが 1 つだけなら省略可。指定可能なテーブルは log_text の "
+                    "[ログ取得元: BigQuery] 記載を参照。先に bigquery_schema で列を確認すること。"
+                ),
             },
             "start_time": {
                 "type": "string",
@@ -251,11 +267,56 @@ def _format_rows(host: str, rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def run_bigquery_tool(tool_input: dict, allowed_sources: dict[str, dict]) -> str:
+def _sources_for_host(allowed_sources: dict, host: str) -> list[dict]:
+    """host に許可された BQ ソース設定を list で返す。
+
+    許可リストは host→list[dict] (複数テーブル) を基本とするが、後方互換で
+    host→dict (単一テーブル・旧形式) も受け付ける。
+    """
+    v = allowed_sources.get(host)
+    if isinstance(v, dict):
+        return [v]
+    if isinstance(v, list):
+        return [s for s in v if isinstance(s, dict)]
+    return []
+
+
+def _resolve_bq_source(
+    allowed_sources: dict, host: str, table: str | None
+) -> tuple[dict | None, str | None]:
+    """(host, table) から許可済みソースを 1 つ解決する。
+
+    返り値: ``(src, None)`` 成功 / ``(None, エラー文)`` 失敗。
+    - host が複数テーブルを持つのに table 未指定 → どのテーブルか促すエラー。
+    - 指定 table が許可に無い → 許可テーブル一覧を返すエラー。
+    """
+    sources = _sources_for_host(allowed_sources, host)
+    if not sources:
+        allowed = ", ".join(sorted(allowed_sources)) or "(なし)"
+        return None, f"エラー: host={host!r} は取得が許可されていません。許可された host: {allowed}"
+    if table:
+        for s in sources:
+            if str(s.get("table") or "").strip() == table:
+                return s, None
+        avail = ", ".join(str(s.get("table") or "(既定)") for s in sources)
+        return None, (
+            f"エラー: host={host!r} に table={table!r} は許可されていません。"
+            f"指定可能なテーブル: {avail}"
+        )
+    if len(sources) == 1:
+        return sources[0], None
+    avail = ", ".join(str(s.get("table") or "(既定)") for s in sources)
+    return None, (
+        f"エラー: host={host!r} には複数のテーブルが紐づいています。"
+        f"table を指定してください: {avail}"
+    )
+
+
+def run_bigquery_tool(tool_input: dict, allowed_sources: dict) -> str:
     """``bigquery_query`` tool_use を実行し、tool_result 用の文字列を返す。
 
-    host は ``allowed_sources`` (= run の BQ ノードメタデータ) に含まれるものだけ許可。
-    table / 既定期間 / 既定件数は allowed_sources のエントリから補完する。
+    host+table は ``allowed_sources`` (= run の BQ ノードメタデータ) に含まれるものだけ
+    許可。table / 既定期間 / 既定件数は解決されたソースのエントリから補完する。
     失敗時もエラー文字列を返し (例外は投げない)、LLM が graceful に判断できるようにする。
     """
     from log_analyzer import bigquery_client
@@ -263,10 +324,11 @@ def run_bigquery_tool(tool_input: dict, allowed_sources: dict[str, dict]) -> str
     host = str((tool_input or {}).get("host") or "").strip()
     if not host:
         return "エラー: host は必須です。"
-    if host not in allowed_sources:
-        allowed = ", ".join(sorted(allowed_sources)) or "(なし)"
-        return f"エラー: host={host!r} は取得が許可されていません。許可された host: {allowed}"
-    src = allowed_sources.get(host) or {}
+    table_req = str((tool_input or {}).get("table") or "").strip() or None
+    src, err = _resolve_bq_source(allowed_sources, host, table_req)
+    if err:
+        return err
+    src = src or {}
     start = tool_input.get("start_time") or src.get("start")
     end = tool_input.get("end_time") or src.get("end")
     limit = tool_input.get("limit") or src.get("limit")
@@ -321,7 +383,7 @@ def _format_schema(host: str, table: str, schema: list[dict], rows: list[dict]) 
     return "\n".join(lines)
 
 
-def run_bigquery_schema_tool(tool_input: dict, allowed_sources: dict[str, dict]) -> str:
+def run_bigquery_schema_tool(tool_input: dict, allowed_sources: dict) -> str:
     """``bigquery_schema`` tool_use を実行し、列定義＋サンプル行の文字列を返す。
 
     host 許可リスト検証は run_bigquery_tool と同じ。列定義の取得 (get_table) は
@@ -333,10 +395,11 @@ def run_bigquery_schema_tool(tool_input: dict, allowed_sources: dict[str, dict])
     host = str((tool_input or {}).get("host") or "").strip()
     if not host:
         return "エラー: host は必須です。"
-    if host not in allowed_sources:
-        allowed = ", ".join(sorted(allowed_sources)) or "(なし)"
-        return f"エラー: host={host!r} は取得が許可されていません。許可された host: {allowed}"
-    src = allowed_sources.get(host) or {}
+    table_req = str((tool_input or {}).get("table") or "").strip() or None
+    src, err = _resolve_bq_source(allowed_sources, host, table_req)
+    if err:
+        return err
+    src = src or {}
     table = src.get("table")
     try:
         schema = bigquery_client.table_schema(table=table)

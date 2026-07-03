@@ -233,8 +233,43 @@ def test_build_topology_log_text_bq_marker_no_inline():
 
 
 def test_normalize_and_allowlist_host_defaults_to_node_id():
+    # 単一オブジェクト指定でも list に正規化される
     norm = _normalize_bq_sources({"fw-01": {"host": "", "table": "t"}})
-    assert norm["fw-01"]["host"] == "fw-01"  # host 空 → node id
+    assert norm["fw-01"][0]["host"] == "fw-01"  # host 空 → node id
     allow = _bq_allowlist(norm)
     assert "fw-01" in allow
-    assert allow["fw-01"]["table"] == "t"
+    assert allow["fw-01"][0]["table"] == "t"
+
+
+def test_normalize_bq_sources_multiple_tables_per_node():
+    """1 ノードに複数テーブル (list) を紐づけられる。"""
+    norm = _normalize_bq_sources({
+        "app": [
+            {"host": "private-ap", "table": "logs.private"},
+            {"host": "public-ap", "table": "logs.public"},
+        ]
+    })
+    assert len(norm["app"]) == 2
+    allow = _bq_allowlist(norm)
+    assert set(allow) == {"private-ap", "public-ap"}
+    assert allow["private-ap"][0]["table"] == "logs.private"
+
+
+def test_bq_tool_resolves_by_host_and_table(monkeypatch):
+    """同一 host に複数テーブルがあるとき table で解決する。"""
+    allowed = {"h1": [{"table": "t_a"}, {"table": "t_b"}]}
+    # table 未指定 → 複数あるので促すエラー
+    out = tools_mod.run_bigquery_tool({"host": "h1"}, allowed)
+    assert "複数のテーブル" in out
+    # 許可外 table
+    out = tools_mod.run_bigquery_tool({"host": "h1", "table": "t_x"}, allowed)
+    assert "許可されていません" in out
+
+    captured = {}
+
+    def _fake_query(host, **kwargs):
+        captured["table"] = kwargs.get("table")
+        return [{"message": "ok"}]
+    monkeypatch.setattr("log_analyzer.bigquery_client.query_logs", _fake_query)
+    tools_mod.run_bigquery_tool({"host": "h1", "table": "t_b"}, allowed)
+    assert captured["table"] == "t_b"
