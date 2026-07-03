@@ -18,6 +18,7 @@ dependencies = [
     "tree-sitter>=0.23.0",
     "tree-sitter-language-pack>=0.7.0",
     "sqlparse>=0.5.0",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]

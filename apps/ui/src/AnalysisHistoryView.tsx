@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChatHistoryView } from './ChatHistoryView'
+import { EvaluationPanel } from './EvaluationPanel'
 import { RoundMetricsView } from './RoundMetricsView'
 import { buildReasoningReport, downloadText } from './reasoningReport'
 import { downloadTopologyDiagram } from './topologyImage'
@@ -327,6 +328,9 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
       {result?.round_metrics && result.round_metrics.length > 0 && (
         <RoundMetricsView rounds={result.round_metrics} />
       )}
+
+      {/* 解答と比較評価 (真因到達度の 10 段階採点、履歴に紐付け) */}
+      <EvaluationPanel historyId={detail.id} />
     </section>
   )
 }

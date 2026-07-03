@@ -220,6 +220,27 @@ class AuditReport(BaseModel):
     latency_ms: int = 0
 
 
+class EvaluationResult(BaseModel):
+    """解析レポート × 解答シナリオ の比較評価 (評価機能 Phase 2)。
+
+    Excel「テストケース2」のエンジニア模範解答 (①〜⑦) に対し、解析レポートが
+    どれだけ真因 (⑥) に到達したかを 10 段階で採点する。⑦ (ジュニアの落とし穴) を
+    踏んだ / 避けたも評価軸。手採点の基準 (真因到達度) に合わせる。
+    """
+
+    scenario_key: str = ""
+    score: int = 0                        # 1-10 (真因⑥到達度が主軸、0=評価失敗)
+    good_points: list[str] = Field(default_factory=list)
+    bad_points: list[str] = Field(default_factory=list)
+    pitfalls_avoided: list[str] = Field(default_factory=list)  # ⑦のうち回避したもの
+    pitfalls_hit: list[str] = Field(default_factory=list)      # ⑦のうち踏んだもの
+    summary: str = ""
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    latency_ms: int = 0
+
+
 class QuestionnaireItem(BaseModel):
     """問診票の 1 設問 (Phase B)。
 

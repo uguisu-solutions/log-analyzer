@@ -49,7 +49,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from log_analyzer import pipeline_runner, prompt_slots, storage
+from log_analyzer import evaluation_agent, pipeline_runner, prompt_slots, storage
 from log_analyzer.log_compaction import compact_log_reporting
 from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.rally_agent import run_rally_stream
@@ -2322,3 +2322,109 @@ def delete_questionnaire_endpoint(qid: int) -> dict:
     if not ok:
         raise HTTPException(status_code=404, detail=f"questionnaire id={qid} not found")
     return {"deleted": qid}
+
+
+# ─── 解答シナリオ (解析評価の正解データ) ──────────────────────────
+# Excel「テストケース2」D-K列から取込 (scripts/import_answers.py)。UI で解析履歴と
+# 突き合わせて評価する際のシナリオ選択に使う。設計: 評価機能 Phase 1。
+
+
+class AnswerScenario(BaseModel):
+    id: int | None = None
+    scenario_key: str
+    title: str = ""
+    trigger: str = ""
+    initial_hypothesis: str = ""
+    path: str = ""
+    decision_points: str = ""
+    evidence_source: str = ""
+    conclusion: str = ""
+    junior_pitfall: str = ""
+    notes: str = ""
+    source_file: str = ""
+    imported_at: str = ""
+
+
+class AnswerScenariosResponse(BaseModel):
+    scenarios: list[AnswerScenario]
+
+
+@app.get("/api/answer-scenarios", response_model=AnswerScenariosResponse)
+def list_answer_scenarios_endpoint() -> AnswerScenariosResponse:
+    rows = storage.list_answer_scenarios()
+    return AnswerScenariosResponse(scenarios=[AnswerScenario(**r) for r in rows])
+
+
+# ─── 解析レポート × 解答 の評価 (評価機能 Phase 2) ──────────────────
+# 解析履歴エントリを解答シナリオと突き合わせ、LLM (既定 Opus4.7) が真因到達度を
+# 10 段階採点。良い点/悪い点/⑦罠回避を出し、履歴に紐付けて保存 (後から確認可)。
+
+
+class EvaluateRequest(BaseModel):
+    scenario_key: str
+    model: str | None = None  # 未指定なら EVAL_MODEL / claude-opus-4-7
+
+
+class EvaluationDTO(BaseModel):
+    id: int | None = None
+    analysis_history_id: int | None = None
+    scenario_key: str = ""
+    score: int | None = None
+    good_points: list[str] = []
+    bad_points: list[str] = []
+    pitfalls_avoided: list[str] = []
+    pitfalls_hit: list[str] = []
+    summary: str = ""
+    model: str = ""
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    latency_ms: int | None = None
+    created_at: str = ""
+
+
+class EvaluationsResponse(BaseModel):
+    evaluations: list[EvaluationDTO]
+
+
+@app.post("/api/analysis-history/{entry_id}/evaluate", response_model=EvaluationDTO)
+async def evaluate_analysis_endpoint(entry_id: int, req: EvaluateRequest) -> EvaluationDTO:
+    entry = storage.get_analysis_history(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"analysis history id={entry_id} not found")
+    scenario = storage.get_answer_scenario(req.scenario_key)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail=f"answer scenario '{req.scenario_key}' not found")
+    result = entry.get("result") or {}
+    # LLM 呼び出しはブロッキングなのでスレッドに逃がす (SSE/他リクエストを止めない)
+    loop = asyncio.get_running_loop()
+    ev = await loop.run_in_executor(
+        None, lambda: evaluation_agent.run_evaluation(result, scenario, model=req.model)
+    )
+    saved = storage.insert_evaluation(
+        analysis_history_id=entry_id,
+        scenario_key=ev.scenario_key or req.scenario_key,
+        score=ev.score,
+        good_points=ev.good_points,
+        bad_points=ev.bad_points,
+        pitfalls_avoided=ev.pitfalls_avoided,
+        pitfalls_hit=ev.pitfalls_hit,
+        summary=ev.summary,
+        model=ev.model,
+        tokens_in=ev.tokens_in,
+        tokens_out=ev.tokens_out,
+        latency_ms=ev.latency_ms,
+    )
+    return EvaluationDTO(**saved)
+
+
+@app.get("/api/analysis-history/{entry_id}/evaluations", response_model=EvaluationsResponse)
+def list_evaluations_endpoint(entry_id: int) -> EvaluationsResponse:
+    rows = storage.list_evaluations(entry_id)
+    return EvaluationsResponse(evaluations=[EvaluationDTO(**r) for r in rows])
+
+
+@app.delete("/api/analysis-history/{entry_id}/evaluations/{eval_id}")
+def delete_evaluation_endpoint(entry_id: int, eval_id: int) -> dict:
+    if not storage.delete_evaluation(eval_id):
+        raise HTTPException(status_code=404, detail=f"evaluation id={eval_id} not found")
+    return {"deleted": eval_id}
