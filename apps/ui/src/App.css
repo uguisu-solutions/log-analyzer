@@ -3882,3 +3882,7 @@ code {
   justify-content: space-between;
   margin-bottom: 0.3rem;
 }
+
+/* 評価: 採点根拠（観点別） */
+.eval-axes { margin: 0.5rem 0; }
+.eval-axes .eval-list { font-size: 0.83rem; }

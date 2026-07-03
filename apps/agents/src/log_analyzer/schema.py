@@ -229,7 +229,8 @@ class EvaluationResult(BaseModel):
     """
 
     scenario_key: str = ""
-    score: int = 0                        # 1-10 (真因⑥到達度が主軸、0=評価失敗)
+    score: int = 0                        # 1-10 (推論支援価値、0=評価失敗)
+    axis_assessment: list[str] = Field(default_factory=list)  # 6観点ごとの採点根拠
     good_points: list[str] = Field(default_factory=list)
     bad_points: list[str] = Field(default_factory=list)
     pitfalls_avoided: list[str] = Field(default_factory=list)  # ⑦のうち回避したもの

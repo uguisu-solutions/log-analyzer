@@ -2397,6 +2397,7 @@ class EvaluationDTO(BaseModel):
     analysis_history_id: int | None = None
     scenario_key: str = ""
     score: int | None = None
+    axis_assessment: list[str] = []
     good_points: list[str] = []
     bad_points: list[str] = []
     pitfalls_avoided: list[str] = []
@@ -2431,6 +2432,7 @@ async def evaluate_analysis_endpoint(entry_id: int, req: EvaluateRequest) -> Eva
         analysis_history_id=entry_id,
         scenario_key=ev.scenario_key or req.scenario_key,
         score=ev.score,
+        axis_assessment=ev.axis_assessment,
         good_points=ev.good_points,
         bad_points=ev.bad_points,
         pitfalls_avoided=ev.pitfalls_avoided,

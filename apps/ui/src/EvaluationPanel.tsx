@@ -2,7 +2,7 @@
  * 解答と比較評価パネル (評価機能 Phase 3)。
  *
  * 解析履歴の詳細で、模範解答 (Excel「テストケース2」由来のシナリオ) を選び、
- * LLM (既定 Opus4.7) にレポートの真因到達度を 10 段階採点させる。良い点/悪い点/
+ * LLM (既定 Opus4.7) にレポートの推論支援価値を 10 段階採点させる。良い点/悪い点/
  * ⑦罠の回避を表示し、過去の評価も履歴に紐づけて後から確認できる。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -33,10 +33,15 @@ function buildEvaluationReport(ev: EvaluationDTO, scenarioTitle: string): string
   L.push(`- 評価日時: ${formatDate(ev.created_at)}`)
   L.push(`- 解析履歴 ID: #${ev.analysis_history_id}`)
   L.push('')
-  L.push('## 配点内訳')
-  L.push(`- 真因到達度（⑥・採点主軸）: **${ev.score == null ? '-' : ev.score} / 10** — ${scoreBand(ev.score)}`)
-  L.push(`- 副軸（⑦ ジュニアの落とし穴）: スコアに非反映（参考のみ） — 避けた ${ev.pitfalls_avoided.length}件 / 踏んだ ${ev.pitfalls_hit.length}件`)
+  L.push('## 配点内訳（推論支援価値）')
+  L.push(`- スコア: **${ev.score == null ? '-' : ev.score} / 10** — ${scoreBand(ev.score)}`)
+  L.push(`- ⑦ジュニアの落とし穴（参考）: 回避を助けた ${ev.pitfalls_avoided.length}件 / 踏んだ ${ev.pitfalls_hit.length}件`)
   L.push('')
+  if (ev.axis_assessment.length > 0) {
+    L.push('## 採点根拠（観点別）')
+    for (const a of ev.axis_assessment) L.push(`- ${a}`)
+    L.push('')
+  }
   if (ev.summary) {
     L.push('## 総評')
     L.push(ev.summary)
@@ -62,14 +67,14 @@ function scoreClass(score: number | null): string {
   return 'eval-score-low'
 }
 
-/** スコア → ⑥真因到達度のルーブリック帯ラベル (配点内訳の説明用)。 */
+/** スコア → 推論支援価値のルーブリック帯ラベル (配点内訳の説明用)。 */
 function scoreBand(score: number | null): string {
   const s = score ?? -1
-  if (s >= 9) return '真因を的確に特定'
-  if (s >= 7) return '主要因は正しいが機序/対処が不足'
-  if (s >= 5) return '方向は合うが機序が違う/部分的'
-  if (s >= 3) return 'かすっている/派生症状に留まり真因を外す'
-  if (s >= 1) return '真因とは別物'
+  if (s >= 9) return '複数パス・可能性を根拠付きで提示、未確認/前提ズレも明示'
+  if (s >= 7) return '主要な推論の道筋と除外理由を提示、不足も一部明示'
+  if (s >= 5) return '一定の推論はあるが単一結論寄り／視野拡張が弱い'
+  if (s >= 3) return '断定的で別可能性・根拠が乏しい'
+  if (s >= 1) return '単一の結論のみ。別案・不足・根拠の明示なし'
   return '評価失敗/未採点'
 }
 
@@ -102,18 +107,25 @@ function EvaluationCard(
       </div>
 
       <div className="eval-breakdown">
-        <div className="eval-breakdown-title">配点内訳</div>
+        <div className="eval-breakdown-title">配点内訳（推論支援価値）</div>
         <ul>
           <li>
-            真因到達度（⑥・採点主軸）: <strong>{ev.score == null ? '-' : ev.score}/10</strong>
+            スコア: <strong>{ev.score == null ? '-' : ev.score}/10</strong>
             {' — '}{scoreBand(ev.score)}
           </li>
           <li>
-            副軸（⑦ 落とし穴）: <span className="muted">スコアに非反映（参考のみ）</span>
-            {` — 避けた ${ev.pitfalls_avoided.length} / 踏んだ ${ev.pitfalls_hit.length}`}
+            ⑦ジュニアの落とし穴 <span className="muted">（参考）</span>
+            {` — 回避を助けた ${ev.pitfalls_avoided.length} / 踏んだ ${ev.pitfalls_hit.length}`}
           </li>
         </ul>
       </div>
+
+      {ev.axis_assessment.length > 0 && (
+        <div className="eval-axes">
+          <div className="eval-sec-title">採点根拠（観点別）</div>
+          <ul className="eval-list">{ev.axis_assessment.map((a, i) => <li key={i}>{a}</li>)}</ul>
+        </div>
+      )}
 
       {ev.summary && <p className="eval-summary">{ev.summary}</p>}
 
@@ -222,8 +234,9 @@ export function EvaluationPanel({ historyId }: { historyId: number }) {
     <section className="eval-panel">
       <h3>解答と比較評価</h3>
       <p className="muted eval-help">
-        模範解答 (テストケース2) を選び、このレポートが真因 (⑥) にどれだけ到達したかを
-        LLM が 10 段階で採点します。評価は履歴に残り、後から確認できます。
+        模範解答 (テストケース2) を選び、このレポートが<strong>ジュニアの思考を正しい方向へ
+        広げられたか（推論支援価値）</strong>を LLM が 10 段階で採点します（真因への一致そのものではなく、
+        推論の道筋・視野の拡張・不足の明示・前提ズレの指摘を評価）。評価は履歴に残り、後から確認できます。
       </p>
       <div className="eval-controls">
         <select value={selected} onChange={e => setSelected(e.target.value)}>

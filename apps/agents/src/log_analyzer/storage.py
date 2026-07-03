@@ -184,6 +184,7 @@ def init_db() -> None:
                 analysis_history_id INTEGER NOT NULL,
                 scenario_key TEXT NOT NULL,
                 score INTEGER,
+                axis_assessment_json TEXT NOT NULL DEFAULT '[]',
                 good_points_json TEXT NOT NULL DEFAULT '[]',
                 bad_points_json TEXT NOT NULL DEFAULT '[]',
                 pitfalls_avoided_json TEXT NOT NULL DEFAULT '[]',
@@ -197,6 +198,13 @@ def init_db() -> None:
             )
             """
         )
+        # 既存 DB へのマイグレーション: axis_assessment_json (採点根拠) 列を後付け。
+        ev_cols = {r[1] for r in conn.execute("PRAGMA table_info(analysis_evaluations)").fetchall()}
+        if ev_cols and "axis_assessment_json" not in ev_cols:
+            conn.execute(
+                "ALTER TABLE analysis_evaluations "
+                "ADD COLUMN axis_assessment_json TEXT NOT NULL DEFAULT '[]'"
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_analysis_evaluations_history "
             "ON analysis_evaluations(analysis_history_id, created_at DESC)"
@@ -685,11 +693,13 @@ def delete_answer_scenario(scenario_key: str) -> bool:
 # ─── analysis_evaluations (解析レポート × 解答 の評価結果) ──────────
 
 _EVAL_COLS = (
-    "id, analysis_history_id, scenario_key, score, good_points_json, bad_points_json, "
-    "pitfalls_avoided_json, pitfalls_hit_json, summary, model, tokens_in, tokens_out, "
-    "latency_ms, created_at"
+    "id, analysis_history_id, scenario_key, score, axis_assessment_json, good_points_json, "
+    "bad_points_json, pitfalls_avoided_json, pitfalls_hit_json, summary, model, tokens_in, "
+    "tokens_out, latency_ms, created_at"
 )
-_EVAL_LIST_FIELDS = ("good_points", "bad_points", "pitfalls_avoided", "pitfalls_hit")
+_EVAL_LIST_FIELDS = (
+    "axis_assessment", "good_points", "bad_points", "pitfalls_avoided", "pitfalls_hit",
+)
 
 
 def _row_to_evaluation(row: sqlite3.Row) -> dict:
@@ -708,6 +718,7 @@ def insert_evaluation(
     analysis_history_id: int,
     scenario_key: str,
     score: int | None,
+    axis_assessment: list[str],
     good_points: list[str],
     bad_points: list[str],
     pitfalls_avoided: list[str],
@@ -727,12 +738,12 @@ def insert_evaluation(
     with _connect() as conn:
         cur = conn.execute(
             "INSERT INTO analysis_evaluations "
-            "(analysis_history_id, scenario_key, score, good_points_json, bad_points_json, "
-            " pitfalls_avoided_json, pitfalls_hit_json, summary, model, tokens_in, tokens_out, "
-            " latency_ms, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(analysis_history_id, scenario_key, score, axis_assessment_json, good_points_json, "
+            " bad_points_json, pitfalls_avoided_json, pitfalls_hit_json, summary, model, "
+            " tokens_in, tokens_out, latency_ms, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                analysis_history_id, str(scenario_key), score,
+                analysis_history_id, str(scenario_key), score, _j(axis_assessment),
                 _j(good_points), _j(bad_points), _j(pitfalls_avoided), _j(pitfalls_hit),
                 summary, model, tokens_in, tokens_out, latency_ms, now,
             ),

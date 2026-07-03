@@ -499,6 +499,7 @@ export interface EvaluationDTO {
   analysis_history_id: number
   scenario_key: string
   score: number | null
+  axis_assessment: string[]
   good_points: string[]
   bad_points: string[]
   pitfalls_avoided: string[]
