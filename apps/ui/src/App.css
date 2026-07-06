@@ -3549,6 +3549,16 @@ code {
 .chat-qa-list li {
   font-size: 0.88rem;
 }
+.chat-evidence {
+  margin: 0.25rem 0 0.35rem 0.9rem;
+  padding: 0;
+  list-style: disc;
+}
+.chat-evidence li {
+  font-size: 0.8rem;
+  color: var(--muted, #64748b);
+  margin: 0.12rem 0;
+}
 .chat-meta {
   font-size: 0.74rem;
   margin-top: 0.4rem;

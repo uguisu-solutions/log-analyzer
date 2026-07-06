@@ -570,9 +570,12 @@ def list_analysis_history(
         where.append("analysis_mode = ?")
         args.append(analysis_mode)
     if q:
-        where.append("(top_summary LIKE ? OR title LIKE ?)")
+        # top_summary / title に加え、解析結果本体 (result_json) も対象にする。
+        # 候補 summary / evidence / 委譲理由などは result_json 内にしか無いため、
+        # ここを含めないと本文テキストで検索してもヒットしない。
+        where.append("(top_summary LIKE ? OR title LIKE ? OR result_json LIKE ?)")
         like = f"%{q}%"
-        args.extend([like, like])
+        args.extend([like, like, like])
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     with _connect() as conn:
         total = conn.execute(

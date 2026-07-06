@@ -111,6 +111,11 @@ function buildConversation(messages: React.ReactNode[], a: ConversationArgs): vo
               <li key={i}>
                 <span className={`badge cat-${c.category}`}>{c.category}</span>
                 {c.summary}
+                {c.evidence && c.evidence.length > 0 && (
+                  <ul className="chat-evidence">
+                    {c.evidence.map((e, j) => <li key={j}>{e}</li>)}
+                  </ul>
+                )}
               </li>
             ))}
           </ul>
