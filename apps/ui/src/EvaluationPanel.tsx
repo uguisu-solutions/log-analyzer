@@ -190,7 +190,17 @@ export function EvaluationPanel({ historyId }: { historyId: number }) {
       const r = await fetch(`${API_BASE}/api/analysis-history/${historyId}/evaluations`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
-      setEvals(d.evaluations ?? [])
+      // リスト項目を必ず配列に正規化（古い評価やバックエンド版差で欠けても
+      // 描画時に undefined.length で全画面クラッシュしないようにする防御）。
+      const norm: EvaluationDTO[] = (d.evaluations ?? []).map((e: EvaluationDTO) => ({
+        ...e,
+        axis_assessment: e.axis_assessment ?? [],
+        good_points: e.good_points ?? [],
+        bad_points: e.bad_points ?? [],
+        pitfalls_avoided: e.pitfalls_avoided ?? [],
+        pitfalls_hit: e.pitfalls_hit ?? [],
+      }))
+      setEvals(norm)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
