@@ -35,7 +35,8 @@ function buildEvaluationReport(ev: EvaluationDTO, scenarioTitle: string): string
   L.push('')
   L.push('## 配点内訳（推論支援価値）')
   L.push(`- スコア: **${ev.score == null ? '-' : ev.score} / 10** — ${scoreBand(ev.score)}`)
-  L.push(`- ⑦ジュニアの落とし穴（参考）: 回避を助けた ${ev.pitfalls_avoided.length}件 / 踏んだ ${ev.pitfalls_hit.length}件`)
+  L.push(`- ⑦（ジュニアの落とし穴）（参考）: 回避を助けた ${ev.pitfalls_avoided.length}件 / 踏んだ ${ev.pitfalls_hit.length}件`)
+  L.push('- 番号の凡例: ①トリガー ／ ②初期仮説 ／ ③辿った経路 ／ ④決断点（除外理由） ／ ⑤根拠の出所 ／ ⑥結論（真因） ／ ⑦ジュニアの落とし穴')
   L.push('')
   if (ev.axis_assessment.length > 0) {
     L.push('## 採点根拠（観点別）')
@@ -55,8 +56,8 @@ function buildEvaluationReport(ev: EvaluationDTO, scenarioTitle: string): string
   }
   sec('良い点', ev.good_points)
   sec('悪い点', ev.bad_points)
-  sec('避けた罠 (⑦)', ev.pitfalls_avoided, '✓ ')
-  sec('踏んだ罠 (⑦)', ev.pitfalls_hit, '✗ ')
+  sec('回避を助けた落とし穴（⑦ ジュニアの落とし穴）', ev.pitfalls_avoided)
+  sec('踏んだ／助けられなかった落とし穴（⑦ ジュニアの落とし穴）', ev.pitfalls_hit)
   return L.join('\n')
 }
 
@@ -148,14 +149,14 @@ function EvaluationCard(
         <div className="eval-cols">
           {ev.pitfalls_avoided.length > 0 && (
             <div className="eval-col">
-              <div className="eval-sec-title good">避けた罠 ⑦ ({ev.pitfalls_avoided.length})</div>
-              <ul className="eval-list good">{ev.pitfalls_avoided.map((p, i) => <li key={i}>✓ {p}</li>)}</ul>
+              <div className="eval-sec-title good">回避を助けた落とし穴（⑦ ジュニアの落とし穴） ({ev.pitfalls_avoided.length})</div>
+              <ul className="eval-list good">{ev.pitfalls_avoided.map((p, i) => <li key={i}>{p}</li>)}</ul>
             </div>
           )}
           {ev.pitfalls_hit.length > 0 && (
             <div className="eval-col">
-              <div className="eval-sec-title bad">踏んだ罠 ⑦ ({ev.pitfalls_hit.length})</div>
-              <ul className="eval-list bad">{ev.pitfalls_hit.map((p, i) => <li key={i}>✗ {p}</li>)}</ul>
+              <div className="eval-sec-title bad">踏んだ／助けられなかった落とし穴（⑦ ジュニアの落とし穴） ({ev.pitfalls_hit.length})</div>
+              <ul className="eval-list bad">{ev.pitfalls_hit.map((p, i) => <li key={i}>{p}</li>)}</ul>
             </div>
           )}
         </div>
