@@ -94,6 +94,30 @@ def test_build_topology_log_text_empty_nodes():
     assert "(ノード定義なし)" in text
 
 
+def test_questionnaire_block_renders_confidence():
+    topo = {"nodes": [{"id": "n1", "label": "N1"}], "links": []}
+    text, _ = _build_topology_log_text(
+        topo, {"n1": "log"}, None,
+        questionnaire_answers={"事象": "無線が切れる", "原因の見当": "配線かも"},
+        questionnaire_confidences={"事象": "高", "原因の見当": "低"},
+    )
+    # 確信度が併記される
+    assert "**事象**（確信度: 高）: 無線が切れる" in text
+    assert "**原因の見当**（確信度: 低）: 配線かも" in text
+    # 確信度の使い方ガイド (低=検証対象) が入る
+    assert "確信度" in text and "検証対象" in text
+
+
+def test_questionnaire_block_omits_confidence_when_absent():
+    topo = {"nodes": [{"id": "n1", "label": "N1"}], "links": []}
+    text, _ = _build_topology_log_text(
+        topo, {"n1": "log"}, None,
+        questionnaire_answers={"事象": "無線が切れる"},
+    )
+    assert "**事象**: 無線が切れる" in text
+    assert "確信度" not in text
+
+
 def test_build_analysis_result_filters_suspected_node_ids_to_known():
     # 旧フォーマット (suspected_node_ids 単体) でもフォールバックが効くこと
     integrator_result = {

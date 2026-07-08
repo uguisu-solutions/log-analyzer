@@ -167,6 +167,7 @@ export interface AnalysisHistoryDetail extends AnalysisHistorySummary {
     rally_max_rounds: number | null
     view_mode: string | null
     questionnaire_answers: QuestionnaireAnswers
+    questionnaire_confidences?: QuestionnaireConfidences
     topology: TopologyDef
   }
   result: AnalysisResult
@@ -183,6 +184,7 @@ export interface AnalysisHistorySaveRequest {
   rally_max_rounds: number | null
   view_mode: string | null
   questionnaire_answers: QuestionnaireAnswers
+  questionnaire_confidences?: QuestionnaireConfidences
   topology: TopologyDef
   result: AnalysisResult
 }
@@ -477,6 +479,10 @@ export interface QuestionnaireTemplate {
 
 // {key: answer} の辞書
 export type QuestionnaireAnswers = Record<string, string>
+
+// {key: '高'|'中'|'低'} の並列辞書。各申告の確信度 (人間が回答時に選ぶ)。任意。
+export type QuestionnaireConfidences = Record<string, string>
+export const CONFIDENCE_LEVELS = ['高', '中', '低'] as const
 
 // ─── 解析評価 (解析レポート × 解答 の比較採点) ──────────────────
 export interface AnswerScenario {

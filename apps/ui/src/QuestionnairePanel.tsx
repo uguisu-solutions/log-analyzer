@@ -11,20 +11,31 @@
  * - 「テンプレを編集」リンクは現状なし（CRUD は API のみ提供、UI は将来追加）
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { QuestionnaireAnswers, QuestionnaireItem, QuestionnaireTemplate } from './types'
+import { CONFIDENCE_LEVELS } from './types'
+import type {
+  QuestionnaireAnswers,
+  QuestionnaireConfidences,
+  QuestionnaireItem,
+  QuestionnaireTemplate,
+} from './types'
 
 const API_BASE = 'http://localhost:8000'
 
 interface Props {
   answers: QuestionnaireAnswers
   onAnswersChange: (next: QuestionnaireAnswers) => void
+  // 各申告の確信度 (高/中/低)。answers と同じ key。
+  confidences: QuestionnaireConfidences
+  onConfidencesChange: (next: QuestionnaireConfidences) => void
   disabled?: boolean
   // 必須項目がすべて埋まっているか (required=true の全項目) を親へ通知。
   // 親はこれを実行可否 (canRun) のゲートに使える。安定したコールバックを渡すこと。
   onValidityChange?: (allRequiredFilled: boolean) => void
 }
 
-export function QuestionnairePanel({ answers, onAnswersChange, disabled, onValidityChange }: Props) {
+export function QuestionnairePanel({
+  answers, onAnswersChange, confidences, onConfidencesChange, disabled, onValidityChange,
+}: Props) {
   const [templates, setTemplates] = useState<QuestionnaireTemplate[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [expanded, setExpanded] = useState<boolean>(false)
@@ -67,11 +78,30 @@ export function QuestionnairePanel({ answers, onAnswersChange, disabled, onValid
     setSelectedId(id)
     // 回答は一旦クリア (項目 key が変わる可能性があるため誤マッピングを防ぐ)
     onAnswersChange({})
+    onConfidencesChange({})
   }
   const handleItemChange = (key: string, value: string) => {
     const next = { ...answers, [key]: value }
-    if (!value.trim()) delete next[key]
+    if (!value.trim()) {
+      delete next[key]
+      // 回答が空になったら確信度も落とす
+      if (confidences[key]) {
+        const nc = { ...confidences }
+        delete nc[key]
+        onConfidencesChange(nc)
+      }
+    }
     onAnswersChange(next)
+  }
+  const handleConfidenceChange = (key: string, level: string) => {
+    const next = { ...confidences }
+    if (level) next[key] = level
+    else delete next[key]
+    onConfidencesChange(next)
+  }
+  const clearAll = () => {
+    onAnswersChange({})
+    onConfidencesChange({})
   }
 
   return (
@@ -103,7 +133,7 @@ export function QuestionnairePanel({ answers, onAnswersChange, disabled, onValid
         <button
           type="button"
           className="btn-secondary btn-small"
-          onClick={() => onAnswersChange({})}
+          onClick={clearAll}
           disabled={disabled || answeredCount === 0}
         >
           回答をクリア
@@ -111,7 +141,15 @@ export function QuestionnairePanel({ answers, onAnswersChange, disabled, onValid
       </div>
       <div className="qp-items">
         {items.map(it => (
-          <QPItem key={it.key} item={it} value={answers[it.key] ?? ''} onChange={(v) => handleItemChange(it.key, v)} disabled={!!disabled} />
+          <QPItem
+            key={it.key}
+            item={it}
+            value={answers[it.key] ?? ''}
+            onChange={(v) => handleItemChange(it.key, v)}
+            confidence={confidences[it.key] ?? ''}
+            onConfidenceChange={(lv) => handleConfidenceChange(it.key, lv)}
+            disabled={!!disabled}
+          />
         ))}
         {items.length === 0 && <div className="qp-empty">（テンプレに設問が定義されていません）</div>}
       </div>
@@ -123,13 +161,27 @@ interface QPItemProps {
   item: QuestionnaireItem
   value: string
   onChange: (v: string) => void
+  confidence: string
+  onConfidenceChange: (level: string) => void
   disabled: boolean
 }
-function QPItem({ item, value, onChange, disabled }: QPItemProps) {
+function QPItem({ item, value, onChange, confidence, onConfidenceChange, disabled }: QPItemProps) {
+  const answered = value.trim().length > 0
   return (
     <div className="qp-item">
       <label className="qp-item-label">
         <span>{item.label}{item.required && <em className="qp-required">必須</em>}</span>
+        <span className="qp-confidence" title="この申告の確信度（高/中/低）。AIは低確信度の申告に引きずられないよう扱います。">
+          確信度:
+          <select
+            value={confidence}
+            onChange={e => onConfidenceChange(e.target.value)}
+            disabled={disabled || !answered}
+          >
+            <option value="">-</option>
+            {CONFIDENCE_LEVELS.map(lv => <option key={lv} value={lv}>{lv}</option>)}
+          </select>
+        </span>
       </label>
       {item.type === 'choice' ? (
         <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled}>

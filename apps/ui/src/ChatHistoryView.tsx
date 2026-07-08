@@ -18,6 +18,7 @@ import type {
   AuditReport,
   DelegationEvent,
   QuestionnaireAnswers,
+  QuestionnaireConfidences,
   RecommendedAction,
   RootCauseCandidate,
   RoundMetrics,
@@ -26,6 +27,8 @@ import type {
 interface Props {
   result: AnalysisResult
   questionnaireAnswers: QuestionnaireAnswers
+  // 各申告の確信度 (高/中/低)。任意。
+  questionnaireConfidences?: QuestionnaireConfidences
   // 2 段階解析では stage_outputs を Stage ごとに展開する (既定 true)。
   // 単一 Stage を埋め込み描画する用途では false にして問診票ブロックを抑制できる。
   showQuestionnaire?: boolean
@@ -160,8 +163,9 @@ function buildAudit(messages: React.ReactNode[], ar: AuditReport): void {
   )
 }
 
-export function ChatHistoryView({ result, questionnaireAnswers, showQuestionnaire = true }: Props) {
+export function ChatHistoryView({ result, questionnaireAnswers, questionnaireConfidences, showQuestionnaire = true }: Props) {
   const messages: React.ReactNode[] = []
+  const conf = questionnaireConfidences ?? {}
 
   // 1. 問診票回答 (人間メッセージ)
   if (showQuestionnaire) {
@@ -171,7 +175,7 @@ export function ChatHistoryView({ result, questionnaireAnswers, showQuestionnair
         <ChatMessage key="qa" sender="human" speaker="人間オペレータ" tag="問診票">
           <ul className="chat-qa-list">
             {answerEntries.map(([k, v]) => (
-              <li key={k}><strong>{k}:</strong> {v}</li>
+              <li key={k}><strong>{k}:</strong> {v}{conf[k] ? <span className="qa-conf muted">（確信度: {conf[k]}）</span> : null}</li>
             ))}
           </ul>
         </ChatMessage>

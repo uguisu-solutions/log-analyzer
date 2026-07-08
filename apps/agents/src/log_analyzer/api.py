@@ -421,6 +421,8 @@ class TopologyRunRequest(BaseModel):
     node_bigquery: dict = {}
     # 問診票回答 {key: value} (Phase B)。空でも OK
     questionnaire_answers: dict[str, str] = {}
+    # 各申告の確信度 (高/中/低)。key は questionnaire_answers と同じ。任意・後方互換。
+    questionnaire_confidences: dict[str, str] = {}
     # 監査エージェント (Phase C) を integrator 後に走らせるか
     audit_after_integrator: bool = False
     rally_max_rounds: int | None = None
@@ -546,25 +548,40 @@ def _bq_allowlist(bq_norm: dict[str, list[dict]]) -> dict[str, list[dict]]:
     return allow
 
 
-def _build_questionnaire_block(answers: dict | None) -> str:
+def _build_questionnaire_block(
+    answers: dict | None, confidences: dict | None = None
+) -> str:
     """問診票回答ブロック (Phase B)。
 
     answers は {key: value} の辞書。空 / None なら "" を返す。
+    confidences は {key: 高/中/低} の並列辞書 (任意)。各申告の確信度を LLM に伝え、
+    低確信度の申告に引きずられない (アンカリング回避) ように使わせる。
     UI 側で人間が記入した「症状・影響範囲・直前の変更」等を LLM の最初の
     user メッセージ冒頭に届ける。
     """
     if not answers:
         return ""
-    lines: list[str] = ["## 問診票回答 (人間オペレータからの一次申告)"]
+    conf = confidences or {}
+    item_lines: list[str] = []
     for k, v in answers.items():
         s = str(v).strip()
         if not s:
             continue
-        lines.append(f"- **{k}**: {s}")
-    if len(lines) == 1:
+        c = str(conf.get(k) or "").strip()
+        if c:
+            item_lines.append(f"- **{k}**（確信度: {c}）: {s}")
+        else:
+            item_lines.append(f"- **{k}**: {s}")
+    if not item_lines:
         return ""
-    lines.append("")
-    return "\n".join(lines) + "\n"
+    header: list[str] = ["## 問診票回答 (人間オペレータからの一次申告)"]
+    if any("（確信度:" in ln for ln in item_lines):
+        header.append(
+            "※ 各申告には人間が付けた確信度 (高/中/低) が併記される。"
+            "低=推測・うろ覚えであり、鵜呑みにせず検証対象として扱う。"
+            "高でも実データと矛盾すれば前提ズレとして指摘すること。"
+        )
+    return "\n".join(header + item_lines) + "\n\n"
 
 
 def _build_topology_log_text(
@@ -572,6 +589,7 @@ def _build_topology_log_text(
     node_logs: dict | None,
     node_configs: dict | None = None,
     questionnaire_answers: dict | None = None,
+    questionnaire_confidences: dict | None = None,
     node_bigquery: dict | None = None,
     mermaid: str | None = None,
 ) -> tuple[str, list[dict]]:
@@ -730,7 +748,9 @@ def _build_topology_log_text(
 
     body = "\n".join(parts) + "\n"
     # 問診票回答は最先頭に置く (LLM が最初に「人間が言ったこと」を読む構造)
-    questionnaire_block = _build_questionnaire_block(questionnaire_answers)
+    questionnaire_block = _build_questionnaire_block(
+        questionnaire_answers, questionnaire_confidences
+    )
     return (questionnaire_block + body, nodes)
 
 
@@ -896,6 +916,8 @@ class AnalysisHistorySaveRequest(BaseModel):
     rally_max_rounds: int | None = None
     view_mode: str | None = None
     questionnaire_answers: dict[str, str] = {}
+    # 各申告の確信度 (高/中/低)。key は questionnaire_answers と同じ。任意・後方互換。
+    questionnaire_confidences: dict[str, str] = {}
     topology: dict = {}
     result: dict
 
@@ -958,6 +980,7 @@ def create_analysis_history_endpoint(req: AnalysisHistorySaveRequest) -> dict:
         "rally_max_rounds": req.rally_max_rounds,
         "view_mode": req.view_mode,
         "questionnaire_answers": req.questionnaire_answers,
+        "questionnaire_confidences": req.questionnaire_confidences,
         "topology": req.topology,
     }
     entry_id, created = storage.insert_analysis_history(
@@ -1682,6 +1705,7 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
     log_text, normalized_nodes = _build_topology_log_text(
         req.topology, req.node_logs, req.node_configs,
         questionnaire_answers=req.questionnaire_answers,
+        questionnaire_confidences=req.questionnaire_confidences,
         node_bigquery=bq_norm,
     )
     if not normalized_nodes:
@@ -1810,6 +1834,8 @@ class ConfigLogRunRequest(BaseModel):
     # (正規化は _normalize_bq_sources)。アップロード (node_logs) と併用可能。
     node_bigquery: dict = {}
     questionnaire_answers: dict[str, str] = {}
+    # 各申告の確信度 (高/中/低)。key は questionnaire_answers と同じ。任意・後方互換。
+    questionnaire_confidences: dict[str, str] = {}
     audit_after_integrator: bool = False
     audit_system_prompt: str | None = None  # GPT 監査プロンプトの上書き (空/None なら既定)
     rally_max_rounds: int | None = None
@@ -2001,6 +2027,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         planner_log_text, _ = _build_topology_log_text(
             req.topology, planner_logs, planner_configs,
             questionnaire_answers=req.questionnaire_answers,
+            questionnaire_confidences=req.questionnaire_confidences,
             node_bigquery=bq_norm, mermaid=req.mermaid,
         )
         yield _sse_bytes("policy_start", {"message": "解析方針を立案しています…"})
@@ -2050,6 +2077,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         single_log_text, _ = _build_topology_log_text(
             req.topology, logs, configs,
             questionnaire_answers=req.questionnaire_answers,
+            questionnaire_confidences=req.questionnaire_confidences,
             node_bigquery=bq_marker, mermaid=req.mermaid,
         )
         # 承認済み解析方針 (Phase 2) ＋ ソース利用可能マーカー/スキーマ要約を先頭に差し込む
@@ -2129,6 +2157,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         stage_one_log_text, _ = _build_topology_log_text(
             req.topology, s1_logs, s1_configs,
             questionnaire_answers=req.questionnaire_answers,
+            questionnaire_confidences=req.questionnaire_confidences,
             node_bigquery=s1_bq_marker, mermaid=req.mermaid,
         )
         # 承認済み解析方針 (Phase 2) ＋ ソースマーカー/スキーマ要約を Stage 1 先頭に差し込む
@@ -2143,6 +2172,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             stage_two_body, _ = _build_topology_log_text(
                 req.topology, req.node_logs, req.node_configs,
                 questionnaire_answers=req.questionnaire_answers,
+                questionnaire_confidences=req.questionnaire_confidences,
                 node_bigquery=bq_norm, mermaid=req.mermaid,
             )
             # 承認済み解析方針・ソースマーカーは Stage 2 でも先頭に維持する

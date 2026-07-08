@@ -44,6 +44,7 @@ import type {
   NodeBigquerySources,
   PolicyProposal,
   QuestionnaireAnswers,
+  QuestionnaireConfidences,
   SSEEvent,
   StageOutput,
   SuspectedNodeFinding,
@@ -182,6 +183,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const batchAbortRef = useRef(false)
   // 問診票回答 (Phase B、揮発)
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
+  // 問診票の各申告の確信度 (高/中/低、揮発)
+  const [questionnaireConfidences, setQuestionnaireConfidences] = useState<QuestionnaireConfidences>({})
   // 問診票の必須項目 (事象など) がすべて埋まっているか。実行可否のゲートに使う
   const [questionnaireValid, setQuestionnaireValid] = useState<boolean>(false)
   // 監査エージェント (Phase C): integrator 後に GPT で独立検証
@@ -531,6 +534,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           rally_max_rounds: rallyMaxRounds,
           view_mode: viewMode,
           questionnaire_answers: questionnaireAnswers,
+          questionnaire_confidences: questionnaireConfidences,
           topology,  // image / nodes / links を含む完全なトポロジー (再現用)
           result: res,
         }),
@@ -620,6 +624,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         single_source: p.singleSource,
         stage_order: p.stageOrder,
         questionnaire_answers: questionnaireAnswers,
+        questionnaire_confidences: questionnaireConfidences,
         audit_after_integrator: auditAfterIntegrator,
         // 監査有効時のみプロンプト上書きを送る (空ならバックエンド既定)
         audit_system_prompt: auditAfterIntegrator ? auditPrompt : undefined,
@@ -968,6 +973,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         <QuestionnairePanel
           answers={questionnaireAnswers}
           onAnswersChange={setQuestionnaireAnswers}
+          confidences={questionnaireConfidences}
+          onConfidencesChange={setQuestionnaireConfidences}
           onValidityChange={setQuestionnaireValid}
           disabled={isRunning}
         />
@@ -1091,11 +1098,13 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           <QuestionnairePanel
             answers={questionnaireAnswers}
             onAnswersChange={setQuestionnaireAnswers}
+            confidences={questionnaireConfidences}
+            onConfidencesChange={setQuestionnaireConfidences}
             onValidityChange={setQuestionnaireValid}
             disabled={isRunning}
           />
           {streamEvents.length > 0 ? (
-            <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} />
+            <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} questionnaireConfidences={questionnaireConfidences} />
           ) : (
             <div className="live-chat-empty muted">実行を開始するとここに会話が表示されます。</div>
           )}
@@ -1165,7 +1174,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
             </button>
           </div>
           {viewMode === 'chat' ? (
-            <ChatHistoryView result={finalResult} questionnaireAnswers={questionnaireAnswers} />
+            <ChatHistoryView result={finalResult} questionnaireAnswers={questionnaireAnswers} questionnaireConfidences={questionnaireConfidences} />
           ) : (
             <>
               <ResultTabs

@@ -260,6 +260,7 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
   const result = detail.result
   const findings = result?.suspected_node_findings ?? []
   const qa = detail.request?.questionnaire_answers ?? {}
+  const qconf = detail.request?.questionnaire_confidences ?? {}
   const traceUrl = langfuseHost && result?.trace_id ? `${langfuseHost}/trace/${result.trace_id}` : null
 
   return (
@@ -318,7 +319,7 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
       {/* 推論過程 + 最終結果 (会話形式) の再現 */}
       <h3>解析の経過と結果</h3>
       {result ? (
-        <ChatHistoryView result={result} questionnaireAnswers={qa} />
+        <ChatHistoryView result={result} questionnaireAnswers={qa} questionnaireConfidences={qconf} />
       ) : (
         <div className="log-empty">結果データがありません</div>
       )}
