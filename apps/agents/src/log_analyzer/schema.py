@@ -58,8 +58,9 @@ class RecommendedAction(BaseModel):
     action: str
     human_judgment_required: bool
     risk_level: RiskLevel
-    # 対応の種別: "provisional"=暫定対応(応急処置) / "permanent"=本質対応(恒久対策) /
-    # "investigation"=調査・切り分け。旧データ互換のため既定は permanent。
+    # 対応の種別: "provisional"=暫定対応(応急処置・調査/切り分けを含む) / "permanent"=本質対応(恒久対策)。
+    # 出力は暫定/本質の2種類。旧値 "investigation" が来た場合は暫定対応として扱う。
+    # 旧データ互換のため既定は permanent。
     kind: str = "permanent"
     # このアクションの確信度 (0-1)。UI はグループ内でこの降順に表示する。
     confidence: float = 0.0

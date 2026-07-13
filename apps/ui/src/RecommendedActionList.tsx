@@ -6,17 +6,16 @@
  */
 import type { RecommendedAction } from './types'
 
-const GROUPS: Array<['provisional' | 'investigation' | 'permanent', string]> = [
+const GROUPS: Array<['provisional' | 'permanent', string]> = [
   ['provisional', '暫定対応'],
-  ['investigation', '調査・切り分け'],
   ['permanent', '本質対応'],
 ]
 
-// kind をグループに割り当てる。未設定/旧データは本質対応(permanent)扱い。
+// 出力は暫定/本質の2種類。調査/切り分け(旧 investigation)は暫定対応に含める。
+// 未設定/旧データは本質対応(permanent)扱い。
 function inGroup(actionKind: string | undefined, group: string): boolean {
-  if (group === 'provisional') return actionKind === 'provisional'
-  if (group === 'investigation') return actionKind === 'investigation'
-  return actionKind !== 'provisional' && actionKind !== 'investigation'  // permanent(既定)
+  const isProvisional = actionKind === 'provisional' || actionKind === 'investigation'
+  return group === 'provisional' ? isProvisional : !isProvisional
 }
 
 function rollbackBadge(v?: string): { text: string; cls: string } {

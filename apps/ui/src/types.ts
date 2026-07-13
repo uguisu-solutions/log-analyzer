@@ -203,7 +203,7 @@ export interface RecommendedAction {
   action: string
   human_judgment_required: boolean
   risk_level: string
-  // "provisional"=暫定対応 / "investigation"=調査・切り分け / "permanent"=本質対応 (旧データは未設定→本質対応扱い)
+  // "provisional"=暫定対応(調査/切り分けを含む) / "permanent"=本質対応 (旧値 investigation は暫定扱い、旧データ未設定→本質対応)
   kind?: string
   confidence?: number          // このアクションの確信度 0-1 (グループ内で降順表示)
   steps?: string[]             // ジュニア向け実行手順 (順序付き)

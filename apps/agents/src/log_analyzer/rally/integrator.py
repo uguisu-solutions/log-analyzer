@@ -45,13 +45,14 @@ INTEGRATOR_PROMPT = """\
   - ロールバック・再起動・設定変更・データ削除を伴うアクションは
     必ず `human_judgment_required: true`（議事録 L3、外せないフラグ）。
     各監視が立てた true は統合後も維持し、false に上書きしない
-  - 各アクションに `kind` を付与する:
-    - "provisional":   暫定対応（応急処置・早期の症状緩和・回避策）
-    - "investigation": 調査・切り分け（根本原因の確定に向けた確認手順・観点・結果ごとの分岐）
-    - "permanent":     本質対応（根本原因の恒久的な解消）
+  - 各アクションに `kind` を付与する（出力は暫定対応・本質対応の2種類）:
+    - "provisional": 暫定対応（応急処置・早期の症状緩和・回避策、および根本原因の確定に向けた
+                     調査・切り分けの手順。切り分け系もこの暫定対応に含める）
+    - "permanent":   本質対応（根本原因の恒久的な解消）
     可能なら **暫定対応と本質対応の両方**を提示する（少なくとも本質対応は 1 つ以上）。
-    根本原因が未確定（confidence が 0.7 未満が目安）の場合は、"investigation" を必ず 1 つ以上含め、
-    その steps に「何が出たらどちらに進むか」を書くこと（未確定でも中身を具体化し、空にしない）
+    根本原因が未確定（confidence が 0.7 未満が目安）の場合は、切り分けを前進させる調査アクション
+    （kind="provisional"）を必ず 1 つ以上含め、その steps に「何が出たらどちらに進むか」を
+    書くこと（未確定でも中身を具体化し、空にしない）
   - action / steps の文章には「【調査】」「【暫定】」等の種別ラベルを書かないこと。
     種別は kind 欄で示し、読み手側は見出しで種別を示すため、文中のラベルは重複で不要
   - 各アクションに次も付与する:
@@ -74,7 +75,7 @@ INTEGRATOR_PROMPT = """\
   ],
   "recommended_actions": [
     {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high",
-     "kind": "provisional|investigation|permanent", "confidence": 0.0,
+     "kind": "provisional|permanent", "confidence": 0.0,
      "steps": ["手順1 (対象機器/コマンド例/確認観点)", "手順2", "..."],
      "risks": ["想定リスク1", "..."],
      "rollback_possible": "yes|no|unknown", "rollback_note": "..."}

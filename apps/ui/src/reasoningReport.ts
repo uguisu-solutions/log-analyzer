@@ -132,9 +132,10 @@ function renderStage(lines: string[], st: StageBlock): void {
       if (a.rollback_note) lines.push(`        - ロールバック: ${a.rollback_note}`)
     }
   }
-  emitActions('暫定対応', sortByConf(st.actions.filter(a => a.kind === 'provisional')))
-  emitActions('調査・切り分け', sortByConf(st.actions.filter(a => a.kind === 'investigation')))
-  emitActions('本質対応', sortByConf(st.actions.filter(a => a.kind !== 'provisional' && a.kind !== 'investigation')))
+  // 出力は暫定対応・本質対応の2種類。調査/切り分け(旧 investigation)は暫定対応に含める
+  const isProvisional = (k?: string) => k === 'provisional' || k === 'investigation'
+  emitActions('暫定対応', sortByConf(st.actions.filter(a => isProvisional(a.kind))))
+  emitActions('本質対応', sortByConf(st.actions.filter(a => !isProvisional(a.kind))))
   lines.push('')
 }
 
