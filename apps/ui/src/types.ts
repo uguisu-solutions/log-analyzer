@@ -193,6 +193,8 @@ export interface RootCauseCandidate {
   category: string
   summary: string
   evidence: string[]
+  // "supported"=主要候補 / "secondary"=副次要因 / "rejected"=棄却仮説 (旧データは未設定→主要扱い)
+  status?: string
   // 旧 schema v0.1 互換: バックエンドが古いデータを返したときの保険。新規データには存在しない
   rank?: number
 }
@@ -201,7 +203,7 @@ export interface RecommendedAction {
   action: string
   human_judgment_required: boolean
   risk_level: string
-  // "provisional"=暫定対応 / "permanent"=本質対応 (旧データは未設定→本質対応扱い)
+  // "provisional"=暫定対応 / "investigation"=調査・切り分け / "permanent"=本質対応 (旧データは未設定→本質対応扱い)
   kind?: string
   confidence?: number          // このアクションの確信度 0-1 (グループ内で降順表示)
   steps?: string[]             // ジュニア向け実行手順 (順序付き)

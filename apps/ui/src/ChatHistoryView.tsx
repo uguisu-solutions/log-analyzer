@@ -106,24 +106,38 @@ function buildConversation(messages: React.ReactNode[], a: ConversationArgs): vo
       metric={integratorMetric}
     >
       <p className="chat-confidence">確信度: <strong>{a.confidence.toFixed(2)}</strong></p>
-      {a.candidates.length > 0 && (
-        <>
-          <p className="chat-section-title">根本原因候補</p>
-          <ul className="chat-causes">
-            {a.candidates.map((c, i) => (
-              <li key={i}>
-                <span className={`badge cat-${c.category}`}>{c.category}</span>
-                {c.summary}
-                {c.evidence && c.evidence.length > 0 && (
-                  <ul className="chat-evidence">
-                    {c.evidence.map((e, j) => <li key={j}>{e}</li>)}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      {a.candidates.length > 0 && (() => {
+        const active = a.candidates.filter(c => c.status !== 'rejected')
+        const rejected = a.candidates.filter(c => c.status === 'rejected')
+        const renderItem = (c: RootCauseCandidate, i: number) => (
+          <li key={i}>
+            <span className={`badge cat-${c.category}`}>{c.category}</span>
+            {c.status === 'secondary' && <span className="cand-status muted">（副次要因）</span>}
+            {c.summary}
+            {c.evidence && c.evidence.length > 0 && (
+              <ul className="chat-evidence">
+                {c.evidence.map((e, j) => <li key={j}>{e}</li>)}
+              </ul>
+            )}
+          </li>
+        )
+        return (
+          <>
+            {active.length > 0 && (
+              <>
+                <p className="chat-section-title">根本原因候補</p>
+                <ul className="chat-causes">{active.map(renderItem)}</ul>
+              </>
+            )}
+            {rejected.length > 0 && (
+              <>
+                <p className="chat-section-title">棄却した仮説</p>
+                <ul className="chat-causes chat-causes-rejected">{rejected.map(renderItem)}</ul>
+              </>
+            )}
+          </>
+        )
+      })()}
       {a.actions.length > 0 && (
         <>
           <p className="chat-section-title">推奨アクション（クリックで手順を表示）</p>

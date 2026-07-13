@@ -6,10 +6,18 @@
  */
 import type { RecommendedAction } from './types'
 
-const GROUPS: Array<['provisional' | 'permanent', string]> = [
+const GROUPS: Array<['provisional' | 'investigation' | 'permanent', string]> = [
   ['provisional', '暫定対応'],
+  ['investigation', '調査・切り分け'],
   ['permanent', '本質対応'],
 ]
+
+// kind をグループに割り当てる。未設定/旧データは本質対応(permanent)扱い。
+function inGroup(actionKind: string | undefined, group: string): boolean {
+  if (group === 'provisional') return actionKind === 'provisional'
+  if (group === 'investigation') return actionKind === 'investigation'
+  return actionKind !== 'provisional' && actionKind !== 'investigation'  // permanent(既定)
+}
 
 function rollbackBadge(v?: string): { text: string; cls: string } {
   if (v === 'yes') return { text: 'ロールバック可', cls: 'rb-yes' }
@@ -22,7 +30,7 @@ export function RecommendedActionList({ actions }: { actions: RecommendedAction[
     <>
       {GROUPS.map(([kind, label]) => {
         const list = actions
-          .filter(a => (kind === 'provisional' ? a.kind === 'provisional' : a.kind !== 'provisional'))
+          .filter(a => inGroup(a.kind, kind))
           .slice()
           .sort((x, y) => (y.confidence ?? 0) - (x.confidence ?? 0))  // グループ内 確信度降順
         if (list.length === 0) return null

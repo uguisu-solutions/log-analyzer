@@ -176,6 +176,31 @@ def test_build_analysis_result_parses_structured_suspected_nodes():
     assert findings[1].severity == "secondary"
 
 
+def test_build_analysis_result_preserves_candidate_status_and_action_kind():
+    """候補の status（主要/副次/棄却）とアクションの kind（investigation）が保持される。"""
+    integrator_result = {
+        "root_cause_candidates": [
+            {"category": "Net", "status": "supported", "summary": "主要", "evidence": []},
+            {"category": "App", "status": "secondary", "summary": "副次", "evidence": []},
+            {"category": "DNS", "status": "rejected", "summary": "棄却", "evidence": []},
+            {"category": "FW", "summary": "既定", "evidence": []},  # status 未指定 → supported
+        ],
+        "recommended_actions": [
+            {"action": "調べる", "human_judgment_required": False, "risk_level": "low",
+             "kind": "investigation", "confidence": 0.9},
+            {"action": "戻す", "human_judgment_required": True, "risk_level": "mid"},  # 既定 permanent
+        ],
+        "confidence": 0.5,
+    }
+    result = _build_analysis_result(
+        log_ref="test", trace_id="t", integrator_result=integrator_result,
+        token_log=[], delegation_history=[], rally_round=1, rally_max_rounds=3, wall_ms=100,
+    )
+    assert [c.status for c in result.root_cause_candidates] == [
+        "supported", "secondary", "rejected", "supported"]
+    assert [a.kind for a in result.recommended_actions] == ["investigation", "permanent"]
+
+
 def test_build_analysis_result_accepts_alias_keys_and_case():
     """LLM が `id` キーや大文字 severity を返してきても拾えること。"""
     integrator_result = {

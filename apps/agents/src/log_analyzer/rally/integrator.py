@@ -28,27 +28,32 @@ INTEGRATOR_PROMPT = """\
 統合ルール:
 - 複数監視の evidence で支持された原因を配列先頭に。1 監視のみが言うものは後方に
   ※候補同士は並列扱い (UI 上もランキングではなくフラット表示)。「rank 1」の概念は撤去
+- 各候補に `status` を付与する（出力の形を揃えるため、文章で散らさず必ずこの欄で示す）:
+  - "supported":  支持された主要候補
+  - "secondary":  副次的な要因（主要候補の傍らで寄与しうるが単独では現象を説明しきれない）
+  - "rejected":   棄却した仮説（配列から消さず status="rejected" で残す＝黙殺しない）
 - 各候補の summary には、原因の説明に加えて「何が確認されればこの候補が確定し、
   何が観測されれば棄却されるか」を 1 文含めること（読み手の次の確認行動を方向づけるため）
-- 問診票③「原因の見当」に記入者の見立てが書かれている場合、その見立てが支持されたのか
-  棄却されたのかが root_cause_candidates の summary または evidence から読み取れるようにする
-  こと（記入者の見立てを黙殺しない）
+- 問診票③「原因の見当」に記入者の見立てが書かれている場合、その見立てを候補として必ず載せ、
+  支持なら status="supported/secondary"、否定なら status="rejected" で明示する（黙殺しない）
 - recommended_actions:
   - 問診票③「いま一番迷っていること」に記載がある場合、少なくとも 1 つのアクションは
     その迷いに直接回答するものとすること。
     例: 「業務時間中に再起動してよいか判断できない」→ 再起動アクションの steps / risks /
     rollback_possible / rollback_note に、実施可否をその場で判断できる材料
     （影響範囲・所要時間・失敗時の戻し方・実施すべき時間帯の条件）を与える
-  - 根本原因が未確定の場合は、切り分けを前進させる調査アクション（確認手順・確認観点・
-    結果ごとの次の分岐）も recommended_actions として提示してよい。その場合 steps には
-    「何が出たらどちらに進むか」を含めること
   - ロールバック・再起動・設定変更・データ削除を伴うアクションは
     必ず `human_judgment_required: true`（議事録 L3、外せないフラグ）。
     各監視が立てた true は統合後も維持し、false に上書きしない
   - 各アクションに `kind` を付与する:
-    - "provisional": 暫定対応（応急処置・早期の症状緩和・回避策）
-    - "permanent":   本質対応（根本原因の恒久的な解消）
-    可能なら **暫定対応と本質対応の両方**を提示する（少なくとも本質対応は 1 つ以上）
+    - "provisional":   暫定対応（応急処置・早期の症状緩和・回避策）
+    - "investigation": 調査・切り分け（根本原因の確定に向けた確認手順・観点・結果ごとの分岐）
+    - "permanent":     本質対応（根本原因の恒久的な解消）
+    可能なら **暫定対応と本質対応の両方**を提示する（少なくとも本質対応は 1 つ以上）。
+    根本原因が未確定（confidence が 0.7 未満が目安）の場合は、"investigation" を必ず 1 つ以上含め、
+    その steps に「何が出たらどちらに進むか」を書くこと（未確定でも中身を具体化し、空にしない）
+  - action / steps の文章には「【調査】」「【暫定】」等の種別ラベルを書かないこと。
+    種別は kind 欄で示し、読み手側は見出しで種別を示すため、文中のラベルは重複で不要
   - 各アクションに次も付与する:
     - `confidence`: そのアクションが妥当である確信度 (0.0–1.0)。**kind ごとに confidence 降順**で並べる
     - `steps`: **ジュニアクラスのエンジニアがそのまま着手できる粒度**の具体手順を順序付き配列で。
@@ -64,11 +69,12 @@ INTEGRATOR_PROMPT = """\
 出力 (JSON のみ):
 {
   "root_cause_candidates": [
-    {"category": "FW|Net|App|DNS|Sec|Unknown", "summary": "...", "evidence": ["..."]}
+    {"category": "FW|Net|App|DNS|Sec|Unknown", "status": "supported|secondary|rejected",
+     "summary": "...", "evidence": ["..."]}
   ],
   "recommended_actions": [
     {"action": "...", "human_judgment_required": true, "risk_level": "low|mid|high",
-     "kind": "provisional|permanent", "confidence": 0.0,
+     "kind": "provisional|investigation|permanent", "confidence": 0.0,
      "steps": ["手順1 (対象機器/コマンド例/確認観点)", "手順2", "..."],
      "risks": ["想定リスク1", "..."],
      "rollback_possible": "yes|no|unknown", "rollback_note": "..."}
@@ -91,7 +97,7 @@ INTEGRATOR_PROMPT = """\
 
 トポロジー時の出力例（参考）:
 {
-  "root_cause_candidates": [{"category": "FW", "summary": "...", "evidence": ["..."]}],
+  "root_cause_candidates": [{"category": "FW", "status": "supported", "summary": "...", "evidence": ["..."]}],
   "recommended_actions": [
     {"action": "api-backends 向け permit を一時的に再追加し疎通を回復",
      "human_judgment_required": true, "risk_level": "mid", "kind": "provisional", "confidence": 0.88,
@@ -114,8 +120,9 @@ INTEGRATOR_PROMPT = """\
 }
 
 ルール:
-- 候補は最大 3 件（UI 表示互換のため）。3 件に収まらない場合は、落とした候補が
-  棄却済みであることが先頭候補の summary から読み取れるようにすること
+- 主要候補（status="supported"）と副次要因（status="secondary"）は合わせて最大 3 件
+  （UI 表示互換のため）。棄却した仮説（status="rejected"）はこの 3 件に数えず、
+  別枠として残してよい（黙殺しないため）
 - フィールド名・enum 値は英語、summary / action の自然文は日本語
 - コードフェンスで囲まない
 """

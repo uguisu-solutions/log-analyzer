@@ -49,14 +49,17 @@ class RootCauseCandidate(BaseModel):
     category: Category
     summary: str
     evidence: list[str] = Field(default_factory=list)
+    # 候補の状態: "supported"=支持された主要候補 / "secondary"=副次的要因 /
+    # "rejected"=棄却した仮説（配列に残して黙殺しない）。旧データ互換で既定は supported。
+    status: str = "supported"
 
 
 class RecommendedAction(BaseModel):
     action: str
     human_judgment_required: bool
     risk_level: RiskLevel
-    # 対応の種別: "provisional"=暫定対応(応急処置) / "permanent"=本質対応(恒久対策)。
-    # 旧データ互換のため既定は permanent。
+    # 対応の種別: "provisional"=暫定対応(応急処置) / "permanent"=本質対応(恒久対策) /
+    # "investigation"=調査・切り分け。旧データ互換のため既定は permanent。
     kind: str = "permanent"
     # このアクションの確信度 (0-1)。UI はグループ内でこの降順に表示する。
     confidence: float = 0.0
