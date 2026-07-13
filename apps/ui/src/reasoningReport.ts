@@ -100,8 +100,19 @@ function renderStage(lines: string[], st: StageBlock): void {
   lines.push(`### ${roleLabel('integrator')}`)
   lines.push(`- 最終確信度: **${st.confidence.toFixed(2)}**${metricSuffix(im)}`)
   if (st.candidates.length > 0) {
-    lines.push('- 根本原因候補:')
-    for (const c of st.candidates) lines.push(`    - [${c.category}] ${c.summary}`)
+    const active = st.candidates.filter(c => c.status !== 'rejected')
+    const rejected = st.candidates.filter(c => c.status === 'rejected')
+    if (active.length > 0) {
+      lines.push('- 根本原因候補:')
+      for (const c of active) {
+        const sec = c.status === 'secondary' ? ' ※副次的要因' : ''
+        lines.push(`    - [${c.category}] ${c.summary}${sec}`)
+      }
+    }
+    if (rejected.length > 0) {
+      lines.push('- 棄却した仮説:')
+      for (const c of rejected) lines.push(`    - [${c.category}] ${c.summary}`)
+    }
   }
   const sortByConf = (xs: AnalysisResult['recommended_actions']) =>
     xs.slice().sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
@@ -122,7 +133,8 @@ function renderStage(lines: string[], st: StageBlock): void {
     }
   }
   emitActions('暫定対応', sortByConf(st.actions.filter(a => a.kind === 'provisional')))
-  emitActions('本質対応', sortByConf(st.actions.filter(a => a.kind !== 'provisional')))
+  emitActions('調査・切り分け', sortByConf(st.actions.filter(a => a.kind === 'investigation')))
+  emitActions('本質対応', sortByConf(st.actions.filter(a => a.kind !== 'provisional' && a.kind !== 'investigation')))
   lines.push('')
 }
 

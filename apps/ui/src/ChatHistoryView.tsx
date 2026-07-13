@@ -18,6 +18,7 @@ import type {
   AuditReport,
   DelegationEvent,
   QuestionnaireAnswers,
+  QuestionnaireConfidences,
   RecommendedAction,
   RootCauseCandidate,
   RoundMetrics,
@@ -26,6 +27,8 @@ import type {
 interface Props {
   result: AnalysisResult
   questionnaireAnswers: QuestionnaireAnswers
+  // 各申告の確信度 (高/中/低)。任意。
+  questionnaireConfidences?: QuestionnaireConfidences
   // 2 段階解析では stage_outputs を Stage ごとに展開する (既定 true)。
   // 単一 Stage を埋め込み描画する用途では false にして問診票ブロックを抑制できる。
   showQuestionnaire?: boolean
@@ -103,19 +106,38 @@ function buildConversation(messages: React.ReactNode[], a: ConversationArgs): vo
       metric={integratorMetric}
     >
       <p className="chat-confidence">確信度: <strong>{a.confidence.toFixed(2)}</strong></p>
-      {a.candidates.length > 0 && (
-        <>
-          <p className="chat-section-title">根本原因候補</p>
-          <ul className="chat-causes">
-            {a.candidates.map((c, i) => (
-              <li key={i}>
-                <span className={`badge cat-${c.category}`}>{c.category}</span>
-                {c.summary}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      {a.candidates.length > 0 && (() => {
+        const active = a.candidates.filter(c => c.status !== 'rejected')
+        const rejected = a.candidates.filter(c => c.status === 'rejected')
+        const renderItem = (c: RootCauseCandidate, i: number) => (
+          <li key={i}>
+            <span className={`badge cat-${c.category}`}>{c.category}</span>
+            {c.status === 'secondary' && <span className="cand-status muted">（副次要因）</span>}
+            {c.summary}
+            {c.evidence && c.evidence.length > 0 && (
+              <ul className="chat-evidence">
+                {c.evidence.map((e, j) => <li key={j}>{e}</li>)}
+              </ul>
+            )}
+          </li>
+        )
+        return (
+          <>
+            {active.length > 0 && (
+              <>
+                <p className="chat-section-title">根本原因候補</p>
+                <ul className="chat-causes">{active.map(renderItem)}</ul>
+              </>
+            )}
+            {rejected.length > 0 && (
+              <>
+                <p className="chat-section-title">棄却した仮説</p>
+                <ul className="chat-causes chat-causes-rejected">{rejected.map(renderItem)}</ul>
+              </>
+            )}
+          </>
+        )
+      })()}
       {a.actions.length > 0 && (
         <>
           <p className="chat-section-title">推奨アクション（クリックで手順を表示）</p>
@@ -155,8 +177,9 @@ function buildAudit(messages: React.ReactNode[], ar: AuditReport): void {
   )
 }
 
-export function ChatHistoryView({ result, questionnaireAnswers, showQuestionnaire = true }: Props) {
+export function ChatHistoryView({ result, questionnaireAnswers, questionnaireConfidences, showQuestionnaire = true }: Props) {
   const messages: React.ReactNode[] = []
+  const conf = questionnaireConfidences ?? {}
 
   // 1. 問診票回答 (人間メッセージ)
   if (showQuestionnaire) {
@@ -166,7 +189,7 @@ export function ChatHistoryView({ result, questionnaireAnswers, showQuestionnair
         <ChatMessage key="qa" sender="human" speaker="人間オペレータ" tag="問診票">
           <ul className="chat-qa-list">
             {answerEntries.map(([k, v]) => (
-              <li key={k}><strong>{k}:</strong> {v}</li>
+              <li key={k}><strong>{k}:</strong> {v}{conf[k] ? <span className="qa-conf muted">（確信度: {conf[k]}）</span> : null}</li>
             ))}
           </ul>
         </ChatMessage>

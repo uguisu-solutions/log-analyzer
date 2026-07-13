@@ -10,11 +10,12 @@
  */
 import { useEffect, useRef } from 'react'
 import { ChatMessage } from './ChatHistoryView'
-import type { QuestionnaireAnswers, SSEEvent } from './types'
+import type { QuestionnaireAnswers, QuestionnaireConfidences, SSEEvent } from './types'
 
 interface Props {
   events: SSEEvent[]
   questionnaireAnswers: QuestionnaireAnswers
+  questionnaireConfidences?: QuestionnaireConfidences
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -31,7 +32,8 @@ function roleLabel(role: string): string {
   return ROLE_LABEL[role] ?? `${role} 監視`
 }
 
-export function LiveChatView({ events, questionnaireAnswers }: Props) {
+export function LiveChatView({ events, questionnaireAnswers, questionnaireConfidences }: Props) {
+  const conf = questionnaireConfidences ?? {}
   const tailRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     tailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -46,7 +48,7 @@ export function LiveChatView({ events, questionnaireAnswers }: Props) {
       <ChatMessage key="qa" sender="human" speaker="人間オペレータ" tag="問診票">
         <ul className="chat-qa-list">
           {answerEntries.map(([k, v]) => (
-            <li key={k}><strong>{k}:</strong> {v}</li>
+            <li key={k}><strong>{k}:</strong> {v}{conf[k] ? <span className="qa-conf muted">（確信度: {conf[k]}）</span> : null}</li>
           ))}
         </ul>
       </ChatMessage>

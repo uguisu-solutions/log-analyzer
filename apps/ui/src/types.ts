@@ -167,6 +167,7 @@ export interface AnalysisHistoryDetail extends AnalysisHistorySummary {
     rally_max_rounds: number | null
     view_mode: string | null
     questionnaire_answers: QuestionnaireAnswers
+    questionnaire_confidences?: QuestionnaireConfidences
     topology: TopologyDef
   }
   result: AnalysisResult
@@ -183,6 +184,7 @@ export interface AnalysisHistorySaveRequest {
   rally_max_rounds: number | null
   view_mode: string | null
   questionnaire_answers: QuestionnaireAnswers
+  questionnaire_confidences?: QuestionnaireConfidences
   topology: TopologyDef
   result: AnalysisResult
 }
@@ -191,6 +193,8 @@ export interface RootCauseCandidate {
   category: string
   summary: string
   evidence: string[]
+  // "supported"=主要候補 / "secondary"=副次要因 / "rejected"=棄却仮説 (旧データは未設定→主要扱い)
+  status?: string
   // 旧 schema v0.1 互換: バックエンドが古いデータを返したときの保険。新規データには存在しない
   rank?: number
 }
@@ -199,7 +203,7 @@ export interface RecommendedAction {
   action: string
   human_judgment_required: boolean
   risk_level: string
-  // "provisional"=暫定対応 / "permanent"=本質対応 (旧データは未設定→本質対応扱い)
+  // "provisional"=暫定対応 / "investigation"=調査・切り分け / "permanent"=本質対応 (旧データは未設定→本質対応扱い)
   kind?: string
   confidence?: number          // このアクションの確信度 0-1 (グループ内で降順表示)
   steps?: string[]             // ジュニア向け実行手順 (順序付き)
@@ -438,9 +442,9 @@ export interface NodeAttachment {
 // nodeId → 添付ファイル群
 export type NodeAttachments = Record<string, NodeAttachment[]>
 
-// 1 ノードのログ取得元。'upload' = ファイルアップロード(従来) / 'bigquery' = BQ 取得
-export interface NodeLogSource {
-  type: 'upload' | 'bigquery'
+// 1 つの BigQuery テーブル指定 (type フィールドは持たない)。
+// アップロードは常に有効なので、ここは「追加で BQ から取得するテーブル」を表す。
+export interface NodeBqTable {
   host?: string        // BQ 上の host 値 (空なら node id)
   table?: string       // テーブル名 (空なら環境変数の既定テーブル)
   // 列構成はテーブルごとに異なる前提。空欄でその絞り込みを無効化できる
@@ -453,8 +457,8 @@ export interface NodeLogSource {
   limit?: number       // 取得既定件数 (任意)
 }
 
-// nodeId → ログ取得元設定。未設定ノードは 'upload' 扱い
-export type NodeLogSources = Record<string, NodeLogSource>
+// nodeId → その節点に紐づく BQ テーブル群 (1 ノードに複数テーブル可)
+export type NodeBigquerySources = Record<string, NodeBqTable[]>
 
 // 問診票 (Phase B) ─────────────────────────────────────
 export interface QuestionnaireItem {
@@ -478,6 +482,10 @@ export interface QuestionnaireTemplate {
 // {key: answer} の辞書
 export type QuestionnaireAnswers = Record<string, string>
 
+// {key: '高'|'中'|'低'} の並列辞書。各申告の確信度 (人間が回答時に選ぶ)。任意。
+export type QuestionnaireConfidences = Record<string, string>
+export const CONFIDENCE_LEVELS = ['高', '中', '低'] as const
+
 // ─── 解析評価 (解析レポート × 解答 の比較採点) ──────────────────
 export interface AnswerScenario {
   scenario_key: string
@@ -499,6 +507,7 @@ export interface EvaluationDTO {
   analysis_history_id: number
   scenario_key: string
   score: number | null
+  axis_assessment: string[]
   good_points: string[]
   bad_points: string[]
   pitfalls_avoided: string[]

@@ -10,8 +10,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from log_analyzer.rally import monitors as mon_mod
 from log_analyzer.rally import orchestrator as orch_mod
 from log_analyzer.rally import integrator as integ_mod
@@ -163,7 +161,7 @@ def _setup_three_step_chain(monkeypatch):
         if "トリアージ" in system:
             call_log.append("orchestrator")
             return _mock_resp(orchestrator_payload)
-        if "ファイアウォール" in system:
+        if "FW レイヤ" in system:
             call_log.append("fw")
             return _mock_resp(fw_payload)
         if "ルーティング" in system:
@@ -251,9 +249,9 @@ def test_stream_pauses_at_max_rounds_and_awaits_confirmation(monkeypatch):
         system = _system_text(system)
         if "トリアージ" in system:
             return _mock_resp(orchestrator_payload)
-        if "ファイアウォール" in system:
+        if "FW レイヤ" in system:
             return _mock_resp(_monitor_payload("fw"))
-        if "DNS の監視" in system:
+        if "DNS 解決" in system:
             return _mock_resp(_monitor_payload("dns"))
         if "アプリケーション層" in system:
             return _mock_resp(_monitor_payload("app"))
@@ -330,9 +328,9 @@ def test_stream_continues_when_user_extends(monkeypatch):
         system = _system_text(system)
         if "トリアージ" in system:
             return _mock_resp(orchestrator_payload)
-        if "ファイアウォール" in system:
+        if "FW レイヤ" in system:
             return _mock_resp(_payload("fw"))
-        if "DNS の監視" in system:
+        if "DNS 解決" in system:
             return _mock_resp(_payload("dns"))
         if "アプリケーション層" in system:
             return _mock_resp(_payload("app"))

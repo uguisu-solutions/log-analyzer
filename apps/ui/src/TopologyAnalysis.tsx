@@ -31,6 +31,7 @@ import type {
   NodeAttachment,
   NodeAttachments,
   QuestionnaireAnswers,
+  QuestionnaireConfidences,
   SSEEvent,
   SuspectedNodeFinding,
   TopologyDef,
@@ -128,6 +129,7 @@ export function TopologyAnalysis({
   const [nodeConfigs, setNodeConfigs] = useState<NodeAttachments>({})
   // 問診票回答 (Phase B、揮発)
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
+  const [questionnaireConfidences, setQuestionnaireConfidences] = useState<QuestionnaireConfidences>({})
 
   // ─── 編集状態 ─────────────────────────────────────────────
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -421,6 +423,7 @@ export function TopologyAnalysis({
         node_logs: filteredAttachments(nodeLogs),
         node_configs: filteredAttachments(nodeConfigs),
         questionnaire_answers: questionnaireAnswers,
+        questionnaire_confidences: questionnaireConfidences,
         audit_after_integrator: auditAfterIntegrator,
       }
       const r = await fetch(`${API_BASE}/api/runs/topology-stream`, {
@@ -643,6 +646,8 @@ export function TopologyAnalysis({
         <QuestionnairePanel
           answers={questionnaireAnswers}
           onAnswersChange={setQuestionnaireAnswers}
+          confidences={questionnaireConfidences}
+          onConfidencesChange={setQuestionnaireConfidences}
           disabled={running}
         />
       )}
@@ -703,10 +708,12 @@ export function TopologyAnalysis({
           <QuestionnairePanel
             answers={questionnaireAnswers}
             onAnswersChange={setQuestionnaireAnswers}
+            confidences={questionnaireConfidences}
+            onConfidencesChange={setQuestionnaireConfidences}
             disabled={running}
           />
           {streamEvents.length > 0 ? (
-            <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} />
+            <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} questionnaireConfidences={questionnaireConfidences} />
           ) : (
             <div className="live-chat-empty muted">実行を開始するとここに会話が表示されます。</div>
           )}
@@ -738,7 +745,7 @@ export function TopologyAnalysis({
         ) : (
           <section className="topology-result">
             <h3>解析結果 (チャット表示)</h3>
-            <ChatHistoryView result={result} questionnaireAnswers={questionnaireAnswers} />
+            <ChatHistoryView result={result} questionnaireAnswers={questionnaireAnswers} questionnaireConfidences={questionnaireConfidences} />
           </section>
         )
       )}

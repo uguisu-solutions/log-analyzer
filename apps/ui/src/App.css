@@ -3227,8 +3227,31 @@ code {
   gap: 0.2rem;
   font-size: 0.85rem;
 }
-.qp-item-label span {
+.qp-item-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.qp-item-label > span:first-child {
   font-weight: 600;
+}
+.qp-confidence {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--muted, #64748b);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.qp-confidence select {
+  padding: 0.1rem 0.3rem;
+  font-size: 0.78rem;
+}
+.qa-conf {
+  margin-left: 0.35rem;
+  font-size: 0.8em;
 }
 .qp-required {
   font-style: normal;
@@ -3549,6 +3572,23 @@ code {
 .chat-qa-list li {
   font-size: 0.88rem;
 }
+.cand-status {
+  font-size: 0.78rem;
+  margin: 0 0.3rem;
+}
+.chat-causes-rejected {
+  opacity: 0.65;
+}
+.chat-evidence {
+  margin: 0.25rem 0 0.35rem 0.9rem;
+  padding: 0;
+  list-style: disc;
+}
+.chat-evidence li {
+  font-size: 0.8rem;
+  color: var(--muted, #64748b);
+  margin: 0.12rem 0;
+}
 .chat-meta {
   font-size: 0.74rem;
   margin-top: 0.4rem;
@@ -3866,3 +3906,23 @@ code {
 .eval-list.good li { color: #14532d; }
 .eval-list.bad li  { color: #7f1d1d; }
 
+
+/* ─── BigQuery テーブル (複数可) カード ─────────────────────── */
+.bq-tables-block { margin-top: 0.8rem; }
+.bq-table-card {
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  margin-bottom: 0.6rem;
+  background: #fafbfc;
+}
+.bq-table-card .attach-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+}
+
+/* 評価: 採点根拠（観点別） */
+.eval-axes { margin: 0.5rem 0; }
+.eval-axes .eval-list { font-size: 0.83rem; }

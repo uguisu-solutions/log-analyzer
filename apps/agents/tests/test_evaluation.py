@@ -87,10 +87,12 @@ def test_storage_evaluation_roundtrip():
     try:
         saved = storage.insert_evaluation(
             analysis_history_id=hid, scenario_key="ZZ", score=6,
+            axis_assessment=["推論の道筋: 良い"],
             good_points=["g"], bad_points=["b"], pitfalls_avoided=["pa"], pitfalls_hit=["ph"],
             summary="s", model="test", tokens_in=1, tokens_out=2, latency_ms=3,
         )
         assert saved["score"] == 6 and saved["good_points"] == ["g"]
+        assert saved["axis_assessment"] == ["推論の道筋: 良い"]
         rows = storage.list_evaluations(hid)
         assert len(rows) == 1 and rows[0]["pitfalls_hit"] == ["ph"]
         assert storage.delete_evaluation(saved["id"]) is True

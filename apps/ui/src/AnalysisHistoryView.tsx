@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChatHistoryView } from './ChatHistoryView'
+import { DelegationHistoryView } from './DelegationHistoryView'
 import { EvaluationPanel } from './EvaluationPanel'
 import { RoundMetricsView } from './RoundMetricsView'
 import { buildReasoningReport, downloadText } from './reasoningReport'
@@ -259,6 +260,7 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
   const result = detail.result
   const findings = result?.suspected_node_findings ?? []
   const qa = detail.request?.questionnaire_answers ?? {}
+  const qconf = detail.request?.questionnaire_confidences ?? {}
   const traceUrl = langfuseHost && result?.trace_id ? `${langfuseHost}/trace/${result.trace_id}` : null
 
   return (
@@ -317,12 +319,17 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
       {/* 推論過程 + 最終結果 (会話形式) の再現 */}
       <h3>解析の経過と結果</h3>
       {result ? (
-        <ChatHistoryView result={result} questionnaireAnswers={qa} />
+        <ChatHistoryView result={result} questionnaireAnswers={qa} questionnaireConfidences={qconf} />
       ) : (
         <div className="log-empty">結果データがありません</div>
       )}
 
       {/* 監査所見は ChatHistoryView 内に会話として含まれる (重複回避のためここでは出さない) */}
+
+      {/* 委譲チェーン (各監視の rationale / focus_hint。評価が参照する推論の跡) */}
+      {result?.delegation_history && result.delegation_history.length > 0 && (
+        <DelegationHistoryView result={result} />
+      )}
 
       {/* ラウンド単位 metrics */}
       {result?.round_metrics && result.round_metrics.length > 0 && (
