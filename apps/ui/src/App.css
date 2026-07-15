@@ -2599,6 +2599,120 @@ code {
   cursor: not-allowed;
 }
 
+/* 詳細設定アコーディオン (一度決めたら変えない設定をまとめる) */
+.advanced-settings {
+  margin-bottom: 0.5rem;
+  border: 1px solid #e0e3e7;
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+.advanced-settings > summary {
+  cursor: pointer;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4a5560;
+  user-select: none;
+}
+.advanced-settings[open] > summary {
+  border-bottom: 1px solid #e8eaee;
+}
+.advanced-settings-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  padding: 0.6rem 0.8rem;
+}
+.advanced-settings-body > label {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+.advanced-settings-body input[type="number"] {
+  width: 4.5rem;
+}
+.advanced-settings-body .audit-prompt-details {
+  flex-basis: 100%;
+}
+
+/* 実行直前の投入内容サマリ・バー */
+.prerun-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.7rem;
+  margin-bottom: 0.5rem;
+  background: #fbfcfd;
+  border: 1px solid #e0e3e7;
+  border-radius: 6px;
+}
+.prerun-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4a5560;
+  white-space: nowrap;
+}
+.prerun-summary-warn {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: #b3261e;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.prerun-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.prerun-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid #d8dce1;
+  background: #fff;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.prerun-chip-label {
+  color: #6b7580;
+}
+.prerun-chip-value {
+  font-weight: 600;
+  color: #2a2f36;
+}
+.prerun-chip.tone-ok {
+  border-color: #b7e0c2;
+  background: #f2fbf5;
+}
+.prerun-chip.tone-ok .prerun-chip-value {
+  color: #1a7f3c;
+}
+.prerun-chip.tone-warn {
+  border-color: #e7b96b;
+  background: #fff7e9;
+}
+.prerun-chip.tone-warn .prerun-chip-value {
+  color: #9a5b00;
+}
+.prerun-chip.tone-muted {
+  color: #9aa2ab;
+}
+.prerun-chip.tone-muted .prerun-chip-value {
+  color: #9aa2ab;
+  font-weight: 500;
+}
+
 .topology-run-bar {
   display: flex;
   gap: 0.75rem 1rem;
