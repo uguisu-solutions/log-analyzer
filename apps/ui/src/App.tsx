@@ -365,7 +365,7 @@ function ResultSummaryGrid({ result, langfuseHost }: { result: AnalysisResult; l
 }
 
 function App() {
-  const [mode, setMode] = useState<Mode>('single')
+  const [mode, setMode] = useState<Mode>('config-log')
 
   const [configList, setConfigList] = useState<ConfigEntry[]>([])
   const [logs, setLogs] = useState<LogEntry[]>([])
@@ -818,14 +818,13 @@ function App() {
     <div className="container">
       <header>
         <h1>log-analyzer 管理 UI</h1>
-        <p className="subtitle">
-          ログを選び、構成（builtin / ユーザー定義）で分析を実行する。エージェント組織図 + 比較表 + 段階別プロンプト編集対応。
-        </p>
       </header>
 
       <div className="mode-tabs">
         {/* 構成比較 / 構成設計（pipeline）/ トポロジー解析 タブは非表示
             (コードは残置。再表示する場合はこのコメント内のボタンを戻す) */}
+        {/* 単一実行 / ログ管理 / 実行履歴 タブは未使用のため非表示
+            (コードは残置。再表示する場合はこのコメント内のボタンを戻す)
         <button
           onClick={() => setMode('single')}
           className={mode === 'single' ? 'tab active' : 'tab'}
@@ -847,6 +846,7 @@ function App() {
         >
           実行履歴
         </button>
+        */}
         <button
           onClick={() => setMode('config-log')}
           className={mode === 'config-log' ? 'tab active' : 'tab'}

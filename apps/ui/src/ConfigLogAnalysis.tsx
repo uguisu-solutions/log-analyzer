@@ -64,22 +64,8 @@ type AnalysisMode = 'single' | 'two_stage'
 type SingleSource = 'config' | 'log' | 'both'
 type StageOrder = 'config_log' | 'log_config'
 
-// 連続実行する 1 パターン (段階 × 使用データ)。複数選択して順に流す。
+// 実行する 1 パターン (段階 × 使用データ)。
 type RunPattern = { analysisMode: AnalysisMode; singleSource: SingleSource; stageOrder: StageOrder }
-
-// まとめて実行のチェックボックス候補。two_stage は singleSource を使わない (stage_order で決まる)
-const PATTERN_DEFS: { key: string; label: string; group: string; pattern: RunPattern }[] = [
-  { key: 'single:both',    label: 'config + log 同時', group: '1 段階',
-    pattern: { analysisMode: 'single', singleSource: 'both', stageOrder: 'config_log' } },
-  { key: 'single:config',  label: 'config のみ', group: '1 段階',
-    pattern: { analysisMode: 'single', singleSource: 'config', stageOrder: 'config_log' } },
-  { key: 'single:log',     label: 'log のみ', group: '1 段階',
-    pattern: { analysisMode: 'single', singleSource: 'log', stageOrder: 'config_log' } },
-  { key: 'two:config_log', label: 'config → log', group: '2 段階',
-    pattern: { analysisMode: 'two_stage', singleSource: 'both', stageOrder: 'config_log' } },
-  { key: 'two:log_config', label: 'log → config', group: '2 段階',
-    pattern: { analysisMode: 'two_stage', singleSource: 'both', stageOrder: 'log_config' } },
-]
 
 interface Props {
   configList: ConfigEntry[]
@@ -177,10 +163,6 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('single')
   const [singleSource, setSingleSource] = useState<SingleSource>('both')
   const [stageOrder, setStageOrder] = useState<StageOrder>('config_log')
-  // まとめて実行: 選択中パターン (key→bool) と進捗。連続実行中は abort フラグで全体停止
-  const [selectedPatterns, setSelectedPatterns] = useState<Record<string, boolean>>({})
-  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; label: string } | null>(null)
-  const batchAbortRef = useRef(false)
   // 問診票回答 (Phase B、揮発)
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({})
   // 問診票の各申告の確信度 (高/中/低、揮発)
@@ -191,12 +173,12 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   // 解析対象ソースコード（空 = 使用しない）。監視ノードがオンデマンド参照する
   const [sourceCodebase, setSourceCodebase] = useState<string>('')
 
-  const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(false)
+  const [auditAfterIntegrator, setAuditAfterIntegrator] = useState<boolean>(true)
   // GPT 監査プロンプト (編集可能。既定はバックエンドから取得して初期表示)
   const [auditPrompt, setAuditPrompt] = useState<string>('')
   const [auditPromptLoaded, setAuditPromptLoaded] = useState(false)
-  // 表示モード (Phase E): デフォルトをチャットに (議事録の UI 要求)
-  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('chat')
+  // 表示モード (Phase E): デフォルトは標準
+  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
 
   // 監査を有効化したら既定プロンプトを 1 度だけ取得して編集欄に初期表示する
   useEffect(() => {
@@ -247,7 +229,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const showLogForm = !(analysisMode === 'single' && singleSource === 'config')
   const isRunning =
     stageStatus === 'single_running' || stageStatus === 'stage1_running' ||
-    stageStatus === 'stage2_running' || batchProgress !== null
+    stageStatus === 'stage2_running'
   // 2 段階の Stage 1/2 のデータ種別 (live ラベルや結果表示に使う)
   const stageKinds = useMemo<[string, string]>(
     () => (stageOrder === 'config_log' ? ['config', 'log'] : ['log', 'config']),
@@ -501,6 +483,19 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       || Object.values(nodeLogs).some(list => list.some(a => a.content.trim().length > 0)),
     [nodeLogs, bigqueryNodeIds],
   )
+  // 投入内容サマリ用の件数 (実行直前バーで表示し、入れ忘れを可視化する)
+  const configCount = useMemo(
+    () => Object.values(nodeConfigs).reduce((n, list) => n + list.filter(a => a.content.trim().length > 0).length, 0),
+    [nodeConfigs],
+  )
+  const logUploadCount = useMemo(
+    () => Object.values(nodeLogs).reduce((n, list) => n + list.filter(a => a.content.trim().length > 0).length, 0),
+    [nodeLogs],
+  )
+  const bqTableCount = useMemo(
+    () => bigqueryNodeIds.reduce((n, nid) => n + (nodeBigquery[nid]?.length ?? 0), 0),
+    [bigqueryNodeIds, nodeBigquery],
+  )
   const canRun = useMemo(() => {
     if (isRunning) return false
     if (!selectedConfig) return false
@@ -721,37 +716,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     void runOne({ analysisMode, singleSource, stageOrder }, { requirePolicyApproval })
   }
 
-  // まとめて実行: チェックされたパターン (実行可否は問わない。実行時に判定)
-  const checkedPatterns = useMemo(
-    () => PATTERN_DEFS.filter(d => selectedPatterns[d.key]),
-    [selectedPatterns],
-  )
-  const runBatch = async () => {
-    if (isRunning) return
-    // チェック済みのうち、必要データが揃っているものだけ実行。揃っていないものはスキップ。
-    const runnable = checkedPatterns.filter(d => patternAvailable(d.pattern))
-    const skipped = checkedPatterns.filter(d => !patternAvailable(d.pattern))
-    if (runnable.length === 0) {
-      setError('選択したパターンに必要なデータ（config / log）または問診票が不足しています。'
-        + '入力を追加するか、別のパターンを選んでください。')
-      return
-    }
-    setError(skipped.length
-      ? `データ不足のため次をスキップします: ${skipped.map(d => `${d.group}・${d.label}`).join(' / ')}`
-      : null)
-    batchAbortRef.current = false
-    for (let i = 0; i < runnable.length; i++) {
-      if (batchAbortRef.current) break
-      setBatchProgress({ current: i + 1, total: runnable.length, label: `${runnable[i].group}・${runnable[i].label}` })
-      await runOne(runnable[i].pattern, { autoDownloadReport: true })
-    }
-    setBatchProgress(null)
-    // 中止で最後の run が「実行中」のまま残った場合に正規化 (完了済みは触らない)
-    setStageStatus(s =>
-      (s === 'single_running' || s === 'stage1_running' || s === 'stage2_running') ? 'aborted' : s)
-  }
-
-  const cancel = () => { batchAbortRef.current = true; abortRef.current?.abort() }
+  const cancel = () => { abortRef.current?.abort() }
 
   // ─── decision API 呼び出し ────────────────────────────────────
   // continue/stop: rally_max_rounds 到達時の継続/停止用 (Stage 内部から発火)
@@ -810,10 +775,6 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     <section className="topology-mode config-log-mode">
       <div className="topology-header">
         <h2>config-log 解析</h2>
-        <p className="muted">
-          構成図と Config / Log を入力に rally で根本原因を解析します。1 段階（config のみ / log のみ /
-          config + log 同時）と 2 段階（config → log / log → config）を選べます。
-        </p>
       </div>
 
       <StageIndicator status={stageStatus} analysisMode={analysisMode} stageKinds={stageKinds} singleSource={singleSource} />
@@ -988,25 +949,77 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         onStageOrder={setStageOrder}
       />
 
+      <details className="advanced-settings">
+        <summary>詳細設定（rally / GPT 監査 / 方針確認）</summary>
+        <div className="advanced-settings-body">
+          <label>
+            rally_max_rounds {isTwoStage ? '(Stage 毎)' : ''}:
+            <input type="number" min={1} max={20} value={rallyMaxRounds}
+              onChange={e => setRallyMaxRounds(Math.max(1, Math.min(20, Number(e.target.value) || 3)))}
+              disabled={isRunning} />
+          </label>
+          <label className="audit-toggle">
+            <input type="checkbox" checked={auditAfterIntegrator}
+              onChange={e => setAuditAfterIntegrator(e.target.checked)}
+              disabled={isRunning} />
+            <span>GPT 監査も実行</span>
+          </label>
+          <label className="audit-toggle" title="解析開始前に方針を提案し、確認してから本解析に進みます">
+            <input type="checkbox" checked={requirePolicyApproval}
+              onChange={e => setRequirePolicyApproval(e.target.checked)}
+              disabled={isRunning} />
+            <span>解析方針を確認</span>
+          </label>
+          {/* GPT 監査プロンプト編集 (監査有効時のみ。既定は閉じていてクリックで展開) */}
+          {auditAfterIntegrator && (
+            <details className="audit-prompt-details">
+              <summary>
+                <span className="audit-prompt-caret">▸</span>
+                GPT 監査プロンプト（クリックで展開・編集）
+                <span className="audit-prompt-hint">未編集なら既定プロンプトで実行</span>
+              </summary>
+              <textarea
+                className="audit-prompt-textarea"
+                value={auditPrompt}
+                onChange={e => setAuditPrompt(e.target.value)}
+                disabled={isRunning}
+                rows={14}
+                placeholder={auditPromptLoaded ? 'GPT 監査のシステムプロンプト' : '既定プロンプトを読み込み中…'}
+                spellCheck={false}
+              />
+              <div className="audit-prompt-actions">
+                <button type="button" className="btn-small" disabled={isRunning}
+                  onClick={() => setAuditPromptLoaded(false)}>
+                  既定に戻す
+                </button>
+              </div>
+            </details>
+          )}
+        </div>
+      </details>
+
+      <PreRunSummaryBar
+        chips={[
+          { label: '構成図', value: topology.image ? 'あり' : 'なし', tone: topology.image ? 'ok' : 'warn' },
+          { label: 'ノード', value: `${topology.nodes.length} 個`, tone: topology.nodes.length > 0 ? 'ok' : 'warn' },
+          ...(showConfigForm
+            ? [{ label: 'config', value: `${configCount} 件`, tone: (configCount > 0 ? 'ok' : 'muted') as ChipTone }]
+            : []),
+          ...(showLogForm
+            ? [{
+                label: 'log',
+                value: `${logUploadCount + bqTableCount} 件${bqTableCount > 0 ? `（BQ ${bqTableCount}）` : ''}`,
+                tone: (logUploadCount + bqTableCount > 0 ? 'ok' : 'muted') as ChipTone,
+              }]
+            : []),
+          { label: 'Mermaid', value: topology.mermaid?.trim() ? 'あり' : '未記載', tone: topology.mermaid?.trim() ? 'ok' : 'warn' },
+          { label: 'ソース', value: sourceCodebase || '未指定', tone: sourceCodebase ? 'ok' : 'warn' },
+          { label: 'GPT監査', value: auditAfterIntegrator ? 'あり' : 'なし', tone: auditAfterIntegrator ? 'ok' : 'muted' },
+          { label: '問診票', value: questionnaireValid ? '入力済' : '未入力', tone: questionnaireValid ? 'ok' : 'warn' },
+        ]}
+      />
+
       <div className="topology-run-bar">
-        <label>
-          rally_max_rounds {isTwoStage ? '(Stage 毎)' : ''}:
-          <input type="number" min={1} max={20} value={rallyMaxRounds}
-            onChange={e => setRallyMaxRounds(Math.max(1, Math.min(20, Number(e.target.value) || 3)))}
-            disabled={isRunning} />
-        </label>
-        <label className="audit-toggle">
-          <input type="checkbox" checked={auditAfterIntegrator}
-            onChange={e => setAuditAfterIntegrator(e.target.checked)}
-            disabled={isRunning} />
-          <span>GPT 監査も実行</span>
-        </label>
-        <label className="audit-toggle" title="解析開始前に方針を提案し、確認してから本解析に進みます（まとめて実行では自動でスキップ）">
-          <input type="checkbox" checked={requirePolicyApproval}
-            onChange={e => setRequirePolicyApproval(e.target.checked)}
-            disabled={isRunning} />
-          <span>解析方針を確認</span>
-        </label>
         <button onClick={run} disabled={!canRun} className="run-button">
           {stageStatus === 'single_running' ? '解析中…'
             : stageStatus === 'stage1_running' ? 'Stage 1 実行中…'
@@ -1018,68 +1031,10 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         )}
       </div>
 
-      {/* まとめて実行: 段階×データの複数パターンをチェックして順に流す */}
-      <div className="topology-run-bar batch-run-bar" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
-        <span className="muted" style={{ fontWeight: 600 }}>まとめて実行:</span>
-        {PATTERN_DEFS.map(d => {
-          const avail = patternAvailable(d.pattern)
-          return (
-            <label key={d.key} className="audit-toggle"
-              style={{ opacity: avail ? 1 : 0.6 }}
-              title={avail ? '' : '必要なデータ（config/log）または問診票が不足。実行時にスキップされます'}>
-              <input type="checkbox"
-                checked={!!selectedPatterns[d.key]}
-                disabled={isRunning}
-                onChange={e => setSelectedPatterns(prev => ({ ...prev, [d.key]: e.target.checked }))} />
-              <span>{d.group}・{d.label}{avail ? '' : '（データ不足）'}</span>
-            </label>
-          )
-        })}
-        <button onClick={runBatch}
-          disabled={isRunning || checkedPatterns.length === 0}
-          className="run-button">
-          {batchProgress
-            ? `連続実行中… (${batchProgress.current}/${batchProgress.total})`
-            : `選択パターンを連続実行 (${checkedPatterns.length})`}
-        </button>
-      </div>
-      {batchProgress && (
-        <p className="muted" style={{ margin: '0.2rem 0 0.4rem' }}>
-          実行中 {batchProgress.current}/{batchProgress.total}: {batchProgress.label}
-          （各解析は履歴に保存し、レポートを個別に出力します）
-        </p>
-      )}
-
       {!isRunning && !questionnaireValid && (
         <p className="muted" style={{ margin: '0.2rem 0 0.4rem' }}>
           ※ 問診票の必須項目（事象）を入力すると解析を開始できます。
         </p>
-      )}
-
-      {/* GPT 監査プロンプト編集 (監査有効時のみ。既定は閉じていてクリックで展開) */}
-      {auditAfterIntegrator && (
-        <details className="audit-prompt-details">
-          <summary>
-            <span className="audit-prompt-caret">▸</span>
-            GPT 監査プロンプト（クリックで展開・編集）
-            <span className="audit-prompt-hint">未編集なら既定プロンプトで実行</span>
-          </summary>
-          <textarea
-            className="audit-prompt-textarea"
-            value={auditPrompt}
-            onChange={e => setAuditPrompt(e.target.value)}
-            disabled={isRunning}
-            rows={14}
-            placeholder={auditPromptLoaded ? 'GPT 監査のシステムプロンプト' : '既定プロンプトを読み込み中…'}
-            spellCheck={false}
-          />
-          <div className="audit-prompt-actions">
-            <button type="button" className="btn-small" disabled={isRunning}
-              onClick={() => setAuditPromptLoaded(false)}>
-              既定に戻す
-            </button>
-          </div>
-        </details>
       )}
 
       {error && <div className="topology-error">エラー: {error}</div>}
@@ -1203,6 +1158,31 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
 
 // ─── サブコンポーネント ──────────────────────────────────────
 
+// 実行直前の「投入内容サマリ」バー。任意入力 (ソース / Mermaid) の入れ忘れを
+// warn トーンで可視化し、解析を開始ボタンの直上で最終確認できるようにする。
+type ChipTone = 'ok' | 'warn' | 'muted'
+interface SummaryChip { label: string; value: string; tone: ChipTone }
+
+function PreRunSummaryBar({ chips }: { chips: SummaryChip[] }) {
+  const warnCount = chips.filter(c => c.tone === 'warn').length
+  return (
+    <div className="prerun-summary" role="status" aria-label="投入内容サマリ">
+      <span className="prerun-summary-title">
+        投入内容
+        {warnCount > 0 && <span className="prerun-summary-warn">未指定 {warnCount}</span>}
+      </span>
+      <div className="prerun-chips">
+        {chips.map((c, i) => (
+          <span key={i} className={`prerun-chip tone-${c.tone}`} title={`${c.label}: ${c.value}`}>
+            <span className="prerun-chip-label">{c.label}</span>
+            <span className="prerun-chip-value">{c.value}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 interface ModeSelectorProps {
   analysisMode: AnalysisMode
   singleSource: SingleSource
@@ -1265,17 +1245,6 @@ function ModeSelector({ analysisMode, singleSource, stageOrder, disabled, onAnal
         </div>
       )}
 
-      <p className="mode-toggle-hint muted">
-        {analysisMode === 'single'
-          ? (singleSource === 'config'
-              ? 'config のみで rally を 1 回実行します（ログ入力欄は非表示）。'
-              : singleSource === 'log'
-              ? 'log のみで rally を 1 回実行します（設定入力欄は非表示）。'
-              : 'config と log を同時に投入し rally を 1 回実行します。')
-          : (stageOrder === 'config_log'
-              ? 'コンフィグで当たりをつけ、そのまま自動でログ検証へ進む 2 段階です。'
-              : 'ログで当たりをつけ、そのまま自動でコンフィグ裏取りへ進む 2 段階です。')}
-      </p>
     </div>
   )
 }
