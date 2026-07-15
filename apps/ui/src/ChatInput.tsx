@@ -14,7 +14,7 @@
  */
 import { useState } from 'react'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 type InterventionType = 'comment' | 'log' | 'config'
 
@@ -50,7 +50,7 @@ export function ChatInput({ runId, disabled }: Props) {
     setError(null)
     try {
       const source = `intervention:${type}:user`
-      const r = await fetch(`${API_BASE}/api/runs/${runId}/append-log`, {
+      const r = await apiFetch(`${API_BASE}/api/runs/${runId}/append-log`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, source }),

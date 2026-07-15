@@ -27,7 +27,7 @@ import type {
 } from './types'
 import { layoutWithDagre } from './dagreLayout'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 interface RFNodeData {
   type: PipelineNodeType
@@ -206,7 +206,7 @@ function PipelineBuilderInner(props: Props) {
 
   // 起動時: nodeTypeDefs と default pipeline 取得
   useEffect(() => {
-    fetch(`${API_BASE}/api/node-types`)
+    apiFetch(`${API_BASE}/api/node-types`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: NodeTypesResponse) => {
         setNodeTypeDefs(d.node_types)
@@ -224,7 +224,7 @@ function PipelineBuilderInner(props: Props) {
 
     if (editingConfigId === null || editingConfigId === '__new__') {
       // 新規作成: default pipeline を取得
-      fetch(`${API_BASE}/api/pipelines/default`)
+      apiFetch(`${API_BASE}/api/pipelines/default`)
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
         .then((d: { pipeline: PipelineDef }) => {
           const { nodes: rfn, edges: rfe } = pipelineToFlow(d.pipeline, nodeTypeDefs)
@@ -241,7 +241,7 @@ function PipelineBuilderInner(props: Props) {
 
     if (editingUserId !== null) {
       // 既存読み込み
-      fetch(`${API_BASE}/api/configs/saved`)
+      apiFetch(`${API_BASE}/api/configs/saved`)
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
         .then((d: { configs: SavedConfigDTO[] }) => {
           const sc = d.configs.find(c => c.id === editingUserId)
@@ -410,7 +410,7 @@ function PipelineBuilderInner(props: Props) {
     try {
       let saved: SavedConfigDTO
       if (editingUserId !== null) {
-        const r = await fetch(`${API_BASE}/api/configs/saved/${editingUserId}`, {
+        const r = await apiFetch(`${API_BASE}/api/configs/saved/${editingUserId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ overrides: {}, model_overrides: {}, pipeline }),
@@ -418,7 +418,7 @@ function PipelineBuilderInner(props: Props) {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
         saved = await r.json()
       } else {
-        const r = await fetch(`${API_BASE}/api/configs/saved`, {
+        const r = await apiFetch(`${API_BASE}/api/configs/saved`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -445,7 +445,7 @@ function PipelineBuilderInner(props: Props) {
     if (editingUserId === null) return
     if (!confirm(`構成 "${pipelineName}" を削除しますか?`)) return
     try {
-      const r = await fetch(`${API_BASE}/api/configs/saved/${editingUserId}`, {
+      const r = await apiFetch(`${API_BASE}/api/configs/saved/${editingUserId}`, {
         method: 'DELETE',
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -475,7 +475,7 @@ function PipelineBuilderInner(props: Props) {
     }
     setRunning(true)
     try {
-      const r = await fetch(`${API_BASE}/api/runs`, {
+      const r = await apiFetch(`${API_BASE}/api/runs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

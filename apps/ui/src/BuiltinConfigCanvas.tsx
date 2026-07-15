@@ -17,7 +17,7 @@ import type {
 } from './types'
 import { layoutWithDagre } from './dagreLayout'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 interface RFData {
   kind: BuiltinStructureNode['type']
@@ -76,7 +76,7 @@ function CanvasInner({
   useEffect(() => {
     setSelectedNodeId(null)
     setError(null)
-    fetch(`${API_BASE}/api/configs/${baseConfig}/structure`)
+    apiFetch(`${API_BASE}/api/configs/${baseConfig}/structure`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: BuiltinStructureResponse) => setStructure(d))
       .catch(e => setError(`構造取得失敗: ${e.message}`))

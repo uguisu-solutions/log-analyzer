@@ -25,7 +25,7 @@ import type {
   TopologyDef,
 } from './types'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 interface Props {
   langfuseHost: string | null
@@ -92,7 +92,7 @@ export function AnalysisHistoryView({ langfuseHost }: Props) {
       if (filterMode) params.set('analysis_mode', filterMode)
       if (debouncedQ) params.set('q', debouncedQ)
       params.set('limit', '200')
-      const r = await fetch(`${API_BASE}/api/analysis-history?${params}`)
+      const r = await apiFetch(`${API_BASE}/api/analysis-history?${params}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
       const data: AnalysisHistoryListResponse = await r.json()
       setEntries(data.entries)
@@ -110,7 +110,7 @@ export function AnalysisHistoryView({ langfuseHost }: Props) {
     setDetailLoading(true)
     setError(null)
     try {
-      const r = await fetch(`${API_BASE}/api/analysis-history/${id}`)
+      const r = await apiFetch(`${API_BASE}/api/analysis-history/${id}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
       const data: AnalysisHistoryDetail = await r.json()
       setDetail(data)
@@ -125,7 +125,7 @@ export function AnalysisHistoryView({ langfuseHost }: Props) {
     if (!confirm(`解析履歴 #${id} を削除しますか？`)) return
     setError(null); setInfo(null)
     try {
-      const r = await fetch(`${API_BASE}/api/analysis-history/${id}`, { method: 'DELETE' })
+      const r = await apiFetch(`${API_BASE}/api/analysis-history/${id}`, { method: 'DELETE' })
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
       setInfo(`解析履歴 #${id} を削除しました`)
       if (detail?.id === id) setDetail(null)

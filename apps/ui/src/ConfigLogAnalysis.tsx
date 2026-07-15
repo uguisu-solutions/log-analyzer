@@ -52,7 +52,7 @@ import type {
   TopologyNode,
 } from './types'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 // トポロジー解析タブとは別キーで保存 (誤共有を防ぐ)
 const STORAGE_KEY = 'log-analyzer.config-log-topology-v1'
 // アップロード 1 ファイルの上限 (これを超えるものは BigQuery 取得へ誘導しフリーズを防ぐ)
@@ -184,7 +184,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   useEffect(() => {
     if (!auditAfterIntegrator || auditPromptLoaded) return
     let cancelled = false
-    fetch(`${API_BASE}/api/audit-prompt`)
+    apiFetch(`${API_BASE}/api/audit-prompt`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: { prompt?: string }) => {
         if (!cancelled) { setAuditPrompt(d.prompt ?? ''); setAuditPromptLoaded(true) }
@@ -447,7 +447,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   }
   const loadSampleIntoNode = async (id: string, sampleName: string) => {
     try {
-      const r = await fetch(`${API_BASE}/api/logs/${encodeURIComponent(sampleName)}/content`)
+      const r = await apiFetch(`${API_BASE}/api/logs/${encodeURIComponent(sampleName)}/content`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const data = (await r.json()) as { content: string }
       addAttachment(setNodeLogs, id, { name: sampleName, content: data.content })
@@ -516,7 +516,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const saveAnalysisHistory = async (rid: string | null, res: AnalysisResult, p: RunPattern) => {
     if (!rid) return
     try {
-      await fetch(`${API_BASE}/api/analysis-history`, {
+      await apiFetch(`${API_BASE}/api/analysis-history`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -630,7 +630,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         // 解析方針の事前確認ゲート (バッチは false で自動スキップ)
         require_policy_approval: opts?.requirePolicyApproval ?? false,
       }
-      const r = await fetch(`${API_BASE}/api/runs/config-log-stream`, {
+      const r = await apiFetch(`${API_BASE}/api/runs/config-log-stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -727,7 +727,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     try {
       const body: { action: string; extend_by?: number } = { action }
       if (action === 'continue' && extendBy) body.extend_by = extendBy
-      const r = await fetch(`${API_BASE}/api/runs/${runId}/decision`, {
+      const r = await apiFetch(`${API_BASE}/api/runs/${runId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -753,7 +753,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     try {
       const body: { action: string; edited_focus?: string } = { action }
       if (action === 'approve_policy' && editedFocus != null) body.edited_focus = editedFocus
-      const r = await fetch(`${API_BASE}/api/runs/${runId}/decision`, {
+      const r = await apiFetch(`${API_BASE}/api/runs/${runId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

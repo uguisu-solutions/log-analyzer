@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import type { LogEntry, LogContent } from './types'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 interface Props {
   logs: LogEntry[]
@@ -53,7 +53,7 @@ export function LogManager({ logs, onLogsChange }: Props) {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const r = await fetch(`${API_BASE}/api/logs`, {
+      const r = await apiFetch(`${API_BASE}/api/logs`, {
         method: 'POST',
         body: fd,
       })
@@ -84,7 +84,7 @@ export function LogManager({ logs, onLogsChange }: Props) {
     setPreviewContent(null)
     setPreviewError(null)
     try {
-      const r = await fetch(`${API_BASE}/api/logs/${encodeURIComponent(name)}/content`)
+      const r = await apiFetch(`${API_BASE}/api/logs/${encodeURIComponent(name)}/content`)
       if (!r.ok) {
         const detail = await r.text()
         let msg = `HTTP ${r.status}`
@@ -116,7 +116,7 @@ export function LogManager({ logs, onLogsChange }: Props) {
     clearMessages()
     setDeletingName(name)
     try {
-      const r = await fetch(`${API_BASE}/api/logs/${encodeURIComponent(name)}`, {
+      const r = await apiFetch(`${API_BASE}/api/logs/${encodeURIComponent(name)}`, {
         method: 'DELETE',
       })
       if (!r.ok) {
