@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SourceCodebaseEntry } from './types'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 // アップロード合計の目安（バックエンドの上限と一致）
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024
 
@@ -35,7 +35,7 @@ export function SourceCodebasePanel({ selected, onSelect, disabled }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/api/source`)
+      const r = await apiFetch(`${API_BASE}/api/source`)
       if (!r.ok) return
       const data = (await r.json()) as { codebases: SourceCodebaseEntry[] }
       setList(data.codebases ?? [])
@@ -70,7 +70,7 @@ export function SourceCodebasePanel({ selected, onSelect, disabled }: Props) {
       const fd = new FormData()
       fd.append('name', name.trim())
       for (const f of files) fd.append('files', f)
-      const r = await fetch(`${API_BASE}/api/source`, { method: 'POST', body: fd })
+      const r = await apiFetch(`${API_BASE}/api/source`, { method: 'POST', body: fd })
       if (!r.ok) {
         const text = await r.text()
         throw new Error(`HTTP ${r.status}: ${text}`)
@@ -91,7 +91,7 @@ export function SourceCodebasePanel({ selected, onSelect, disabled }: Props) {
   const remove = async (target: string) => {
     if (!confirm(`コードベース「${target}」を削除しますか？`)) return
     try {
-      await fetch(`${API_BASE}/api/source/${encodeURIComponent(target)}`, { method: 'DELETE' })
+      await apiFetch(`${API_BASE}/api/source/${encodeURIComponent(target)}`, { method: 'DELETE' })
       if (selected === target) onSelect('')
       await refresh()
     } catch (e) {

@@ -70,10 +70,39 @@ storage.init_db()
 
 app = FastAPI(title="log-analyzer API", version="0.2.0")
 
-# 開発用フロントエンドの origin を許可
+# ─── 認証（ホスティング時のみ有効） ────────────────────────────────
+# 環境変数 API_KEY が設定されているときだけ X-API-Key を必須化する。
+# 未設定（ローカル開発）なら検証は完全にスキップ＝従来どおり素通り。
+_API_KEY = os.environ.get("API_KEY", "").strip()
+
+
+@app.middleware("http")
+async def _require_api_key(request, call_next):
+    # API_KEY 未設定なら無効（ローカル開発は現状維持）。
+    # CORS プリフライト (OPTIONS) は常に通す（ブラウザが認証ヘッダを付けないため）。
+    if _API_KEY and request.method != "OPTIONS":
+        if request.headers.get("x-api-key", "") != _API_KEY:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                status_code=401, content={"detail": "invalid or missing API key"}
+            )
+    return await call_next(request)
+
+
+# フロントエンドの origin を許可。
+# 既定はローカル開発用の Vite (5173)。ホスティング時は CORS_EXTRA_ORIGINS に
+# 本番オリジン（例: https://<app>.vercel.app）をカンマ区切りで追加する。
+_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+_extra_origins = os.environ.get("CORS_EXTRA_ORIGINS", "").strip()
+if _extra_origins:
+    _cors_origins += [o.strip() for o in _extra_origins.split(",") if o.strip()]
+
+# CORS は最後に追加して最外層に置く（api-key ミドルウェアの 401 応答にも
+# CORS ヘッダが付き、ブラウザ側でエラー内容を読めるようにする）。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

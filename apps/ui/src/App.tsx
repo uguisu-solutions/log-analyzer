@@ -20,7 +20,7 @@ import type {
 } from './types'
 import './App.css'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-log' | 'analysis-history'
 
@@ -459,7 +459,7 @@ function App() {
   })()
 
   const loadConfigs = useCallback(() => {
-    return fetch(`${API_BASE}/api/configs`)
+    return apiFetch(`${API_BASE}/api/configs`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((d: { configs: ConfigEntry[] }) => {
         setConfigList(d.configs)
@@ -472,7 +472,7 @@ function App() {
   }, [])
 
   const loadLogs = useCallback(() => {
-    return fetch(`${API_BASE}/api/logs`)
+    return apiFetch(`${API_BASE}/api/logs`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((d: { logs: LogEntry[] }) => {
         setLogs(d.logs)
@@ -499,7 +499,7 @@ function App() {
     })
     loadLogs()
     // Langfuse host を取得（失敗してもクリティカルではないので catch して無視）
-    fetch(`${API_BASE}/api/runtime-config`)
+    apiFetch(`${API_BASE}/api/runtime-config`)
       .then(r => (r.ok ? r.json() : null))
       .then((d: { langfuse_host: string | null } | null) => {
         if (d?.langfuse_host) setLangfuseHost(d.langfuse_host)
@@ -511,7 +511,7 @@ function App() {
   // base_config が変わったら slot 一覧を取得
   useEffect(() => {
     if (!selectedBaseConfig) return
-    fetch(`${API_BASE}/api/prompt-slots/${selectedBaseConfig}`)
+    apiFetch(`${API_BASE}/api/prompt-slots/${selectedBaseConfig}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((d: { slots: SlotInfo[] }) => setSlots(d.slots))
       .catch(e => setError(`slot 取得失敗: ${e.message}`))
@@ -522,7 +522,7 @@ function App() {
     if (!selectedConfigEntry) return
     if (selectedConfigEntry.type === 'user') {
       const id = Number(selectedConfigEntry.id.split(':')[1])
-      fetch(`${API_BASE}/api/configs/saved`)
+      apiFetch(`${API_BASE}/api/configs/saved`)
         .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
         .then((d: { configs: SavedConfigDTO[] }) => {
           const sc = d.configs.find(c => c.id === id)
@@ -606,7 +606,7 @@ function App() {
     setSavingConfig(true)
     setError(null)
     try {
-      const r = await fetch(`${API_BASE}/api/configs/saved`, {
+      const r = await apiFetch(`${API_BASE}/api/configs/saved`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -635,7 +635,7 @@ function App() {
     setSavingConfig(true)
     setError(null)
     try {
-      const r = await fetch(`${API_BASE}/api/configs/saved/${userConfigId}`, {
+      const r = await apiFetch(`${API_BASE}/api/configs/saved/${userConfigId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ overrides, model_overrides: modelOverrides }),
@@ -655,7 +655,7 @@ function App() {
     if (userConfigId === null) return
     if (!confirm(`構成 "${saveName}" を削除しますか？`)) return
     try {
-      const r = await fetch(`${API_BASE}/api/configs/saved/${userConfigId}`, { method: 'DELETE' })
+      const r = await apiFetch(`${API_BASE}/api/configs/saved/${userConfigId}`, { method: 'DELETE' })
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
       const fresh = await loadConfigs()
       setSelectedConfig(fresh.find(c => c.type === 'builtin')?.id ?? '')
@@ -688,7 +688,7 @@ function App() {
 
       // 構成4 のみ SSE ストリーミング経路を使う
       if (selectedBaseConfig === 'config4') {
-        const r = await fetch(`${API_BASE}/api/runs/stream`, {
+        const r = await apiFetch(`${API_BASE}/api/runs/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -717,7 +717,7 @@ function App() {
       }
 
       // それ以外は従来通り同期 /api/runs
-      const r = await fetch(`${API_BASE}/api/runs`, {
+      const r = await apiFetch(`${API_BASE}/api/runs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -738,7 +738,7 @@ function App() {
     setAppendBusy(true)
     setError(null)
     try {
-      const r = await fetch(`${API_BASE}/api/runs/${streamRunId}/append-log`, {
+      const r = await apiFetch(`${API_BASE}/api/runs/${streamRunId}/append-log`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, source }),
@@ -758,7 +758,7 @@ function App() {
     try {
       const body: Record<string, unknown> = { action }
       if (action === 'continue' && extendBy && extendBy > 0) body.extend_by = extendBy
-      const r = await fetch(`${API_BASE}/api/runs/${streamRunId}/decision`, {
+      const r = await apiFetch(`${API_BASE}/api/runs/${streamRunId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -789,7 +789,7 @@ function App() {
     const targets = configList.filter(c => compareSelected.has(c.id))
     setCompareRunningSet(new Set(targets.map(c => c.id)))
     targets.forEach(c => {
-      fetch(`${API_BASE}/api/runs`, {
+      apiFetch(`${API_BASE}/api/runs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ log_name: selectedLog, config: c.id }),

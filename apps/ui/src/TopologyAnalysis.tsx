@@ -38,7 +38,7 @@ import type {
   TopologyNode,
 } from './types'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 const STORAGE_KEY = 'log-analyzer.topology-v1'
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5MB
 
@@ -367,7 +367,7 @@ export function TopologyAnalysis({
   }
   const loadSampleIntoNode = async (id: string, sampleName: string) => {
     try {
-      const r = await fetch(`${API_BASE}/api/logs/${encodeURIComponent(sampleName)}/content`)
+      const r = await apiFetch(`${API_BASE}/api/logs/${encodeURIComponent(sampleName)}/content`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const data = (await r.json()) as { content: string }
       // 新規ログとして 1 件追加 (既存にマージしない: 区別が崩れるため)
@@ -426,7 +426,7 @@ export function TopologyAnalysis({
         questionnaire_confidences: questionnaireConfidences,
         audit_after_integrator: auditAfterIntegrator,
       }
-      const r = await fetch(`${API_BASE}/api/runs/topology-stream`, {
+      const r = await apiFetch(`${API_BASE}/api/runs/topology-stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -473,7 +473,7 @@ export function TopologyAnalysis({
     try {
       const body: { action: string; extend_by?: number } = { action }
       if (action === 'continue' && extendBy) body.extend_by = extendBy
-      const r = await fetch(`${API_BASE}/api/runs/${runId}/decision`, {
+      const r = await apiFetch(`${API_BASE}/api/runs/${runId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

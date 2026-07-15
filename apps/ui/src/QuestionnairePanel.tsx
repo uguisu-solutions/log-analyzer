@@ -19,7 +19,7 @@ import type {
   QuestionnaireTemplate,
 } from './types'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 interface Props {
   answers: QuestionnaireAnswers
@@ -42,7 +42,7 @@ export function QuestionnairePanel({
   const [error, setError] = useState<string | null>(null)
 
   const loadTemplates = useCallback(() => {
-    fetch(`${API_BASE}/api/questionnaires`)
+    apiFetch(`${API_BASE}/api/questionnaires`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((d: { templates: QuestionnaireTemplate[] }) => {
         setTemplates(d.templates)

@@ -6,7 +6,7 @@ import type {
   RunHistoryListResponse,
 } from './types'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 interface Props {
   configList: ConfigEntry[]
@@ -56,7 +56,7 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
       if (filterConfig) params.set('config_id', filterConfig)
       if (debouncedQ) params.set('q', debouncedQ)
       params.set('limit', '200')
-      const r = await fetch(`${API_BASE}/api/runs/history?${params}`)
+      const r = await apiFetch(`${API_BASE}/api/runs/history?${params}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
       const data: RunHistoryListResponse = await r.json()
       setEntries(data.entries)
@@ -77,7 +77,7 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
     setError(null)
     setInfo(null)
     try {
-      const r = await fetch(`${API_BASE}/api/runs/history/${id}`, { method: 'DELETE' })
+      const r = await apiFetch(`${API_BASE}/api/runs/history/${id}`, { method: 'DELETE' })
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
       setInfo(`実行履歴 #${id} を削除しました`)
       // 開いている詳細が削除対象なら閉じる

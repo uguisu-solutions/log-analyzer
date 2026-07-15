@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { downloadText } from './reasoningReport'
 import type { AnswerScenario, EvaluationDTO } from './types'
 
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 function formatDate(iso: string): string {
   try {
@@ -179,7 +179,7 @@ export function EvaluationPanel({ historyId }: { historyId: number }) {
 
   useEffect(() => {
     let alive = true
-    fetch(`${API_BASE}/api/answer-scenarios`)
+    apiFetch(`${API_BASE}/api/answer-scenarios`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(d => { if (alive) setScenarios(d.scenarios ?? []) })
       .catch(e => { if (alive) setError(e instanceof Error ? e.message : String(e)) })
@@ -188,7 +188,7 @@ export function EvaluationPanel({ historyId }: { historyId: number }) {
 
   const loadEvals = useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/api/analysis-history/${historyId}/evaluations`)
+      const r = await apiFetch(`${API_BASE}/api/analysis-history/${historyId}/evaluations`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       // リスト項目を必ず配列に正規化（古い評価やバックエンド版差で欠けても
@@ -214,7 +214,7 @@ export function EvaluationPanel({ historyId }: { historyId: number }) {
     setRunning(true)
     setError(null)
     try {
-      const r = await fetch(`${API_BASE}/api/analysis-history/${historyId}/evaluate`, {
+      const r = await apiFetch(`${API_BASE}/api/analysis-history/${historyId}/evaluate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scenario_key: selected }),
@@ -231,7 +231,7 @@ export function EvaluationPanel({ historyId }: { historyId: number }) {
   const del = async (evalId: number) => {
     if (!confirm(`評価 #${evalId} を削除しますか？`)) return
     try {
-      const r = await fetch(`${API_BASE}/api/analysis-history/${historyId}/evaluations/${evalId}`, {
+      const r = await apiFetch(`${API_BASE}/api/analysis-history/${historyId}/evaluations/${evalId}`, {
         method: 'DELETE',
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
