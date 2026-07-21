@@ -51,4 +51,6 @@ RUN if [ "$INSTALL_TOOLBOX" = "true" ]; then \
 # Cloud Run は $PORT を注入する。0.0.0.0 待受・単一プロセスで起動。
 # （SSE 維持のため Cloud Run 側で min-instances>=1 / CPU always-allocated / timeout=3600 を設定）
 EXPOSE 8080
-CMD exec uvicorn log_analyzer.api:app --host 0.0.0.0 --port ${PORT}
+# JSON 形式で sh -c を包む: ${PORT} 展開と exec（uvicorn を PID 1 にして SIGTERM を
+# 直接受け、graceful shutdown を効かせる）を両立しつつ CMD の警告も避ける。
+CMD ["sh", "-c", "exec uvicorn log_analyzer.api:app --host 0.0.0.0 --port ${PORT}"]
