@@ -12,13 +12,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 from log_analyzer import api as api_mod
+from log_analyzer import filestore
 
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch):
-    """`_LOGS_DIR` を一時ディレクトリに差し替えて TestClient を返す。"""
+    """ログストアを一時ディレクトリのローカル FS に差し替えて TestClient を返す。"""
+    original_root = api_mod._LOGS_DIR  # パッチ前の実ディレクトリを控える
     monkeypatch.setattr(api_mod, "_LOGS_DIR", tmp_path)
-    return TestClient(api_mod.app)
+    monkeypatch.delenv("LOG_STORE", raising=False)  # 確実にローカル FS を使う
+    filestore.reset_for_tests()
+    filestore.configure_default_local_root(tmp_path)
+    yield TestClient(api_mod.app)
+    filestore.reset_for_tests()
+    filestore.configure_default_local_root(original_root)
 
 
 def test_list_logs_empty(client):
