@@ -106,6 +106,44 @@ async def health() -> dict[str, str]:
 _API_KEY = os.environ.get("API_KEY", "").strip()
 
 
+# ─── 解析のレート制限（公開ゲート） ────────────────────────────────────
+# 鍵漏洩時の暴走（1 解析 200 万トークン級）でコストが膨れないよう、POST /api/runs*
+# を固定窓でカウントし上限超過は 429。RATELIMIT_RUNS_PER_MIN=0（既定）で無効＝
+# ローカル開発は現状維持。min-instances=1 前提のプロセス内カウンタ（スケール時は
+# 別途集中管理が要る）。
+# 注意: 下の認証ミドルウェアを後に定義しているため、実行順は「認証 → レート制限」
+# （Starlette は後定義＝外側＝先実行）。無認証リクエストは枠を消費しない。
+_RATELIMIT_RUNS_PER_MIN = int(os.environ.get("RATELIMIT_RUNS_PER_MIN", "0"))
+_ratelimit_window_start = 0
+_ratelimit_count = 0
+
+
+@app.middleware("http")
+async def _ratelimit_runs(request, call_next):
+    global _ratelimit_window_start, _ratelimit_count
+    if (
+        _RATELIMIT_RUNS_PER_MIN > 0
+        and request.method == "POST"
+        and request.url.path.startswith("/api/runs")
+    ):
+        import time as _time
+
+        now = int(_time.time())
+        window = now - (now % 60)
+        if window != _ratelimit_window_start:
+            _ratelimit_window_start = window
+            _ratelimit_count = 0
+        if _ratelimit_count >= _RATELIMIT_RUNS_PER_MIN:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "rate limit exceeded: too many analyses"},
+            )
+        _ratelimit_count += 1
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def _require_api_key(request, call_next):
     # API_KEY 未設定なら無効（ローカル開発は現状維持）。
@@ -124,7 +162,13 @@ async def _require_api_key(request, call_next):
 # フロントエンドの origin を許可。
 # 既定はローカル開発用の Vite (5173)。ホスティング時は CORS_EXTRA_ORIGINS に
 # 本番オリジン（例: https://<app>.vercel.app）をカンマ区切りで追加する。
-_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+# 本番では CORS_ALLOW_LOCALHOST=0 で localhost を除外し、Vercel ドメインのみに絞る。
+_allow_localhost = os.environ.get("CORS_ALLOW_LOCALHOST", "1").strip().lower() not in (
+    "0", "false", "no", "",
+)
+_cors_origins: list[str] = []
+if _allow_localhost:
+    _cors_origins += ["http://localhost:5173", "http://127.0.0.1:5173"]
 _extra_origins = os.environ.get("CORS_EXTRA_ORIGINS", "").strip()
 if _extra_origins:
     _cors_origins += [o.strip() for o in _extra_origins.split(",") if o.strip()]
