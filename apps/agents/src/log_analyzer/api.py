@@ -2011,14 +2011,16 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
     source_block = ""
     if req.source_codebase:
         try:
-            cdir = source_codebase.safe_codebase_dir(req.source_codebase)
+            source_codebase.safe_codebase_dir(req.source_codebase)  # 名前バリデーション
         except source_codebase.SourceError as e:
             raise HTTPException(status_code=e.status_code, detail=str(e))
-        if not cdir.is_dir():
+        if not source_codebase.exists(req.source_codebase):
             raise HTTPException(
                 status_code=404,
                 detail=f"コードベースが見つかりません: {req.source_codebase}",
             )
+        # GCS backend では解析前にローカルへ展開する（ローカル backend は no-op）。
+        cdir = source_codebase.ensure_local(req.source_codebase)
         source_index = source_indexer.get_or_build_index(cdir)
         source_db = source_db_schema_mod.extract_db_schema(cdir)
         source_block = source_tools_mod.build_source_injection_block(
