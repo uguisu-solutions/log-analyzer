@@ -274,6 +274,22 @@ def execute_sql(sql: str, *, dry_run: bool = False) -> Any:
     return _rows(data)
 
 
+def shutdown_runtime() -> None:
+    """常駐 MCP サブプロセスを終了する（起動済みのときだけ）。
+
+    Cloud Run の graceful shutdown 用。未起動なら新規生成せず何もしない（冪等）。
+    """
+    global _runtime_singleton
+    runtime = _runtime_singleton
+    if runtime is None:
+        return
+    try:
+        runtime.shutdown()
+    except Exception:  # noqa: BLE001 — 終了処理は握りつぶす
+        pass
+    _runtime_singleton = None
+
+
 def reset_for_tests() -> None:
     """テスト用: シングルトンを破棄する (実サーバー接続なしのテストで使用)。"""
     global _runtime_singleton

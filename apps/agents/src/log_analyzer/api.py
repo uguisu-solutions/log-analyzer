@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import contextlib
 import os
 import re
 import shutil
@@ -68,7 +69,36 @@ load_dotenv()
 _logger = logging.getLogger("uvicorn.error")
 storage.init_db()
 
-app = FastAPI(title="log-analyzer API", version="0.2.0")
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    """アプリのライフサイクル。Cloud Run の SIGTERM で常駐リソースを畳む。
+
+    起動時は特に処理なし（DB 初期化はモジュール読込時に実施済み）。
+    終了時に MCP 常駐サブプロセスと DB コネクションプールを閉じ、
+    再デプロイ/スケールインでの中断を綺麗にする。
+    """
+    yield
+    # ─── graceful shutdown ───
+    try:
+        from log_analyzer import bigquery_mcp
+
+        bigquery_mcp.shutdown_runtime()
+    except Exception:  # noqa: BLE001 — 終了処理は握りつぶす
+        _logger.warning("MCP ランタイムの終了に失敗（無視）", exc_info=True)
+    try:
+        storage.close_pool()
+    except Exception:  # noqa: BLE001
+        _logger.warning("DB プールの終了に失敗（無視）", exc_info=True)
+
+
+app = FastAPI(title="log-analyzer API", version="0.2.0", lifespan=_lifespan)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Cloud Run のヘルスチェック / startup probe 用。常に軽量応答。"""
+    return {"status": "ok"}
 
 # ─── 認証（ホスティング時のみ有効） ────────────────────────────────
 # 環境変数 API_KEY が設定されているときだけ X-API-Key を必須化する。
@@ -80,7 +110,8 @@ _API_KEY = os.environ.get("API_KEY", "").strip()
 async def _require_api_key(request, call_next):
     # API_KEY 未設定なら無効（ローカル開発は現状維持）。
     # CORS プリフライト (OPTIONS) は常に通す（ブラウザが認証ヘッダを付けないため）。
-    if _API_KEY and request.method != "OPTIONS":
+    # /health は Cloud Run の probe が認証ヘッダを付けないため常に素通し。
+    if _API_KEY and request.method != "OPTIONS" and request.url.path != "/health":
         if request.headers.get("x-api-key", "") != _API_KEY:
             from fastapi.responses import JSONResponse
 

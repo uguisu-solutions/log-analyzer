@@ -113,6 +113,20 @@ def _get_pool() -> Any:
     return _pool
 
 
+def close_pool() -> None:
+    """コネクションプールを閉じる（存在すれば）。Cloud Run の graceful shutdown 用。
+
+    SQLite バックエンド時や未生成時は何もしない（冪等）。
+    """
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.close()
+        except Exception:  # noqa: BLE001 — 終了処理は握りつぶす
+            pass
+        _pool = None
+
+
 def _table_columns(conn: "_Conn", table: str) -> set[str]:
     """テーブルの列名集合を返す（存在しなければ空集合）。マイグレーション判定用。"""
     if conn.backend == "postgres":
