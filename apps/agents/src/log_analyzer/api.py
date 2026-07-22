@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import contextlib
 import os
 import re
 import shutil
@@ -49,7 +50,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from log_analyzer import evaluation_agent, pipeline_runner, prompt_slots, storage
+from log_analyzer import evaluation_agent, filestore, pipeline_runner, prompt_slots, storage
 from log_analyzer.log_compaction import compact_log_reporting
 from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.rally_agent import run_rally_stream
@@ -68,7 +69,36 @@ load_dotenv()
 _logger = logging.getLogger("uvicorn.error")
 storage.init_db()
 
-app = FastAPI(title="log-analyzer API", version="0.2.0")
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    """アプリのライフサイクル。Cloud Run の SIGTERM で常駐リソースを畳む。
+
+    起動時は特に処理なし（DB 初期化はモジュール読込時に実施済み）。
+    終了時に MCP 常駐サブプロセスと DB コネクションプールを閉じ、
+    再デプロイ/スケールインでの中断を綺麗にする。
+    """
+    yield
+    # ─── graceful shutdown ───
+    try:
+        from log_analyzer import bigquery_mcp
+
+        bigquery_mcp.shutdown_runtime()
+    except Exception:  # noqa: BLE001 — 終了処理は握りつぶす
+        _logger.warning("MCP ランタイムの終了に失敗（無視）", exc_info=True)
+    try:
+        storage.close_pool()
+    except Exception:  # noqa: BLE001
+        _logger.warning("DB プールの終了に失敗（無視）", exc_info=True)
+
+
+app = FastAPI(title="log-analyzer API", version="0.2.0", lifespan=_lifespan)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Cloud Run のヘルスチェック / startup probe 用。常に軽量応答。"""
+    return {"status": "ok"}
 
 # ─── 認証（ホスティング時のみ有効） ────────────────────────────────
 # 環境変数 API_KEY が設定されているときだけ X-API-Key を必須化する。
@@ -76,11 +106,50 @@ app = FastAPI(title="log-analyzer API", version="0.2.0")
 _API_KEY = os.environ.get("API_KEY", "").strip()
 
 
+# ─── 解析のレート制限（公開ゲート） ────────────────────────────────────
+# 鍵漏洩時の暴走（1 解析 200 万トークン級）でコストが膨れないよう、POST /api/runs*
+# を固定窓でカウントし上限超過は 429。RATELIMIT_RUNS_PER_MIN=0（既定）で無効＝
+# ローカル開発は現状維持。min-instances=1 前提のプロセス内カウンタ（スケール時は
+# 別途集中管理が要る）。
+# 注意: 下の認証ミドルウェアを後に定義しているため、実行順は「認証 → レート制限」
+# （Starlette は後定義＝外側＝先実行）。無認証リクエストは枠を消費しない。
+_RATELIMIT_RUNS_PER_MIN = int(os.environ.get("RATELIMIT_RUNS_PER_MIN", "0"))
+_ratelimit_window_start = 0
+_ratelimit_count = 0
+
+
+@app.middleware("http")
+async def _ratelimit_runs(request, call_next):
+    global _ratelimit_window_start, _ratelimit_count
+    if (
+        _RATELIMIT_RUNS_PER_MIN > 0
+        and request.method == "POST"
+        and request.url.path.startswith("/api/runs")
+    ):
+        import time as _time
+
+        now = int(_time.time())
+        window = now - (now % 60)
+        if window != _ratelimit_window_start:
+            _ratelimit_window_start = window
+            _ratelimit_count = 0
+        if _ratelimit_count >= _RATELIMIT_RUNS_PER_MIN:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "rate limit exceeded: too many analyses"},
+            )
+        _ratelimit_count += 1
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def _require_api_key(request, call_next):
     # API_KEY 未設定なら無効（ローカル開発は現状維持）。
     # CORS プリフライト (OPTIONS) は常に通す（ブラウザが認証ヘッダを付けないため）。
-    if _API_KEY and request.method != "OPTIONS":
+    # /health は Cloud Run の probe が認証ヘッダを付けないため常に素通し。
+    if _API_KEY and request.method != "OPTIONS" and request.url.path != "/health":
         if request.headers.get("x-api-key", "") != _API_KEY:
             from fastapi.responses import JSONResponse
 
@@ -93,7 +162,13 @@ async def _require_api_key(request, call_next):
 # フロントエンドの origin を許可。
 # 既定はローカル開発用の Vite (5173)。ホスティング時は CORS_EXTRA_ORIGINS に
 # 本番オリジン（例: https://<app>.vercel.app）をカンマ区切りで追加する。
-_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+# 本番では CORS_ALLOW_LOCALHOST=0 で localhost を除外し、Vercel ドメインのみに絞る。
+_allow_localhost = os.environ.get("CORS_ALLOW_LOCALHOST", "1").strip().lower() not in (
+    "0", "false", "no", "",
+)
+_cors_origins: list[str] = []
+if _allow_localhost:
+    _cors_origins += ["http://localhost:5173", "http://127.0.0.1:5173"]
 _extra_origins = os.environ.get("CORS_EXTRA_ORIGINS", "").strip()
 if _extra_origins:
     _cors_origins += [o.strip() for o in _extra_origins.split(",") if o.strip()]
@@ -110,6 +185,9 @@ app.add_middleware(
 # このファイルは apps/agents/src/log_analyzer/api.py、リポジトリルートは 4 階層上
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _LOGS_DIR = _REPO_ROOT / "samples" / "logs"
+
+# ログの保存先は filestore が env(LOG_STORE) で切替える（未設定＝この _LOGS_DIR）。
+filestore.configure_default_local_root(_LOGS_DIR)
 
 # UI 表示用の説明的ラベル。コード ID（config1..config5）はトレース名・DB・JSON で固定。
 # モデル名は slot 別に上書き可能なのでラベルには含めない（パイプライン構造のみ表現）。
@@ -332,10 +410,11 @@ _PREVIEW_MAX_LINES = 200  # プレビューで返す最大行数
 _VALID_LOG_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.log$")
 
 
-def _safe_log_path(name: str) -> Path:
-    """``name`` を検証し、samples/logs/ 配下の安全な絶対パスを返す。
+def _safe_log_name(name: str) -> str:
+    """``name`` を検証して安全なログ名を返す（保存先はストア側が解決する）。
 
-    パスセパレータや `..` を含む名前、`.log` 以外の拡張子は弾く。
+    パスセパレータや `..` を含む名前、`.log` 以外の拡張子は弾く。バックエンドが
+    ローカル FS でも GCS でも、この検証で name にパス成分が無いことを保証する。
     """
     if not _VALID_LOG_NAME_RE.match(name):
         raise HTTPException(
@@ -345,12 +424,22 @@ def _safe_log_path(name: str) -> Path:
                 f"{name!r}"
             ),
         )
-    target = (_LOGS_DIR / name).resolve()
-    # _LOGS_DIR の外を指していないことを念のため確認（_VALID_LOG_NAME_RE で
-    # パスセパレータは弾いているが多重防御）
-    if _LOGS_DIR.resolve() not in target.parents:
-        raise HTTPException(status_code=400, detail=f"invalid log path: {name}")
-    return target
+    return name
+
+
+def _load_log_text(name: str) -> tuple[str, str]:
+    """検証済みログ名から (本文, ラベル) を返す。無ければ 404。
+
+    ラベルはトレース/表示用（ローカルパス or gs:// URI）。実行 runner には読み取り用
+    ではなく ``log_ref`` ラベルとして渡す。
+    """
+    safe = _safe_log_name(name)
+    store = filestore.get_log_store()
+    try:
+        text = store.read_text(safe)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"log not found: {name}")
+    return text, store.ref(safe)
 
 
 class RunRequest(BaseModel):
@@ -1142,20 +1231,16 @@ def list_configs() -> ConfigsResponse:
 
 @app.get("/api/logs", response_model=LogsResponse)
 def list_logs() -> LogsResponse:
-    if not _LOGS_DIR.exists():
-        raise HTTPException(status_code=500, detail=f"logs directory not found: {_LOGS_DIR}")
+    store = filestore.get_log_store()
     entries: list[LogEntry] = []
-    for path in sorted(_LOGS_DIR.glob("*.log")):
-        text = path.read_text(encoding="utf-8", errors="replace")
-        stat = path.stat()
+    for meta in store.list():
+        text = store.read_text(meta.name)
         entries.append(
             LogEntry(
-                name=path.name,
-                bytes=stat.st_size,
+                name=meta.name,
+                bytes=meta.size,
                 lines=len(text.splitlines()),
-                modified_at=datetime.fromtimestamp(
-                    stat.st_mtime, tz=timezone.utc
-                ).isoformat(),
+                modified_at=(meta.modified_at.isoformat() if meta.modified_at else ""),
             )
         )
     return LogsResponse(logs=entries)
@@ -1172,47 +1257,43 @@ async def upload_log(file: UploadFile = File(...)) -> LogUploadResponse:
     """
     if file.filename is None:
         raise HTTPException(status_code=400, detail="ファイル名が空です")
-    target = _safe_log_path(file.filename)
+    name = _safe_log_name(file.filename)
+    store = filestore.get_log_store()
 
-    if target.exists():
+    if store.exists(name):
         raise HTTPException(
             status_code=409,
             detail=f"同名のログが既に存在します: {file.filename}",
         )
 
-    # サイズ制限はチャンクで読みつつ判定（メモリで丸ごと持たない）
+    # サイズ制限はチャンクで読みつつ判定（上限 10MB を超えたら早期に 413）。
+    # 上限が小さいのでメモリ蓄積で十分。ローカル/GCS 双方を同じ経路で扱える。
+    chunks: list[bytes] = []
     written = 0
-    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    while True:
+        chunk = await file.read(64 * 1024)
+        if not chunk:
+            break
+        written += len(chunk)
+        if written > _MAX_LOG_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"ファイルサイズが上限を超えています "
+                    f"({written} > {_MAX_LOG_SIZE_BYTES} bytes)"
+                ),
+            )
+        chunks.append(chunk)
+
+    data = b"".join(chunks)
     try:
-        with tmp_path.open("wb") as fh:
-            while True:
-                chunk = await file.read(64 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > _MAX_LOG_SIZE_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=(
-                            f"ファイルサイズが上限を超えています "
-                            f"({written} > {_MAX_LOG_SIZE_BYTES} bytes)"
-                        ),
-                    )
-                fh.write(chunk)
-        tmp_path.rename(target)
-    except HTTPException:
-        if tmp_path.exists():
-            tmp_path.unlink()
-        raise
+        store.save_bytes(name, data)
     except Exception as e:
-        if tmp_path.exists():
-            tmp_path.unlink()
         raise HTTPException(status_code=500, detail=f"アップロード失敗: {e}")
 
-    text = target.read_text(encoding="utf-8", errors="replace")
+    text = data.decode("utf-8", errors="replace")
     return LogUploadResponse(
-        name=target.name,
+        name=name,
         bytes=written,
         lines=len(text.splitlines()),
     )
@@ -1221,15 +1302,18 @@ async def upload_log(file: UploadFile = File(...)) -> LogUploadResponse:
 @app.get("/api/logs/{name}/content", response_model=LogContentResponse)
 def get_log_content(name: str) -> LogContentResponse:
     """ログ先頭 N 行（既定 200 行）をプレビュー用に返す。"""
-    target = _safe_log_path(name)
-    if not target.exists():
+    safe = _safe_log_name(name)
+    store = filestore.get_log_store()
+    try:
+        text = store.read_text(safe)
+        size = store.size(safe)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"ログが見つかりません: {name}")
-    text = target.read_text(encoding="utf-8", errors="replace")
     all_lines = text.splitlines()
     preview = all_lines[:_PREVIEW_MAX_LINES]
     return LogContentResponse(
         name=name,
-        bytes=target.stat().st_size,
+        bytes=size,
         total_lines=len(all_lines),
         preview_lines=len(preview),
         truncated=len(all_lines) > len(preview),
@@ -1240,11 +1324,12 @@ def get_log_content(name: str) -> LogContentResponse:
 @app.delete("/api/logs/{name}")
 def delete_log(name: str) -> dict:
     """ログファイルを削除。"""
-    target = _safe_log_path(name)
-    if not target.exists():
-        raise HTTPException(status_code=404, detail=f"ログが見つかりません: {name}")
+    safe = _safe_log_name(name)
+    store = filestore.get_log_store()
     try:
-        target.unlink()
+        store.delete(safe)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"ログが見つかりません: {name}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"削除失敗: {e}")
     return {"deleted": name}
@@ -1529,9 +1614,7 @@ def _resolve_run_target(
 
 @app.post("/api/runs", response_model=AnalysisResult)
 async def run_config(req: RunRequest) -> AnalysisResult:
-    log_path = _LOGS_DIR / req.log_name
-    if not log_path.exists() or log_path.suffix != ".log":
-        raise HTTPException(status_code=404, detail=f"log not found: {req.log_name}")
+    log_text, log_ref = _load_log_text(req.log_name)
 
     base_config, p_overrides, m_overrides, pipeline = _resolve_run_target(
         req.config, req.overrides, req.model_overrides, req.pipeline
@@ -1548,7 +1631,6 @@ async def run_config(req: RunRequest) -> AnalysisResult:
         if p_overrides or m_overrides:
             _validate_overrides(base_config, p_overrides, m_overrides)
 
-    log_text = log_path.read_text(encoding="utf-8", errors="replace")
     runner = CONFIG_RUNNERS[base_config]
 
     loop = asyncio.get_running_loop()
@@ -1556,7 +1638,7 @@ async def run_config(req: RunRequest) -> AnalysisResult:
         result = await loop.run_in_executor(
             _executor,
             lambda: runner(
-                log_text, str(log_path), pipeline_def=pipeline,
+                log_text, log_ref, pipeline_def=pipeline,
             ),
         )
     elif base_config == "config4":
@@ -1564,7 +1646,7 @@ async def run_config(req: RunRequest) -> AnalysisResult:
             _executor,
             lambda: runner(
                 log_text,
-                str(log_path),
+                log_ref,
                 prompt_overrides=p_overrides,
                 model_overrides=m_overrides,
                 rally_max_rounds=req.rally_max_rounds,
@@ -1575,7 +1657,7 @@ async def run_config(req: RunRequest) -> AnalysisResult:
             _executor,
             lambda: runner(
                 log_text,
-                str(log_path),
+                log_ref,
                 prompt_overrides=p_overrides,
                 model_overrides=m_overrides,
             ),
@@ -1631,9 +1713,7 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
     ``rally_max_rounds`` を超えると ``await_confirmation`` を emit して停止し、
     ``POST /api/runs/{run_id}/decision`` が来るまで待機する。
     """
-    log_path = _LOGS_DIR / req.log_name
-    if not log_path.exists() or log_path.suffix != ".log":
-        raise HTTPException(status_code=404, detail=f"log not found: {req.log_name}")
+    log_text, log_ref = _load_log_text(req.log_name)
 
     base_config, p_overrides, m_overrides, _pipeline = _resolve_run_target(
         req.config, req.overrides, req.model_overrides, req.pipeline
@@ -1646,7 +1726,6 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
     if p_overrides or m_overrides:
         _validate_overrides(base_config, p_overrides, m_overrides)
 
-    log_text = log_path.read_text(encoding="utf-8", errors="replace")
     run_id = uuid4().hex
     append_queue: asyncio.Queue[dict] = asyncio.Queue()
     _APPEND_QUEUES[run_id] = append_queue
@@ -1666,7 +1745,7 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
         try:
             async for ev in run_rally_stream(
                 log_text,
-                str(log_path),
+                log_ref,
                 prompt_overrides=p_overrides,
                 model_overrides=m_overrides,
                 rally_max_rounds=req.rally_max_rounds or 3,
@@ -1976,14 +2055,16 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
     source_block = ""
     if req.source_codebase:
         try:
-            cdir = source_codebase.safe_codebase_dir(req.source_codebase)
+            source_codebase.safe_codebase_dir(req.source_codebase)  # 名前バリデーション
         except source_codebase.SourceError as e:
             raise HTTPException(status_code=e.status_code, detail=str(e))
-        if not cdir.is_dir():
+        if not source_codebase.exists(req.source_codebase):
             raise HTTPException(
                 status_code=404,
                 detail=f"コードベースが見つかりません: {req.source_codebase}",
             )
+        # GCS backend では解析前にローカルへ展開する（ローカル backend は no-op）。
+        cdir = source_codebase.ensure_local(req.source_codebase)
         source_index = source_indexer.get_or_build_index(cdir)
         source_db = source_db_schema_mod.extract_db_schema(cdir)
         source_block = source_tools_mod.build_source_injection_block(
@@ -2281,16 +2362,8 @@ async def runs_append_log(run_id: str, req: AppendLogRequest) -> dict:
     content = (req.content or "").strip()
     source = (req.source or "inline").strip() or "inline"
     if not content and source.endswith(".log"):
-        # samples/logs/ から読み込みのフォールバック
-        try:
-            target = _safe_log_path(source)
-        except HTTPException as e:
-            raise e
-        if not target.exists():
-            raise HTTPException(
-                status_code=404, detail=f"log not found: {source}"
-            )
-        content = target.read_text(encoding="utf-8", errors="replace")
+        # ログストア（LOG_STORE）からの読み込みフォールバック
+        content, _ = _load_log_text(source)
     if not content:
         raise HTTPException(status_code=400, detail="content または有効な source (.log) が必要")
     await queue.put({"source": source, "content": content})

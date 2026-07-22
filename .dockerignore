@@ -1,0 +1,46 @@
+# --- VCS / エディタ ---
+.git
+.gitignore
+.claude
+**/.vscode
+**/.idea
+
+# --- Python ---
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+
+# --- 仮想環境 ---
+**/.venv
+**/venv
+**/env
+
+# --- Node / フロント（バックエンドイメージには不要） ---
+**/node_modules
+apps/ui/dist
+**/.vite
+**/*.tsbuildinfo
+
+# --- 秘密情報（絶対に入れない。Cloud Run は SA + Secret Manager で注入） ---
+**/secrets
+**/*sa-key.json
+**/*service_account*.json
+**/.env
+**/.env.*
+
+# --- ランタイムデータ / アップロード実体（新規イメージには持ち込まない） ---
+apps/agents/data
+samples/source/*
+samples/logs/*
+
+# --- ドキュメント / インフラ compose（イメージに不要） ---
+docs
+meeting
+infra
+README.md
+**/*.md

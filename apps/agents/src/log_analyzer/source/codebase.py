@@ -19,6 +19,7 @@ import shutil
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from log_analyzer.source import store as source_store
 from log_analyzer.source.db_schema import extract_db_schema
 from log_analyzer.source.indexer import (
     MAX_FILE_BYTES,
@@ -32,6 +33,21 @@ from log_analyzer.source.indexer import (
 
 # このファイル: apps/agents/src/log_analyzer/source/codebase.py → repo ルートは 5 階層上
 SOURCE_ROOT = Path(__file__).resolve().parents[5] / "samples" / "source"
+
+# コードベースの保存先は store が env(SOURCE_STORE) で切替える（未設定＝この SOURCE_ROOT を
+# ローカル作業ルートとして使い、GCS 同期は no-op）。
+source_store.configure_local_root(SOURCE_ROOT)
+
+
+def _store() -> source_store.SourceStore:
+    """現在の SOURCE_ROOT を同期したうえでストアを返す。
+
+    テストが ``SOURCE_ROOT`` を monkeypatch した場合でも、その差し替えを store に
+    追従させる（本番では SOURCE_ROOT 不変なので再生成は起きない）。
+    """
+    source_store.configure_local_root(SOURCE_ROOT)
+    return source_store.get_source_store()
+
 
 # 取り込み合計サイズ上限（展開後ベース）
 MAX_TOTAL_BYTES = 50 * 1024 * 1024
@@ -73,7 +89,8 @@ def materialize(name: str, items: list[tuple[str, Path]]) -> dict:
     返り値はコードベースの統計 dict。失敗時は ``SourceError``。
     """
     dest = safe_codebase_dir(name)
-    if dest.exists():
+    store = _store()
+    if store.exists(name) or dest.exists():
         raise SourceError(f"同名のコードベースが既に存在します: {name}", status_code=409)
 
     dest.mkdir(parents=True, exist_ok=False)
@@ -96,6 +113,8 @@ def materialize(name: str, items: list[tuple[str, Path]]) -> dict:
         (dest / _META_FILENAME).write_text(
             json.dumps(stats, ensure_ascii=False), encoding="utf-8"
         )
+        # backing store（GCS）へ書き戻す。ローカル backend は no-op。
+        store.persist(name)
         return stats
     except Exception:
         # 失敗時はコードベースディレクトリごとクリーンアップ
@@ -167,15 +186,23 @@ def _build_stats(name: str, index, schema) -> dict:
     }
 
 
+def ensure_local(name: str) -> Path:
+    """``name`` のファイル一式をローカルに用意し、その作業ディレクトリを返す。
+
+    GCS backend では未取得なら download する。ローカル backend は no-op。tree-sitter
+    走査・index 生成・rally の source tools はすべてこのローカルパス上で動く。
+    """
+    dest = safe_codebase_dir(name)
+    _store().ensure_local(name)
+    return dest
+
+
 def list_codebases() -> list[dict]:
-    """``samples/source/`` 配下のコードベース一覧（meta から、無ければ算出）。"""
-    if not SOURCE_ROOT.exists():
-        return []
+    """コードベース一覧（meta から、無ければ算出）。保存先は store が決める。"""
+    store = _store()
     out: list[dict] = []
-    for d in sorted(SOURCE_ROOT.iterdir()):
-        if not d.is_dir():
-            continue
-        out.append(stats_for(d.name))
+    for name in store.list_names():
+        out.append(stats_for(name))
     return out
 
 
@@ -184,41 +211,46 @@ def stats_for(name: str) -> dict:
 
     直接配置されたコードベース（meta なし）では、毎回の一覧取得で tree-sitter
     解析が走らないよう、インデックスは ``.index.json`` を使い回し、結果を
-    ``.meta.json`` に書き出しておく。
+    ``.meta.json`` に書き出しておく。GCS backend では ``.meta.json`` を直接読んで
+    一覧を軽量化し、無い場合のみローカル展開して算出・書き戻す。
     """
-    dest = safe_codebase_dir(name)
-    meta = dest / _META_FILENAME
-    if meta.is_file():
-        try:
-            return json.loads(meta.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
+    store = _store()
+    meta_data = store.read_meta(name)
+    if meta_data is not None:
+        return meta_data
+
+    dest = ensure_local(name)
     index = get_or_build_index(dest)
     stats = _build_stats(name, index, extract_db_schema(dest))
     try:
-        meta.write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
+        (dest / _META_FILENAME).write_text(
+            json.dumps(stats, ensure_ascii=False), encoding="utf-8"
+        )
+        store.persist(name)
     except OSError:
         pass
     return stats
 
 
 def exists(name: str) -> bool:
-    return safe_codebase_dir(name).is_dir()
+    return _store().exists(name)
 
 
 def delete_codebase(name: str) -> bool:
+    store = _store()
     dest = safe_codebase_dir(name)
-    if not dest.is_dir():
+    if not store.exists(name):
         return False
-    shutil.rmtree(dest, ignore_errors=True)
+    store.delete(name)  # backing store（GCS）側を削除
+    shutil.rmtree(dest, ignore_errors=True)  # ローカル作業ディレクトリを削除
     return True
 
 
 def tree(name: str) -> dict:
     """ファイルツリー（署名のみ）＋ DB スキーマを返す（本文は含めない）。"""
-    dest = safe_codebase_dir(name)
-    if not dest.is_dir():
+    if not exists(name):
         raise SourceError(f"コードベースが見つかりません: {name}", status_code=404)
+    dest = ensure_local(name)
     index = build_source_index(dest)
     schema = extract_db_schema(dest)
     return {
@@ -231,7 +263,7 @@ def tree(name: str) -> dict:
 
 def has_language_files(name: str) -> bool:
     """対象言語のファイルが 1 つでもあるか（UI の有効化判定補助）。"""
-    dest = safe_codebase_dir(name)
+    dest = ensure_local(name)
     for p in dest.rglob("*"):
         if p.is_file() and language_for(p) is not None:
             return True
