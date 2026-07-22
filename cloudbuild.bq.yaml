@@ -1,0 +1,15 @@
+# BigQuery 対応版イメージ（toolbox 同梱）をビルドする Cloud Build 設定。
+# gcloud builds submit --config cloudbuild.bq.yaml で使用。
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - '--build-arg'
+      - 'INSTALL_TOOLBOX=true'
+      - '--build-arg'
+      - 'TOOLBOX_VERSION=1.1.0'
+      - '-t'
+      - 'asia-northeast1-docker.pkg.dev/df-ibc-poc/log-analyzer/log-analyzer-api:v2'
+      - '.'
+images:
+  - 'asia-northeast1-docker.pkg.dev/df-ibc-poc/log-analyzer/log-analyzer-api:v2'
