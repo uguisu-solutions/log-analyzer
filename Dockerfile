@@ -27,6 +27,10 @@ COPY apps/agents/src /app/apps/agents/src
 # 万一ソースビルドが要る環境では build-essential を足すこと。
 RUN pip install -e /app/apps/agents
 
+# --- BigQuery MCP Toolbox 設定（ハードニング版 yaml を同梱） ---
+# prebuilt 運用時は未使用だが、--config 方式へ切替えられるよう同梱しておく。
+COPY apps/agents/config /app/apps/agents/config
+
 # --- ランタイムが参照する samples レイアウト ---
 # 検証用サンプルを同梱（source アップロード実体と data は .dockerignore で除外）。
 COPY samples /app/samples
