@@ -472,7 +472,7 @@ async def _attach_audit(
 ) -> AsyncIterator[StreamEvent]:
     """最終 AnalysisResult に対して監査 (Phase C) を 1 回実行する補助関数。
 
-    GPT-4o-mini で独立検証し、結果を ``final.audit_report`` にセットする。
+    GPT-5.5 で独立検証し、結果を ``final.audit_report`` にセットする。
     ``bq_evidence`` には rally が BigQuery から取得した実ログを渡し、監査が
     BQ ノードの参照実態を検証できるようにする。
     SSE イベントは audit_start / audit_done。失敗時は uncertain で続行

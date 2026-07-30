@@ -1,7 +1,7 @@
 /**
  * 監査エージェント所見の表示コンポーネント (Phase C)。
  *
- * GPT-4o-mini が Claude 系の結論を独立検証した結果を、結果ペインに
+ * GPT-5.5 が Claude 系の結論を独立検証した結果を、結果ペインに
  * 配色付きで表示する。両タブ (トポロジー解析 / config-log 解析) で共用。
  */
 import type { AuditReport } from './types'
