@@ -31,14 +31,22 @@ interface Props {
   // 必須項目がすべて埋まっているか (required=true の全項目) を親へ通知。
   // 親はこれを実行可否 (canRun) のゲートに使える。安定したコールバックを渡すこと。
   onValidityChange?: (allRequiredFilled: boolean) => void
+  // true になったらパネルを開く (再解析で前回入力を引き継いだ際など)。既定は折りたたみ。
+  defaultExpanded?: boolean
 }
 
 export function QuestionnairePanel({
   answers, onAnswersChange, confidences, onConfidencesChange, disabled, onValidityChange,
+  defaultExpanded = false,
 }: Props) {
   const [templates, setTemplates] = useState<QuestionnaireTemplate[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [expanded, setExpanded] = useState<boolean>(false)
+  const [expanded, setExpanded] = useState<boolean>(defaultExpanded)
+  // defaultExpanded が true に変わったら開く (再解析の種取り込み時など)。
+  // false へは戻さない（ユーザーの開閉操作を尊重）。
+  useEffect(() => {
+    if (defaultExpanded) setExpanded(true)
+  }, [defaultExpanded])
   const [error, setError] = useState<string | null>(null)
 
   const loadTemplates = useCallback(() => {

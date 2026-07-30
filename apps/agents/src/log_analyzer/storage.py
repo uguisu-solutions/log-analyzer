@@ -256,13 +256,33 @@ def init_db() -> None:
                 top_summary TEXT,
                 trace_id TEXT,
                 request_json TEXT NOT NULL,
-                result_json TEXT NOT NULL
+                result_json TEXT NOT NULL,
+                parent_run_id TEXT,
+                root_run_id TEXT,
+                revision INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        # 既存 DB へのマイグレーション: 再解析の系譜列 (parent_run_id / root_run_id /
+        # revision) を後付けする。設計: docs/plan/reanalysis.md
+        ah_cols = _table_columns(conn, "analysis_history")
+        if ah_cols and "revision" not in ah_cols:
+            conn.execute("ALTER TABLE analysis_history ADD COLUMN parent_run_id TEXT")
+            conn.execute("ALTER TABLE analysis_history ADD COLUMN root_run_id TEXT")
+            conn.execute(
+                "ALTER TABLE analysis_history ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+            )
+            # 既存行は大元扱い: root_run_id = 自分の run_id, revision = 0。
+            conn.execute(
+                "UPDATE analysis_history SET root_run_id = run_id WHERE root_run_id IS NULL"
+            )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_history_run "
             "ON analysis_history(run_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_analysis_history_root "
+            "ON analysis_history(root_run_id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_analysis_history_created "
@@ -624,7 +644,8 @@ def delete_run_history(run_id: int) -> bool:
 # 一覧で返すサマリ列 (重い JSON は含めない)
 _ANALYSIS_SUMMARY_COLS = (
     "id, run_id, created_at, kind, config_id, analysis_mode, single_source, stage_order, "
-    "title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary, trace_id"
+    "title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary, trace_id, "
+    "parent_run_id, root_run_id, revision"
 )
 
 
@@ -646,11 +667,19 @@ def insert_analysis_history(
     trace_id: str | None,
     request_json: str,
     result_json: str,
+    parent_run_id: str | None = None,
+    root_run_id: str | None = None,
+    revision: int = 0,
     created_at: str | None = None,
 ) -> tuple[int, bool]:
     """解析履歴を 1 件保存し、``(id, created)`` を返す。
 
     同一 ``run_id`` が既にあれば挿入せず ``created=False`` と既存 id を返す (no-op)。
+
+    再解析の系譜 (docs/plan/reanalysis.md):
+        - ``parent_run_id``: 直近の親 run_id。初回解析は None。
+        - ``root_run_id``: 大元の run_id。None なら自分自身 (= 大元) を採用。
+        - ``revision``: 世代。初回 0 / 再解析ごとに +1。
     """
     with _connect() as conn:
         existing = conn.execute(
@@ -659,17 +688,18 @@ def insert_analysis_history(
         if existing is not None:
             return int(existing["id"]), False
         when = created_at or _now_iso()
+        root = root_run_id or run_id  # 大元は自分自身を root とする
         new_id = _insert_returning_id(
             conn,
             "INSERT INTO analysis_history "
             "(run_id, created_at, kind, config_id, analysis_mode, single_source, stage_order, "
             " title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary, "
-            " trace_id, request_json, result_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " trace_id, request_json, result_json, parent_run_id, root_run_id, revision) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id, when, kind, config_id, analysis_mode, single_source, stage_order,
                 title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary,
-                trace_id, request_json, result_json,
+                trace_id, request_json, result_json, parent_run_id, root, revision,
             ),
         )
         conn.commit()
@@ -681,10 +711,14 @@ def list_analysis_history(
     kind: str | None = None,
     analysis_mode: str | None = None,
     q: str | None = None,
+    root_run_id: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
-    """フィルタ付きで一覧（サマリのみ）を返す。``(rows, total_count)``。"""
+    """フィルタ付きで一覧（サマリのみ）を返す。``(rows, total_count)``。
+
+    ``root_run_id`` を指定すると、その調査（再解析の系譜）の全版のみを返す。
+    """
     where: list[str] = []
     args: list = []
     if kind:
@@ -693,6 +727,9 @@ def list_analysis_history(
     if analysis_mode:
         where.append("analysis_mode = ?")
         args.append(analysis_mode)
+    if root_run_id:
+        where.append("root_run_id = ?")
+        args.append(root_run_id)
     if q:
         # top_summary / title に加え、解析結果本体 (result_json) も対象にする。
         # 候補 summary / evidence / 委譲理由などは result_json 内にしか無いため、
