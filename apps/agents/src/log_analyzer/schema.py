@@ -203,7 +203,7 @@ class RoundMetrics(BaseModel):
 class AuditReport(BaseModel):
     """GPT 監査エージェント (Phase C) の所見。
 
-    Claude 系で動いた構成4 (rally) の結果を GPT-4o 系で独立検証する。
+    Claude 系で動いた構成4 (rally) の結果を GPT-5.5 で独立検証する。
     議事録「監査エージェント (GPT想定)」に対応。
 
     verdict:

@@ -176,7 +176,8 @@ async def _run_multi_model_async(
     prompt_overrides: dict[str, str],
     model_overrides: dict[str, str],
 ) -> AnalysisResult:
-    # 3 並列段は設計上 Sonnet / Haiku / GPT-4o-mini で固定（モデル上書き不可）
+    # 3 並列段は設計上 Claude ×2 / OpenAI ×1 で固定（モデル上書き不可）。
+    # モデル統一方針 2026-06 で Claude 側は Opus 4.7、OpenAI 側は GPT-5.5。
     sonnet_model = os.environ.get("BASELINE_MODEL", "claude-opus-4-7")
     haiku_model = os.environ.get("FILTER_MODEL", "claude-opus-4-7")
     openai_model = os.environ.get("OPENAI_MODEL", "gpt-5.5")

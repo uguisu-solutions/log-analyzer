@@ -429,8 +429,14 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const updateNode = (id: string, patch: Partial<TopologyNode>) => {
     setTopology(t => ({ ...t, nodes: t.nodes.map(n => n.id === id ? { ...n, ...patch } : n) }))
   }
+  // 不変条件: 重複 id へのリネームは「どの state も変更しない」。
+  // 重複判定を setTopology の updater 内だけで行うと、その結果が外側から見えず、
+  // topology の更新が拒否されても後続の添付キー付け替えだけが走ってしまい、既存
+  // ノードのログ / 設定 / BQ テーブルを上書きして消していた。呼び出し時点で弾き、
+  // 付け替え側も衝突するキーには触らない二重の防御にする。
   const renameNode = (oldId: string, newId: string) => {
     const trimmed = newId.trim(); if (!trimmed || trimmed === oldId) return
+    if (topology.nodes.some(n => n.id === trimmed)) return
     setTopology(t => {
       if (t.nodes.some(n => n.id === trimmed)) return t
       return {
@@ -439,15 +445,16 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         links: t.links.map(l => ({ source: l.source === oldId ? trimmed : l.source, target: l.target === oldId ? trimmed : l.target })),
       }
     })
+    // 付け替え先のキーが既にある場合は触らない (どちらかが黙って消えるのを防ぐ)
     const renameKey = (m: NodeAttachments): NodeAttachments => {
-      if (!(oldId in m)) return m
+      if (!(oldId in m) || trimmed in m) return m
       const next: NodeAttachments = {}
       for (const [k, val] of Object.entries(m)) next[k === oldId ? trimmed : k] = val
       return next
     }
     setNodeLogs(renameKey); setNodeConfigs(renameKey)
     setNodeBigquery(prev => {
-      if (!(oldId in prev)) return prev
+      if (!(oldId in prev) || trimmed in prev) return prev
       const next: NodeBigquerySources = {}
       for (const [k, val] of Object.entries(prev)) next[k === oldId ? trimmed : k] = val
       return next
@@ -906,10 +913,14 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
                   const hl = highlightClass(n.id)
                   return (
                     <g key={n.id}>
+                      {/* 選択は click で行う。mousedown はフォーカス移動 (= id 入力の blur) より
+                          先に走るため、選択が切り替わってから blur が発火し、編集中の id が
+                          切替後のノードに適用されてしまう。click なら blur → 選択 の順になる。
+                          select モードでは onCanvasMouseDown が即 return するので描画への影響は無い。 */}
                       <rect
                         x={n.x} y={n.y} width={n.w} height={n.h}
                         className={['node-rect', isSelected ? 'is-selected' : '', hl].filter(Boolean).join(' ')}
-                        onMouseDown={e => { if (editMode === 'select') { e.stopPropagation(); setSelectedNodeId(n.id) } }}
+                        onClick={e => { if (editMode === 'select') { e.stopPropagation(); setSelectedNodeId(n.id) } }}
                         vectorEffect="non-scaling-stroke"
                       />
                       <text x={n.x + 0.005} y={n.y + 0.018} className={['node-label', hl].filter(Boolean).join(' ')}>
@@ -937,6 +948,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         <aside className="topology-sidebar">
           {selectedNode ? (
             <CfNodeEditor
+              // ノードごとに作り直す。key が無いとインスタンスが再利用され、id の下書き
+              // (idDraft) や details の開閉・IME の未確定文字が前のノードから引き継がれる。
+              key={selectedNode.id}
               node={selectedNode}
               logs={nodeLogs[selectedNode.id] ?? []}
               configs={nodeConfigs[selectedNode.id] ?? []}
