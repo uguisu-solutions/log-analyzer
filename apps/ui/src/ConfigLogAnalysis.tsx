@@ -808,10 +808,14 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
                   const hl = highlightClass(n.id)
                   return (
                     <g key={n.id}>
+                      {/* 選択は click で行う。mousedown はフォーカス移動 (= id 入力の blur) より
+                          先に走るため、選択が切り替わってから blur が発火し、編集中の id が
+                          切替後のノードに適用されてしまう。click なら blur → 選択 の順になる。
+                          select モードでは onCanvasMouseDown が即 return するので描画への影響は無い。 */}
                       <rect
                         x={n.x} y={n.y} width={n.w} height={n.h}
                         className={['node-rect', isSelected ? 'is-selected' : '', hl].filter(Boolean).join(' ')}
-                        onMouseDown={e => { if (editMode === 'select') { e.stopPropagation(); setSelectedNodeId(n.id) } }}
+                        onClick={e => { if (editMode === 'select') { e.stopPropagation(); setSelectedNodeId(n.id) } }}
                         vectorEffect="non-scaling-stroke"
                       />
                       <text x={n.x + 0.005} y={n.y + 0.018} className={['node-label', hl].filter(Boolean).join(' ')}>
@@ -839,6 +843,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         <aside className="topology-sidebar">
           {selectedNode ? (
             <CfNodeEditor
+              // ノードごとに作り直す。key が無いとインスタンスが再利用され、id の下書き
+              // (idDraft) や details の開閉・IME の未確定文字が前のノードから引き継がれる。
+              key={selectedNode.id}
               node={selectedNode}
               logs={nodeLogs[selectedNode.id] ?? []}
               configs={nodeConfigs[selectedNode.id] ?? []}

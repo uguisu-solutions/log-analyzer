@@ -567,7 +567,11 @@ export function TopologyAnalysis({
                           isSelected ? 'is-selected' : '',
                           hl,
                         ].filter(Boolean).join(' ')}
-                        onMouseDown={e => {
+                        // 選択は click で行う。mousedown はフォーカス移動 (= id 入力の blur)
+                        // より先に走るため、選択が切り替わってから blur が発火し、編集中の id
+                        // が切替後のノードに適用されてしまう。click なら blur → 選択 の順。
+                        // select モードでは onCanvasMouseDown が即 return するので描画に影響しない。
+                        onClick={e => {
                           if (editMode === 'select') {
                             e.stopPropagation()
                             setSelectedNodeId(n.id)
@@ -607,6 +611,9 @@ export function TopologyAnalysis({
         <aside className="topology-sidebar">
           {selectedNode ? (
             <NodeEditor
+              // ノードごとに作り直す。key が無いとインスタンスが再利用され、id の下書き
+              // (idDraft) や IME の未確定文字が前のノードから引き継がれる。
+              key={selectedNode.id}
               node={selectedNode}
               logs={nodeLogs[selectedNode.id] ?? []}
               configs={nodeConfigs[selectedNode.id] ?? []}
