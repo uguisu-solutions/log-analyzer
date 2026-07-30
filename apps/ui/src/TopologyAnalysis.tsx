@@ -270,11 +270,17 @@ export function TopologyAnalysis({
       nodes: t.nodes.map(n => (n.id === id ? { ...n, ...patch } : n)),
     }))
   }
+  // 不変条件: 重複 id へのリネームは「どの state も変更しない」。
+  // 重複判定を setTopology の updater 内だけで行うと、その結果が外側から見えず、
+  // topology の更新が拒否されても後続の添付キー付け替えだけが走ってしまい、既存
+  // ノードのログ / 設定を上書きして消していた。呼び出し時点で弾き、付け替え側も
+  // 衝突するキーには触らない二重の防御にする。
   const renameNode = (oldId: string, newId: string) => {
     const trimmed = newId.trim()
     if (!trimmed || trimmed === oldId) return
+    if (topology.nodes.some(n => n.id === trimmed)) return
     setTopology(t => {
-      if (t.nodes.some(n => n.id === trimmed)) return t // 重複は弾く
+      if (t.nodes.some(n => n.id === trimmed)) return t // 保険 (stale state 対策)
       return {
         ...t,
         nodes: t.nodes.map(n => (n.id === oldId ? { ...n, id: trimmed } : n)),
@@ -284,8 +290,9 @@ export function TopologyAnalysis({
         })),
       }
     })
+    // 付け替え先のキーが既にある場合は触らない (どちらかが黙って消えるのを防ぐ)
     const renameKey = (m: NodeAttachments): NodeAttachments => {
-      if (!(oldId in m)) return m
+      if (!(oldId in m) || trimmed in m) return m
       const next: NodeAttachments = {}
       for (const [k, val] of Object.entries(m)) {
         next[k === oldId ? trimmed : k] = val
