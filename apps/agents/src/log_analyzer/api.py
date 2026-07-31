@@ -1697,7 +1697,7 @@ async def run_config(req: RunRequest) -> AnalysisResult:
             tokens_out=int(result.metrics.tokens_out),
             latency_ms=int(result.metrics.latency_ms_total),
             trace_id=str(result.trace_id),
-            top_category=top.category.value if top else None,
+            top_category=top.category if top else None,  # category は str (自由値許容)
             top_summary=top.summary if top else None,
         )
     except Exception:

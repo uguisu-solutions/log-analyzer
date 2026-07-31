@@ -39,6 +39,21 @@ def test_root_cause_categories_constrained():
     assert candidate.category == "FW"
 
 
+def test_root_cause_category_accepts_nonstandard_and_normalizes():
+    """SaaS/クラウド系の 'DB' 等・未知カテゴリでも失敗せず保持し、空/None は Unknown。
+
+    以前は Category enum 限定で 'DB' が ValidationError を投げ解析全体が落ちていた。
+    """
+    # ドメイン固有値は綴りを保持 (UI バッジ cat-DB 用)
+    assert RootCauseCandidate(category="DB", summary="ロック競合").category == "DB"
+    # enum を渡しても値文字列になる
+    assert RootCauseCandidate(category=Category.NET, summary="x").category == "Net"
+    # 空/None/未指定は Unknown に正規化
+    assert RootCauseCandidate(category="", summary="x").category == "Unknown"
+    assert RootCauseCandidate(summary="x").category == "Unknown"
+    assert RootCauseCandidate.model_validate({"category": None, "summary": "x"}).category == "Unknown"
+
+
 def test_root_cause_ignores_legacy_rank_field():
     """schema v0.2 で撤去された rank が旧 JSON に残っていてもデコードできること。"""
     candidate = RootCauseCandidate.model_validate({

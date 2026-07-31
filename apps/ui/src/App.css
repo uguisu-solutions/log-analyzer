@@ -205,6 +205,7 @@ header h1 {
 .cat-App { background: #fef3c7; color: #92400e; }
 .cat-DNS { background: #e0e7ff; color: #3730a3; }
 .cat-Sec { background: #fce7f3; color: #9f1239; }
+.cat-DB { background: #d1fae5; color: #065f46; }
 .cat-Unknown { background: #e5e7eb; color: #374151; }
 
 .rank {
@@ -1871,6 +1872,12 @@ code {
   cursor: pointer;
 }
 
+/* 「再読み込み」等の primary ボタンにホバーを付与し、他の primary ボタンと挙動を揃える。
+   クリア (.btn-secondary) は自前の !important ホバーが優先されるため影響しない。 */
+.run-history-filters-row button:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
 .run-history-filters-row button:disabled {
   background: var(--primary-disabled);
   cursor: not-allowed;
@@ -2388,6 +2395,12 @@ code {
 }
 .btn-file:hover {
   background: #084e96;
+}
+/* btn-file と btn-small を併用すると、ホバー時に .btn-small:hover の淡色背景
+   (var(--bg)) が特異度で勝ち、白文字が消えてしまう。btn-file の青ホバーを維持する。 */
+.btn-file.btn-small:hover:not(:disabled) {
+  background: #084e96;
+  color: #fff;
 }
 
 .topology-canvas-row {
