@@ -1038,6 +1038,15 @@ class AnalysisHistorySaveRequest(BaseModel):
     questionnaire_confidences: dict[str, str] = {}
     topology: dict = {}
     result: dict
+    # 再解析の系譜 (docs/plan/reanalysis.md)。初回解析はいずれも未指定。
+    parent_run_id: str | None = None  # 直近の親 run_id
+    root_run_id: str | None = None    # 大元の run_id (None なら自分自身)
+    revision: int = 0                 # 世代 (初回 0 / 再解析ごとに +1)
+    # 解析対象のファイル名のみ (本文は保存しない)。再解析画面での参照用。
+    input_files: list[str] = []
+    # BigQuery テーブル指定 (host/table/期間/列)。中身ではなく参照メタのみ。
+    # 再解析で持ち越す (docs/plan/reanalysis.md)。
+    node_bigquery: dict = {}
 
 
 class AnalysisHistorySummary(BaseModel):
@@ -1059,6 +1068,10 @@ class AnalysisHistorySummary(BaseModel):
     top_category: str | None = None
     top_summary: str | None = None
     trace_id: str | None = None
+    # 再解析の系譜 (docs/plan/reanalysis.md)
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
+    revision: int = 0
 
 
 class AnalysisHistoryListResponse(BaseModel):
@@ -1100,6 +1113,10 @@ def create_analysis_history_endpoint(req: AnalysisHistorySaveRequest) -> dict:
         "questionnaire_answers": req.questionnaire_answers,
         "questionnaire_confidences": req.questionnaire_confidences,
         "topology": req.topology,
+        # 対象ファイル名のみ (本文は保存しない)。再解析画面での参照用。
+        "input_files": req.input_files,
+        # BigQuery テーブル指定 (参照メタのみ)。再解析で持ち越す。
+        "node_bigquery": req.node_bigquery,
     }
     entry_id, created = storage.insert_analysis_history(
         run_id=req.run_id,
@@ -1118,6 +1135,9 @@ def create_analysis_history_endpoint(req: AnalysisHistorySaveRequest) -> dict:
         trace_id=summary["trace_id"],
         request_json=json.dumps(request_payload, ensure_ascii=False),
         result_json=json.dumps(req.result, ensure_ascii=False),
+        parent_run_id=req.parent_run_id,
+        root_run_id=req.root_run_id,
+        revision=req.revision,
     )
     return {"id": entry_id, "created": created}
 
@@ -1127,11 +1147,13 @@ def list_analysis_history_endpoint(
     kind: str | None = None,
     analysis_mode: str | None = None,
     q: str | None = None,
+    root_run_id: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> AnalysisHistoryListResponse:
     rows, total = storage.list_analysis_history(
-        kind=kind, analysis_mode=analysis_mode, q=q, limit=limit, offset=offset
+        kind=kind, analysis_mode=analysis_mode, q=q, root_run_id=root_run_id,
+        limit=limit, offset=offset,
     )
     return AnalysisHistoryListResponse(
         entries=[AnalysisHistorySummary(**r) for r in rows],
@@ -1675,7 +1697,7 @@ async def run_config(req: RunRequest) -> AnalysisResult:
             tokens_out=int(result.metrics.tokens_out),
             latency_ms=int(result.metrics.latency_ms_total),
             trace_id=str(result.trace_id),
-            top_category=top.category.value if top else None,
+            top_category=top.category if top else None,  # category は str (自由値許容)
             top_summary=top.summary if top else None,
         )
     except Exception:
@@ -1962,6 +1984,10 @@ class ConfigLogRunRequest(BaseModel):
     # 1 回実行し、policy_proposal を emit してユーザー承認 (decision) を待つ。
     # まとめて実行 (バッチ) はフロントが False を送って自動スキップする。
     require_policy_approval: bool = False
+    # 再解析 (docs/plan/reanalysis.md)。前回解析の推論サマリ (buildReasoningReport の出力)。
+    # 指定時は log_text 先頭に注入し「前回推論＋追加情報での再評価」として扱う。
+    # 生ログ (node_logs) は保存しない方針のため、前回の生データは含まれない。
+    prior_reasoning: str | None = None
 
 
 _VALID_ANALYSIS_MODES = {"single", "two_stage"}
@@ -2015,24 +2041,29 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
     has_any_log = any(
         _has_any_content(req.node_logs.get(n["id"])) for n in normalized_nodes
     ) or has_any_bq
+    # 再解析 (docs/plan/reanalysis.md): 前回推論サマリがあれば「入力あり」とみなし、
+    # 生ログ/設定が無くても再評価を回せるようにする (追加情報だけの再解析を許可)。
+    has_prior = bool((req.prior_reasoning or "").strip())
 
     # 入力検証 (モードが要求するデータ種別が揃っているか):
     #   single+config / 2段階 config 始動 → Config が 1 件以上必要
     #   single+log    / 2段階 log 始動    → Log が 1 件以上必要
     #   single+both                       → Config または Log のいずれかが 1 件以上
-    if req.analysis_mode == "single":
-        if req.single_source == "config" and not has_any_config:
-            raise HTTPException(status_code=400, detail="config のみモードでは少なくとも 1 ノードに設定ファイル (Config) が必要です")
-        if req.single_source == "log" and not has_any_log:
-            raise HTTPException(status_code=400, detail="log のみモードでは少なくとも 1 ノードにログが必要です")
-        if req.single_source == "both" and not (has_any_config or has_any_log):
-            raise HTTPException(status_code=400, detail="config+log モードでは少なくとも 1 ノードに設定ファイルまたはログが必要です")
-    else:  # two_stage
-        stage_one_kind = "config" if req.stage_order == "config_log" else "log"
-        if stage_one_kind == "config" and not has_any_config:
-            raise HTTPException(status_code=400, detail="config→log の 2 段階では Stage 1 用に少なくとも 1 ノードに設定ファイル (Config) が必要です")
-        if stage_one_kind == "log" and not has_any_log:
-            raise HTTPException(status_code=400, detail="log→config の 2 段階では Stage 1 用に少なくとも 1 ノードにログが必要です")
+    #   ※ prior_reasoning があればいずれの検証もスキップ (再解析)
+    if not has_prior:
+        if req.analysis_mode == "single":
+            if req.single_source == "config" and not has_any_config:
+                raise HTTPException(status_code=400, detail="config のみモードでは少なくとも 1 ノードに設定ファイル (Config) が必要です")
+            if req.single_source == "log" and not has_any_log:
+                raise HTTPException(status_code=400, detail="log のみモードでは少なくとも 1 ノードにログが必要です")
+            if req.single_source == "both" and not (has_any_config or has_any_log):
+                raise HTTPException(status_code=400, detail="config+log モードでは少なくとも 1 ノードに設定ファイルまたはログが必要です")
+        else:  # two_stage
+            stage_one_kind = "config" if req.stage_order == "config_log" else "log"
+            if stage_one_kind == "config" and not has_any_config:
+                raise HTTPException(status_code=400, detail="config→log の 2 段階では Stage 1 用に少なくとも 1 ノードに設定ファイル (Config) が必要です")
+            if stage_one_kind == "log" and not has_any_log:
+                raise HTTPException(status_code=400, detail="log→config の 2 段階では Stage 1 用に少なくとも 1 ノードにログが必要です")
 
     # topology_context 共通
     topology_context = {
@@ -2122,6 +2153,17 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
     # 方針ゲートが承認されたら "text" に方針ブロックを書き込む。"rejected" は中止シグナル。
     policy_prefix: dict = {"text": "", "rejected": False}
 
+    # 再解析 (docs/plan/reanalysis.md): 前回解析の推論サマリを最先頭に注入する。
+    # 以降の追加情報 (問診票 / 新規ログ / BQ) と合わせて「前回推論＋追加情報での再評価」とする。
+    prior_block = ""
+    if has_prior:
+        prior_block = (
+            "## 前回の解析結果（要約）\n"
+            + req.prior_reasoning.strip()
+            + "\n\n上記は前回の解析での推論と結論です。以下の追加情報を踏まえ、"
+            + "真因を再評価してください。\n\n"
+        )
+
     # ─── 解析方針の事前確認ゲート (Phase 2) ─────────────────────
     async def _run_policy_gate() -> AsyncIterator[bytes]:
         """方針プランナーを 1 回実行し、policy_proposal を emit して承認を待つ。
@@ -2140,6 +2182,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             questionnaire_confidences=req.questionnaire_confidences,
             node_bigquery=bq_norm, mermaid=req.mermaid,
         )
+        # 再解析 (docs/plan/reanalysis.md): 前回推論サマリを最先頭に置き、
+        # 方針プランナーが「前回からの続き」として方針を立てられるようにする。
+        planner_log_text = prior_block + planner_log_text
         yield _sse_bytes("policy_start", {"message": "解析方針を立案しています…"})
         loop = asyncio.get_running_loop()
         try:
@@ -2190,8 +2235,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             questionnaire_confidences=req.questionnaire_confidences,
             node_bigquery=bq_marker, mermaid=req.mermaid,
         )
-        # 承認済み解析方針 (Phase 2) ＋ ソース利用可能マーカー/スキーマ要約を先頭に差し込む
-        single_log_text = policy_prefix["text"] + source_block + single_log_text
+        # 承認済み解析方針 (Phase 2) ＋ ソース利用可能マーカー/スキーマ要約を先頭に差し込む。
+        # 再解析時は前回推論サマリ (prior_block) を最先頭に置き、以降を追加情報として扱う。
+        single_log_text = prior_block + policy_prefix["text"] + source_block + single_log_text
         stage_label = _stage_label(1, source)
         yield _sse_bytes(
             "single_stage_start",
@@ -2270,8 +2316,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             questionnaire_confidences=req.questionnaire_confidences,
             node_bigquery=s1_bq_marker, mermaid=req.mermaid,
         )
-        # 承認済み解析方針 (Phase 2) ＋ ソースマーカー/スキーマ要約を Stage 1 先頭に差し込む
-        stage_one_log_text = policy_prefix["text"] + source_block + stage_one_log_text
+        # 承認済み解析方針 (Phase 2) ＋ ソースマーカー/スキーマ要約を Stage 1 先頭に差し込む。
+        # 再解析時は前回推論サマリ (prior_block) を最先頭に置く。
+        stage_one_log_text = prior_block + policy_prefix["text"] + source_block + stage_one_log_text
 
         # Stage 2: Stage 1 仮説を冒頭に置き、両データ種別を投入して検証 (BQ 含む)
         def _stage_two_log_text(stage_one_output: StageOutput) -> str:

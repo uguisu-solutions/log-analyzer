@@ -205,6 +205,7 @@ header h1 {
 .cat-App { background: #fef3c7; color: #92400e; }
 .cat-DNS { background: #e0e7ff; color: #3730a3; }
 .cat-Sec { background: #fce7f3; color: #9f1239; }
+.cat-DB { background: #d1fae5; color: #065f46; }
 .cat-Unknown { background: #e5e7eb; color: #374151; }
 
 .rank {
@@ -1684,6 +1685,40 @@ code {
   background: #fee2e2;
 }
 
+/* 方針モーダル: 前回解析の要約 (docs/plan/reanalysis.md)。長文なのでスクロール表示。 */
+.policy-prior {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+.policy-prior > summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.policy-prior-text {
+  margin: 0.5rem 0 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* 再解析ボタン (docs/plan/reanalysis.md)。btn-small の白背景を上書きして塗り青にする。
+   .btn-primary との併用は btn-small が背景を白に上書きし白文字が消えるため使わない。 */
+.btn-small.btn-reanalyze {
+  color: white;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.btn-small.btn-reanalyze:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
 /* Preview modal */
 
 .preview-modal-backdrop {
@@ -1837,6 +1872,12 @@ code {
   cursor: pointer;
 }
 
+/* 「再読み込み」等の primary ボタンにホバーを付与し、他の primary ボタンと挙動を揃える。
+   クリア (.btn-secondary) は自前の !important ホバーが優先されるため影響しない。 */
+.run-history-filters-row button:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
 .run-history-filters-row button:disabled {
   background: var(--primary-disabled);
   cursor: not-allowed;
@@ -1916,6 +1957,62 @@ code {
   font-size: 0.8rem;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+/* ─── 再解析 (docs/plan/reanalysis.md) ───────────────────────── */
+/* config-log 画面: 再解析モードのバナー */
+.reanalysis-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.6rem 0.9rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid var(--primary);
+  border-radius: 6px;
+}
+.reanalysis-banner-main {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.reanalysis-banner-sub {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+/* 履歴一覧: 版バッジ / 古い版の行 / トグル行 */
+.ah-rev-badge {
+  display: inline-block;
+  margin-right: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: #e5e7eb;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+.ah-rev-badge.latest {
+  background: var(--primary);
+  color: white;
+}
+.run-history-table tbody tr.ah-old-version td {
+  background: #fafafa;
+}
+.run-history-table tbody tr.ah-old-version .date {
+  padding-left: 1.5rem;
+}
+.ah-toggle-row td {
+  padding: 0.25rem 0.75rem 0.25rem 1.5rem;
+  background: #fafafa;
+}
+.ah-toggle-row .link-button {
+  font-size: 0.8rem;
+  color: var(--primary);
 }
 
 .run-history-table code {
@@ -2298,6 +2395,12 @@ code {
 }
 .btn-file:hover {
   background: #084e96;
+}
+/* btn-file と btn-small を併用すると、ホバー時に .btn-small:hover の淡色背景
+   (var(--bg)) が特異度で勝ち、白文字が消えてしまう。btn-file の青ホバーを維持する。 */
+.btn-file.btn-small:hover:not(:disabled) {
+  background: #084e96;
+  color: #fff;
 }
 
 .topology-canvas-row {

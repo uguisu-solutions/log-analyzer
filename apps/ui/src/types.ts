@@ -148,6 +148,10 @@ export interface AnalysisHistorySummary {
   top_category: string | null
   top_summary: string | null
   trace_id: string | null
+  // 再解析の系譜 (docs/plan/reanalysis.md)
+  parent_run_id: string | null
+  root_run_id: string | null
+  revision: number
 }
 
 export interface AnalysisHistoryListResponse {
@@ -169,8 +173,30 @@ export interface AnalysisHistoryDetail extends AnalysisHistorySummary {
     questionnaire_answers: QuestionnaireAnswers
     questionnaire_confidences?: QuestionnaireConfidences
     topology: TopologyDef
+    // 対象ファイル名のみ (本文は保存しない)。再解析画面での参照用。
+    input_files?: string[]
+    // BigQuery テーブル指定 (参照メタのみ)。再解析で持ち越す。
+    node_bigquery?: NodeBigquerySources
   }
   result: AnalysisResult
+}
+
+// 再解析の種 (docs/plan/reanalysis.md)。解析履歴画面 → config-log 解析画面へ引き継ぐ。
+// 前回の推論サマリと系譜情報を持ち、config-log 画面が受け取って再解析を開始する。
+export interface ReanalyzeSeed {
+  priorReasoning: string   // buildReasoningReport(前回result) の出力
+  topology: TopologyDef    // 前回の構成図 (引き継ぎ)
+  configId: string         // 前回の config_id
+  parentRunId: string      // 直近の親 = 前回の run_id
+  rootRunId: string        // 大元の run_id (前回が大元なら前回の run_id)
+  revision: number         // 今回の世代 (= 前回 revision + 1)
+  prevFiles: string[]      // 前回の対象ファイル名 (表示用)
+  prevRevision: number     // 前回の世代 (表示用)
+  // 前回の問診票入力 (再解析時にデフォルトとして引き継ぐ)
+  prevQuestionnaire: QuestionnaireAnswers
+  prevConfidences: QuestionnaireConfidences
+  // 前回の BigQuery テーブル指定 (継続解析で持ち越す)
+  prevBigquery: NodeBigquerySources
 }
 
 // 解析履歴の保存リクエスト (config-log 完了時に送る)
@@ -187,6 +213,12 @@ export interface AnalysisHistorySaveRequest {
   questionnaire_confidences?: QuestionnaireConfidences
   topology: TopologyDef
   result: AnalysisResult
+  // 再解析の系譜 (docs/plan/reanalysis.md)。初回解析は未指定。
+  parent_run_id?: string | null
+  root_run_id?: string | null
+  revision?: number
+  // 対象ファイル名のみ (本文は保存しない)
+  input_files?: string[]
 }
 
 export interface RootCauseCandidate {

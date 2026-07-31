@@ -28,7 +28,8 @@
 ## 1. メインDB移行（SQLite → Supabase / Postgres）※最重量
 - [ ] `storage.py` を sqlite3 → Postgres ドライバ（`psycopg` / SQLAlchemy）へ置換
 - [ ] スキーマDDLを Postgres 方言へ（`analysis_history` / `analysis_evaluations` / `answer_scenarios` / `run_history` / configs / questionnaire 等）
-- [ ] `ALTER TABLE` ベースのマイグレーション（`axis_assessment_json` 追加等）を **Alembic 等の正式マイグレーション**に置換
+      - ※ `analysis_history` は再解析の系譜列 `parent_run_id` / `root_run_id` / `revision` を含む（[docs/plan/reanalysis.md](plan/reanalysis.md)）。DDL 化時に忘れず含めること
+- [ ] `ALTER TABLE` ベースのマイグレーション（`axis_assessment_json` 追加、`analysis_history` の系譜3列追加等）を **Alembic 等の正式マイグレーション**に置換
 - [ ] `AUTOINCREMENT`→`SERIAL/IDENTITY`、`?` プレースホルダ→`%s`、`json.dumps` 列→`jsonb` 検討
 - [ ] コネクションプール（Supabase pooler / pgbouncer）対応
 - [ ] 既存ローカルDBの移行要否判断（基本は不要＝新規で開始）
@@ -70,6 +71,7 @@
 
 ## 7. シークレット / 環境変数
 - [ ] **Vercel**：`VITE_API_BASE`（フロントのビルド時のみ。※フロントに秘密は置かない）
+      - `VITE_SHOW_EVALUATION` は**設定しない**（未設定＝「解答と比較評価」パネルをマスク）。検証用ビルドでのみ `1` を設定する
 - [ ] **Cloud Run（バックエンド）**：`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `LANGFUSE_*` / `BIGQUERY_*` / モデル名各種（`AUDIT_MODEL` / `EVAL_MODEL` / `RALLY_*` 等）/ フラグ（`LOG_COMPACT_ENABLED` 等）→ **Secret Manager** で注入
 - [ ] **GCP SA 鍵**：`secrets/sa-key.json` は鍵ファイル配布をやめ、**Cloud Run のサービスアカウントに Workload Identity で権限付与**（BQ / GCS）
 - [ ] `.env` をリポジトリから除外確認（`.gitignore`）、`.env.example` を新構成に更新

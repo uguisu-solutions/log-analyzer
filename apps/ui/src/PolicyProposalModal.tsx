@@ -17,6 +17,8 @@ interface Props {
   busy: boolean
   onApprove: (editedFocus: string | null) => void
   onReject: () => void
+  // 再解析 (docs/plan/reanalysis.md): 前回解析からの続きの場合、前回の推論要約を提示する。
+  priorReasoning?: string | null
 }
 
 const NODE_LABELS: Record<string, string> = {
@@ -27,7 +29,7 @@ const NODE_LABELS: Record<string, string> = {
   sec: 'Sec 監視',
 }
 
-export function PolicyProposalModal({ proposal, busy, onApprove, onReject }: Props) {
+export function PolicyProposalModal({ proposal, busy, onApprove, onReject, priorReasoning }: Props) {
   // 観点 (focus) はユーザーが修正してから承認できる
   const [focus, setFocus] = useState<string>(proposal.focus ?? '')
   const firstNodeLabel = NODE_LABELS[proposal.suggested_first_node] ?? proposal.suggested_first_node
@@ -42,6 +44,13 @@ export function PolicyProposalModal({ proposal, busy, onApprove, onReject }: Pro
           提供された構成図・ログ・設定・問診票から、以下の方針で障害解析を進めます。
           内容を確認し、この方針で進めるか（必要なら着目観点を修正して）選んでください。
         </p>
+
+        {priorReasoning && priorReasoning.trim() && (
+          <details className="policy-section policy-prior" open>
+            <summary><strong>前回解析の要約（この再解析の起点）</strong></summary>
+            <pre className="policy-prior-text">{priorReasoning.trim()}</pre>
+          </details>
+        )}
 
         {proposal.situation_summary && (
           <div className="policy-section">

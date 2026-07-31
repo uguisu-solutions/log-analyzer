@@ -245,6 +245,29 @@ def test_single_log_accepts_logs_only():
     assert r.status_code == 404  # saved_config 未登録。入力不足の 400 ではない
 
 
+def test_reanalysis_prior_reasoning_bypasses_input_check():
+    """再解析 (docs/plan/reanalysis.md): prior_reasoning があれば生ログ/設定が無くても
+
+    入力バリデーションを通過する。実 LLM 手前まで進ませ、不正 saved_config の 404 で確認。
+    """
+    client = TestClient(api_mod.app)
+    r = client.post(
+        "/api/runs/config-log-stream",
+        json={
+            "config": "user:99999",  # 存在しない → 経路検証通過後に 404
+            "topology": {"nodes": [{"id": "fw-01"}], "links": []},
+            "node_logs": {},     # 生ログ無し
+            "node_configs": {},  # 設定無し
+            "analysis_mode": "single",
+            "single_source": "log",
+            "prior_reasoning": "## 前回の解析結果\n真因候補: BGP フラップ",
+            "questionnaire_answers": {"symptom": "再発した"},
+        },
+    )
+    # 入力不足の 400 ではなく、config 未登録の 404 まで到達する
+    assert r.status_code == 404, r.text
+
+
 def test_single_both_requires_either():
     """1 段階 config+log: 設定もログも無ければ 400。"""
     client = TestClient(api_mod.app)

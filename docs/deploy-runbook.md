@@ -167,6 +167,8 @@ gcloud run services update "$SERVICE" --region="$REGION" \
 ```bash
 # フロント（apps/ui）を Vercel に。Root Directory=apps/ui / build=npm run build / output=dist
 #   環境変数: VITE_API_BASE=<Cloud Run URL>  VITE_API_KEY=<API_KEY と一致>
+#   ※ VITE_SHOW_EVALUATION は設定しない（未設定＝「解答と比較評価」パネルをマスク）。
+#     精度検証で採点機能を使うビルドのときだけ VITE_SHOW_EVALUATION=1 を設定する。
 vercel --cwd apps/ui   # または Vercel ダッシュボードで Git 連携
 
 # Cloud Run 側の公開ゲート

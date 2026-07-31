@@ -14,6 +14,7 @@ import type {
   ConfigEntry,
   DelegationEvent,
   LogEntry,
+  ReanalyzeSeed,
   SavedConfigDTO,
   SlotInfo,
   SSEEvent,
@@ -366,6 +367,8 @@ function ResultSummaryGrid({ result, langfuseHost }: { result: AnalysisResult; l
 
 function App() {
   const [mode, setMode] = useState<Mode>('config-log')
+  // 再解析 (docs/plan/reanalysis.md): 解析履歴画面 → config-log 画面へ引き継ぐ種
+  const [reanalyzeSeed, setReanalyzeSeed] = useState<ReanalyzeSeed | null>(null)
 
   const [configList, setConfigList] = useState<ConfigEntry[]>([])
   const [logs, setLogs] = useState<LogEntry[]>([])
@@ -904,11 +907,16 @@ function App() {
           parseSSE={parseSSE}
           renderEventSummary={renderEventSummary}
           langfuseHost={langfuseHost}
+          reanalyzeSeed={reanalyzeSeed}
+          onReanalyzeConsumed={() => setReanalyzeSeed(null)}
         />
       )}
 
       {mode === 'analysis-history' && (
-        <AnalysisHistoryView langfuseHost={langfuseHost} />
+        <AnalysisHistoryView
+          langfuseHost={langfuseHost}
+          onReanalyze={(seed) => { setReanalyzeSeed(seed); setMode('config-log') }}
+        />
       )}
 
       {mode === 'single' && (

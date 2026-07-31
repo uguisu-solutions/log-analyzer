@@ -45,6 +45,7 @@ import type {
   PolicyProposal,
   QuestionnaireAnswers,
   QuestionnaireConfidences,
+  ReanalyzeSeed,
   SSEEvent,
   StageOutput,
   SuspectedNodeFinding,
@@ -73,6 +74,10 @@ interface Props {
   parseSSE: (response: Response) => AsyncGenerator<SSEEvent>
   renderEventSummary: (ev: SSEEvent) => React.ReactNode
   langfuseHost: string | null
+  // 再解析 (docs/plan/reanalysis.md)。解析履歴画面から引き継いだ種。null なら通常モード。
+  reanalyzeSeed?: ReanalyzeSeed | null
+  // 種を取り込んだら親に通知して消費済みにする (再マウント時の二重取り込み防止)。
+  onReanalyzeConsumed?: () => void
 }
 
 function isRallyConfig(c: ConfigEntry): boolean {
@@ -116,6 +121,30 @@ function uniqueNodeId(existing: TopologyNode[], base: string): string {
   }
   return `${base}-${Date.now()}`
 }
+// 解析対象の「ファイル名のみ」を収集する (本文は保存しない方針。docs/plan/reanalysis.md)。
+// ログ/設定はファイル名、BQ は "BQ:<table>" で控える。再解析画面での参照・履歴表示用。
+function collectInputFileNames(
+  nodeLogs: NodeAttachments,
+  nodeConfigs: NodeAttachments,
+  nodeBigquery: NodeBigquerySources,
+): string[] {
+  const names = new Set<string>()
+  for (const bucket of [nodeLogs, nodeConfigs]) {
+    for (const atts of Object.values(bucket)) {
+      for (const a of atts) {
+        const n = (a.name || '').trim()
+        if (n) names.add(n)
+      }
+    }
+  }
+  for (const tables of Object.values(nodeBigquery)) {
+    for (const t of tables) {
+      const tbl = (t.table || '').trim()
+      if (tbl) names.add(`BQ:${tbl}`)
+    }
+  }
+  return [...names]
+}
 function toNormalized(px: number, py: number, rect: DOMRect): { x: number; y: number } {
   return {
     x: Math.max(0, Math.min(1, (px - rect.left) / rect.width)),
@@ -133,10 +162,14 @@ type StageStatus =
   | 'aborted'
   | 'error'
 
-export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSummary, langfuseHost }: Props) {
+export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSummary, langfuseHost, reanalyzeSeed, onReanalyzeConsumed }: Props) {
   // ─── トポロジー (永続化) ──────────────────────────────────────
   const [topology, setTopology] = useState<TopologyDef>(() => loadTopology())
   useEffect(() => { saveTopology(topology) }, [topology])
+
+  // ─── 再解析 (docs/plan/reanalysis.md) ────────────────────────
+  // 解析履歴画面から引き継いだ「前回推論サマリ + 系譜」。null なら通常の新規解析。
+  const [reanalysis, setReanalysis] = useState<ReanalyzeSeed | null>(null)
 
   // ─── ノード別添付 (揮発) ─────────────────────────────────────
   const [nodeLogs, setNodeLogs] = useState<NodeAttachments>({})
@@ -179,6 +212,28 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   const [auditPromptLoaded, setAuditPromptLoaded] = useState(false)
   // 表示モード (Phase E): デフォルトは標準
   const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
+
+  // 再解析の種を取り込む (docs/plan/reanalysis.md)。
+  // 前回の構成図・config を引き継ぎ、追加情報の入力はまっさらから始める。
+  // 前回の生ログ/BQ は保存しない方針のため引き継がない（前回推論サマリで代替）。
+  useEffect(() => {
+    if (!reanalyzeSeed) return
+    setTopology(reanalyzeSeed.topology)
+    if (reanalyzeSeed.configId) setSelectedConfig(reanalyzeSeed.configId)
+    setNodeLogs({})
+    setNodeConfigs({})
+    // BigQuery テーブル指定は継続解析で持ち越す（中身ではなく参照メタ。毎回ライブ取得）
+    setNodeBigquery(reanalyzeSeed.prevBigquery ?? {})
+    // 問診票は前回入力をデフォルトで引き継ぐ（そのうえで追記・修正できる）
+    setQuestionnaireAnswers(reanalyzeSeed.prevQuestionnaire ?? {})
+    setQuestionnaireConfidences(reanalyzeSeed.prevConfidences ?? {})
+    // 追加情報（問診票 / 新規ログ / 新規 BQ）を自由に足せるよう 1 段階 both を既定にする
+    setAnalysisMode('single')
+    setSingleSource('both')
+    setReanalysis(reanalyzeSeed)
+    onReanalyzeConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reanalyzeSeed])
 
   // 監査を有効化したら既定プロンプトを 1 度だけ取得して編集欄に初期表示する
   useEffect(() => {
@@ -508,6 +563,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     if (!selectedConfig) return false
     if (topology.nodes.length === 0) return false
     if (!questionnaireValid) return false  // 問診票の必須項目 (事象) が未入力なら実行不可
+    // 再解析 (docs/plan/reanalysis.md): 前回推論を種にするので、新規ログ/設定が
+    // 無くても実行できる (追加情報は問診票/新規ログ/BQ で任意に足す)。
+    if (reanalysis) return true
     if (analysisMode === 'single') {
       if (singleSource === 'config') return hasConfig
       if (singleSource === 'log') return hasLog
@@ -515,13 +573,23 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     }
     // 2 段階: Stage 1 の始動データ種別が揃っていること
     return stageKinds[0] === 'config' ? hasConfig : hasLog
-  }, [isRunning, selectedConfig, topology.nodes, questionnaireValid, analysisMode, singleSource, stageKinds, hasConfig, hasLog])
+  }, [isRunning, selectedConfig, topology.nodes, questionnaireValid, analysisMode, singleSource, stageKinds, hasConfig, hasLog, reanalysis])
 
   // ─── 実行 ────────────────────────────────────────────────────
   // 解析完了時に「解析履歴」へ保存する (best-effort、本流は壊さない)
   // 構成図画像を含む完全な状態を送り、後で解析後画面を再現できるようにする。
   const saveAnalysisHistory = async (rid: string | null, res: AnalysisResult, p: RunPattern) => {
     if (!rid) return
+    // 対象ファイル名のみ収集 (本文は保存しない方針)。BQ テーブルは "BQ:<table>" で控える。
+    const inputFiles = collectInputFileNames(nodeLogs, nodeConfigs, nodeBigquery)
+    // 再解析なら系譜を付与。初回解析はいずれも未指定 (= 大元 / revision 0)。
+    const lineage = reanalysis
+      ? {
+          parent_run_id: reanalysis.parentRunId,
+          root_run_id: reanalysis.rootRunId,
+          revision: reanalysis.revision,
+        }
+      : {}
     try {
       await apiFetch(`${API_BASE}/api/analysis-history`, {
         method: 'POST',
@@ -539,6 +607,9 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           questionnaire_confidences: questionnaireConfidences,
           topology,  // image / nodes / links を含む完全なトポロジー (再現用)
           result: res,
+          input_files: inputFiles,
+          node_bigquery: nodeBigquery,  // BQ テーブル指定 (参照メタ)。再解析で持ち越す
+          ...lineage,
         }),
       })
     } catch (e) {
@@ -558,6 +629,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
   // パターン p が実行可能か (必須入力が揃っているか)。canRun のパターン版。
   const patternAvailable = (p: RunPattern): boolean => {
     if (!selectedConfig || topology.nodes.length === 0 || !questionnaireValid) return false
+    // 再解析 (docs/plan/reanalysis.md): 前回推論を種にするので新規データ無しでも可。
+    if (reanalysis) return true
     if (p.analysisMode === 'single') {
       if (p.singleSource === 'config') return hasConfig
       if (p.singleSource === 'log') return hasLog
@@ -636,6 +709,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         source_codebase: sourceCodebase || undefined,
         // 解析方針の事前確認ゲート (バッチは false で自動スキップ)
         require_policy_approval: opts?.requirePolicyApproval ?? false,
+        // 再解析 (docs/plan/reanalysis.md): 前回推論サマリを種として注入する
+        prior_reasoning: reanalysis?.priorReasoning || undefined,
       }
       const r = await apiFetch(`${API_BASE}/api/runs/config-log-stream`, {
         method: 'POST',
@@ -783,6 +858,29 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       <div className="topology-header">
         <h2>config-log 解析</h2>
       </div>
+
+      {reanalysis && (
+        <div className="reanalysis-banner">
+          <div className="reanalysis-banner-main">
+            <strong>再解析モード</strong>（v{reanalysis.revision}）
+            <span className="reanalysis-banner-sub">
+              前回（v{reanalysis.prevRevision}）の推論を引き継いでいます。
+              追加のコメント（問診票）・新規ログ・BigQuery テーブルを足して実行してください。
+              {reanalysis.prevFiles.length > 0 && (
+                <> ／ 前回の対象: {reanalysis.prevFiles.join(', ')}</>
+              )}
+            </span>
+          </div>
+          <button
+            className="btn-secondary"
+            onClick={() => setReanalysis(null)}
+            disabled={isRunning}
+            title="前回推論の引き継ぎを解除して通常の新規解析に戻す"
+          >
+            引き継ぎを解除
+          </button>
+        </div>
+      )}
 
       <StageIndicator status={stageStatus} analysisMode={analysisMode} stageKinds={stageKinds} singleSource={singleSource} />
 
@@ -952,6 +1050,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           onConfidencesChange={setQuestionnaireConfidences}
           onValidityChange={setQuestionnaireValid}
           disabled={isRunning}
+          defaultExpanded
         />
       )}
 
@@ -1071,6 +1170,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
             onConfidencesChange={setQuestionnaireConfidences}
             onValidityChange={setQuestionnaireValid}
             disabled={isRunning}
+            defaultExpanded
           />
           {streamEvents.length > 0 ? (
             <LiveChatView events={streamEvents} questionnaireAnswers={questionnaireAnswers} questionnaireConfidences={questionnaireConfidences} />
@@ -1126,6 +1226,7 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
           busy={decisionBusy}
           onApprove={(editedFocus) => submitPolicyDecision('approve_policy', editedFocus)}
           onReject={() => submitPolicyDecision('reject_policy')}
+          priorReasoning={reanalysis?.priorReasoning ?? null}
         />
       )}
 
@@ -1328,7 +1429,7 @@ interface ResultTabsProps {
   stageTwoOutput: StageOutput | null
 }
 
-function ResultTabs({ current, onChange, isTwoStage, stageOneOutput, stageTwoOutput }: ResultTabsProps) {
+export function ResultTabs({ current, onChange, isTwoStage, stageOneOutput, stageTwoOutput }: ResultTabsProps) {
   // 1 段階モードでは Stage タブを出さない (統合のみ)
   if (!isTwoStage) return null
   return (
@@ -1353,7 +1454,7 @@ interface CombinedResultViewProps {
   langfuseHost: string | null
 }
 
-function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTwoOutput, topology, langfuseHost }: CombinedResultViewProps) {
+export function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTwoOutput, topology, langfuseHost }: CombinedResultViewProps) {
   const traceUrl = langfuseHost ? `${langfuseHost}/trace/${result.trace_id}` : null
   return (
     <>
@@ -1456,7 +1557,7 @@ interface StageResultViewProps {
   topology: TopologyDef
 }
 
-function StageResultView({ stage, topology }: StageResultViewProps) {
+export function StageResultView({ stage, topology }: StageResultViewProps) {
   // StageOutput を AnalysisResult 風に詰めて DelegationHistoryView に渡す簡易ラッパ
   const fakeResult: AnalysisResult = {
     schema_version: 'v0.1',

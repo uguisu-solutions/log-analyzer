@@ -126,3 +126,54 @@ def test_get_missing_analysis_history_404():
     client = TestClient(api_mod.app)
     assert client.get("/api/analysis-history/999999").status_code == 404
     assert client.delete("/api/analysis-history/999999").status_code == 404
+
+
+def test_reanalysis_lineage_and_input_files():
+    """再解析の系譜 (parent/root/revision) と対象ファイル名が保存・取得できる。
+
+    設計: docs/plan/reanalysis.md
+    """
+    client = TestClient(api_mod.app)
+
+    # 大元 (初回解析): 系譜未指定 → root=自分, revision=0
+    root_payload = _sample_payload("run-root-1") | {
+        "input_files": ["fw-syslog.log", "fw-policy.conf"],
+    }
+    r = client.post("/api/analysis-history", json=root_payload)
+    assert r.status_code == 200, r.text
+    root_id = r.json()["id"]
+
+    # 再解析 (rev1): root_run_id / parent_run_id / revision を明示
+    child_payload = _sample_payload("run-child-1") | {
+        "parent_run_id": "run-root-1",
+        "root_run_id": "run-root-1",
+        "revision": 1,
+        "input_files": ["extra.log"],
+    }
+    r = client.post("/api/analysis-history", json=child_payload)
+    assert r.status_code == 200, r.text
+    child_id = r.json()["id"]
+
+    # 一覧サマリに系譜列が出る
+    entries = {e["run_id"]: e for e in client.get("/api/analysis-history").json()["entries"]}
+    root_e, child_e = entries["run-root-1"], entries["run-child-1"]
+    assert root_e["root_run_id"] == "run-root-1"  # 大元は自分自身が root
+    assert root_e["parent_run_id"] is None
+    assert root_e["revision"] == 0
+    assert child_e["parent_run_id"] == "run-root-1"
+    assert child_e["root_run_id"] == "run-root-1"
+    assert child_e["revision"] == 1
+
+    # root_run_id で系譜 (全版) を取得できる
+    r = client.get("/api/analysis-history", params={"root_run_id": "run-root-1"})
+    assert r.status_code == 200
+    run_ids = {e["run_id"] for e in r.json()["entries"]}
+    assert run_ids == {"run-root-1", "run-child-1"}
+
+    # 個別取得で input_files (ファイル名のみ) が残る
+    detail = client.get(f"/api/analysis-history/{root_id}").json()
+    assert detail["request"]["input_files"] == ["fw-syslog.log", "fw-policy.conf"]
+
+    # 後始末
+    client.delete(f"/api/analysis-history/{root_id}")
+    client.delete(f"/api/analysis-history/{child_id}")

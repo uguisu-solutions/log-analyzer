@@ -10,17 +10,21 @@
  *
  * 設計: docs/plan/analysis_history.md
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { ChatHistoryView } from './ChatHistoryView'
+import { CombinedResultView, ResultTabs, StageResultView } from './ConfigLogAnalysis'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { EvaluationPanel } from './EvaluationPanel'
 import { RoundMetricsView } from './RoundMetricsView'
+import { ViewModeToggle } from './ViewModeToggle'
 import { buildReasoningReport, downloadText } from './reasoningReport'
 import { downloadTopologyDiagram } from './topologyImage'
 import type {
   AnalysisHistoryDetail,
   AnalysisHistoryListResponse,
   AnalysisHistorySummary,
+  ReanalyzeSeed,
+  StageOutput,
   SuspectedNodeFinding,
   TopologyDef,
 } from './types'
@@ -29,6 +33,8 @@ import { API_BASE, apiFetch } from './api'
 
 interface Props {
   langfuseHost: string | null
+  // 再解析 (docs/plan/reanalysis.md): 前回推論を種に config-log 画面へ引き継ぐ
+  onReanalyze: (seed: ReanalyzeSeed) => void
 }
 
 function formatDate(iso: string): string {
@@ -64,7 +70,7 @@ function modeText(e: { analysis_mode: string | null; single_source: string | nul
   return e.analysis_mode ?? '-'
 }
 
-export function AnalysisHistoryView({ langfuseHost }: Props) {
+export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
   const [entries, setEntries] = useState<AnalysisHistorySummary[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -137,6 +143,38 @@ export function AnalysisHistoryView({ langfuseHost }: Props) {
 
   const hasFilters = useMemo(() => filterMode || searchQ, [filterMode, searchQ])
 
+  // ─── 再解析の系譜でグループ化 (docs/plan/reanalysis.md) ───────
+  // 同じ調査 (root_run_id) の版を revision 降順にまとめ、最新 N と 1 つ前 (N-1) を既定表示、
+  // 2 回以上前 (revision <= N-2) はトグルで開閉する。
+  const [expandedRoots, setExpandedRoots] = useState<Set<string>>(new Set())
+  const groups = useMemo(() => {
+    const map = new Map<string, AnalysisHistorySummary[]>()
+    for (const e of entries) {
+      const root = e.root_run_id || e.run_id
+      const arr = map.get(root) ?? []
+      arr.push(e)
+      map.set(root, arr)
+    }
+    const gs = [...map.entries()].map(([root, rows]) => {
+      const sorted = [...rows].sort(
+        (a, b) => (b.revision - a.revision) || (a.created_at < b.created_at ? 1 : -1),
+      )
+      const maxRev = sorted.reduce((m, r) => Math.max(m, r.revision ?? 0), 0)
+      return { root, rows: sorted, maxRev, latest: sorted[0] }
+    })
+    // グループは最新版の解析日時が新しい順
+    gs.sort((a, b) => (a.latest.created_at < b.latest.created_at ? 1 : -1))
+    return gs
+  }, [entries])
+  const toggleRoot = (root: string) => {
+    setExpandedRoots(prev => {
+      const next = new Set(prev)
+      if (next.has(root)) next.delete(root)
+      else next.add(root)
+      return next
+    })
+  }
+
   // ─── 詳細ビュー (解析後画面の再現) ───────────────────────────
   if (detail) {
     return (
@@ -145,6 +183,7 @@ export function AnalysisHistoryView({ langfuseHost }: Props) {
         langfuseHost={langfuseHost}
         onBack={() => setDetail(null)}
         onDelete={() => handleDelete(detail.id)}
+        onReanalyze={onReanalyze}
       />
     )
   }
@@ -211,25 +250,59 @@ export function AnalysisHistoryView({ langfuseHost }: Props) {
               </tr>
             </thead>
             <tbody>
-              {entries.map(e => (
-                <tr key={e.id} onClick={() => openDetail(e.id)} className="clickable">
-                  <td className="date">{formatDate(e.created_at)}</td>
-                  <td className="ah-mode-cell">{modeText(e)}</td>
-                  <td className="numeric">{e.confidence?.toFixed(2) ?? '-'}</td>
-                  <td className="numeric">
-                    {(e.tokens_in ?? 0).toLocaleString()} / {(e.tokens_out ?? 0).toLocaleString()}
-                  </td>
-                  <td className="numeric">{formatLatency(e.latency_ms)}</td>
-                  <td>{e.top_category && <span className={`badge cat-${e.top_category}`}>{e.top_category}</span>}</td>
-                  <td className="ah-summary-cell">{e.top_summary ?? '-'}</td>
-                  <td className="ah-actions" onClick={ev => ev.stopPropagation()}>
-                    <div className="ah-actions-inner">
-                      <button onClick={() => openDetail(e.id)} className="btn-small">詳細</button>
-                      <button onClick={() => handleDelete(e.id)} className="btn-small btn-delete">削除</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {groups.map(g => {
+                const expanded = expandedRoots.has(g.root)
+                // 既定表示 = 最新 (maxRev) と 1 つ前 (maxRev-1)。それ未満はトグルで開閉。
+                const isDefaultVisible = (r: AnalysisHistorySummary) => (r.revision ?? 0) >= g.maxRev - 1
+                const hiddenCount = g.rows.filter(r => !isDefaultVisible(r)).length
+                const visibleRows = expanded ? g.rows : g.rows.filter(isDefaultVisible)
+                const multiVersion = g.maxRev > 0
+                return (
+                  <Fragment key={g.root}>
+                    {visibleRows.map(e => {
+                      const isLatest = (e.revision ?? 0) === g.maxRev
+                      return (
+                        <tr key={e.id} onClick={() => openDetail(e.id)}
+                          className={`clickable${isLatest ? '' : ' ah-old-version'}`}>
+                          <td className="date">
+                            {multiVersion && (
+                              <span className={`ah-rev-badge${isLatest ? ' latest' : ''}`}>
+                                v{e.revision ?? 0}{isLatest ? '（最新）' : ''}
+                              </span>
+                            )}
+                            {formatDate(e.created_at)}
+                          </td>
+                          <td className="ah-mode-cell">{modeText(e)}</td>
+                          <td className="numeric">{e.confidence?.toFixed(2) ?? '-'}</td>
+                          <td className="numeric">
+                            {(e.tokens_in ?? 0).toLocaleString()} / {(e.tokens_out ?? 0).toLocaleString()}
+                          </td>
+                          <td className="numeric">{formatLatency(e.latency_ms)}</td>
+                          <td>{e.top_category && <span className={`badge cat-${e.top_category}`}>{e.top_category}</span>}</td>
+                          <td className="ah-summary-cell">{e.top_summary ?? '-'}</td>
+                          <td className="ah-actions" onClick={ev => ev.stopPropagation()}>
+                            <div className="ah-actions-inner">
+                              <button onClick={() => openDetail(e.id)} className="btn-small">詳細</button>
+                              <button onClick={() => handleDelete(e.id)} className="btn-small btn-delete">削除</button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    {hiddenCount > 0 && (
+                      <tr className="ah-toggle-row">
+                        <td colSpan={8}>
+                          <button className="link-button" onClick={() => toggleRoot(g.root)}>
+                            {expanded
+                              ? '▾ 過去の版を隠す'
+                              : `▸ 過去の版 (${hiddenCount}件) を表示`}
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -253,15 +326,25 @@ interface DetailProps {
   langfuseHost: string | null
   onBack: () => void
   onDelete: () => void
+  onReanalyze: (seed: ReanalyzeSeed) => void
 }
 
-function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: DetailProps) {
+function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onReanalyze }: DetailProps) {
   const topology: TopologyDef = detail.request?.topology ?? { image: null, imageWidth: 0, imageHeight: 0, nodes: [], links: [] }
   const result = detail.result
   const findings = result?.suspected_node_findings ?? []
   const qa = detail.request?.questionnaire_answers ?? {}
   const qconf = detail.request?.questionnaire_confidences ?? {}
   const traceUrl = langfuseHost && result?.trace_id ? `${langfuseHost}/trace/${result.trace_id}` : null
+
+  // 表示モード (config-log 解析画面と同じ 標準/チャット 切替)。既定は「標準」。
+  const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
+  const [resultTab, setResultTab] = useState<'combined' | 'stage1' | 'stage2'>('combined')
+  // 保存済み result から Stage 出力を復元 (標準モードの Stage タブ用)
+  const isTwoStage = detail.analysis_mode === 'two_stage'
+  const stageOutputs: StageOutput[] = result?.stage_outputs ?? []
+  const stageOneOutput: StageOutput | null = stageOutputs[0] ?? null
+  const stageTwoOutput: StageOutput | null = stageOutputs.length > 1 ? stageOutputs[1] : null
 
   return (
     <section className="topology-mode config-log-mode analysis-history-detail">
@@ -276,6 +359,27 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
               void downloadTopologyDiagram(`topology-${base}.png`, topology, result)
             }}>
             レポート＋構成図を出力
+          </button>
+        )}
+        {result && (
+          <button className="btn-small btn-reanalyze"
+            title="この解析の推論を引き継ぎ、追加情報を足して再解析する"
+            onClick={() => {
+              onReanalyze({
+                priorReasoning: buildReasoningReport(result),
+                topology,
+                configId: detail.config_id,
+                parentRunId: detail.run_id,
+                rootRunId: detail.root_run_id ?? detail.run_id,
+                revision: (detail.revision ?? 0) + 1,
+                prevFiles: detail.request?.input_files ?? [],
+                prevRevision: detail.revision ?? 0,
+                prevQuestionnaire: detail.request?.questionnaire_answers ?? {},
+                prevConfidences: detail.request?.questionnaire_confidences ?? {},
+                prevBigquery: detail.request?.node_bigquery ?? {},
+              })
+            }}>
+            前回の推論をもとに再解析
           </button>
         )}
         <button className="btn-small btn-delete" onClick={onDelete}>削除</button>
@@ -316,10 +420,34 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
         <div className="topology-empty">（構成図画像は保存されていません）</div>
       )}
 
-      {/* 推論過程 + 最終結果 (会話形式) の再現 */}
+      {/* 推論過程 + 最終結果の再現。config-log 解析画面と同じ 標準/チャット を切替できる（既定=標準）。 */}
       <h3>解析の経過と結果</h3>
       {result ? (
-        <ChatHistoryView result={result} questionnaireAnswers={qa} questionnaireConfidences={qconf} />
+        <>
+          <ViewModeToggle mode={viewMode} onChange={setViewMode} />
+          {viewMode === 'chat' ? (
+            <ChatHistoryView result={result} questionnaireAnswers={qa} questionnaireConfidences={qconf} />
+          ) : (
+            <section className="topology-result">
+              <ResultTabs
+                current={resultTab}
+                onChange={setResultTab}
+                isTwoStage={isTwoStage}
+                stageOneOutput={stageOneOutput}
+                stageTwoOutput={stageTwoOutput}
+              />
+              {resultTab === 'combined' && (
+                <CombinedResultView result={result} isTwoStage={isTwoStage} stageOneOutput={stageOneOutput} stageTwoOutput={stageTwoOutput} topology={topology} langfuseHost={langfuseHost} />
+              )}
+              {resultTab === 'stage1' && stageOneOutput && (
+                <StageResultView stage={stageOneOutput} topology={topology} />
+              )}
+              {resultTab === 'stage2' && stageTwoOutput && (
+                <StageResultView stage={stageTwoOutput} topology={topology} />
+              )}
+            </section>
+          )}
+        </>
       ) : (
         <div className="log-empty">結果データがありません</div>
       )}
@@ -336,8 +464,11 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete }: D
         <RoundMetricsView rounds={result.round_metrics} />
       )}
 
-      {/* 解答と比較評価 (真因到達度の 10 段階採点、履歴に紐付け) */}
-      <EvaluationPanel historyId={detail.id} />
+      {/* 解答と比較評価 (真因到達度の 10 段階採点、履歴に紐付け)。
+          検証用の内部機能のため既定でマスク。検証時のみ VITE_SHOW_EVALUATION=1 で表示。 */}
+      {import.meta.env.VITE_SHOW_EVALUATION === '1' && (
+        <EvaluationPanel historyId={detail.id} />
+      )}
     </section>
   )
 }

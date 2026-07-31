@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Category(str, Enum):
@@ -46,12 +46,27 @@ class RootCauseCandidate(BaseModel):
     UI は順位を強調せず、並列カードとして表示する。
     """
 
-    category: Category
+    # カテゴリ。標準は Category (FW/Net/App/DNS/Sec/Unknown) をプロンプトで誘導するが、
+    # SaaS/クラウド系では "DB" などドメイン固有の値も返り得る。ハード失敗で解析全体を
+    # 落とさないよう自由文字列で受け、空/None のみ "Unknown" に正規化する。
+    # 既知値 (Category) は綴りをそのまま保持し、UI バッジ (cat-<値>) の色付けに使う。
+    category: str = "Unknown"
     summary: str
     evidence: list[str] = Field(default_factory=list)
     # 候補の状態: "supported"=支持された主要候補 / "secondary"=副次的要因 /
     # "rejected"=棄却した仮説（配列に残して黙殺しない）。旧データ互換で既定は supported。
     status: str = "supported"
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, v: object) -> str:
+        """未知カテゴリでも失敗させない。Category enum は値文字列に、空/None は Unknown に。"""
+        if v is None:
+            return "Unknown"
+        if isinstance(v, Category):
+            return v.value
+        s = str(v).strip()
+        return s or "Unknown"
 
 
 class RecommendedAction(BaseModel):
