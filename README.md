@@ -36,7 +36,8 @@
 - **GPT 監査エージェント**: 整合性チェック専用に OpenAI GPT-5.5 を integrator 後段で 1 回呼び出し、verdict (`agree` / `partial` / `disagree` / `uncertain`) + 指摘 + 別仮説を返す。**監査プロンプトは config-log タブの折りたたみ入力欄でその場で編集可能**（`GET /api/audit-prompt` で既定値を取得、`audit_system_prompt` で上書き）
 - **ラウンド単位 metrics**: orchestrator / 各監視 / integrator 単位で tokens / latency / model をテーブル表示
 - **問診票あり/なし比較ベンチマーク**: `scripts/benchmark_questionnaire.py` でシナリオを順次実行し精度・速度・コストを CSV 化
-- **解析履歴タブ**: config-log 解析の各実行を「入力 + Claude の推論過程 + 結果」付きで SQLite に保存し、一覧 → 詳細で**解析終了後の画面（構成図ハイライト + 会話形式の推論過程 + 最終結果）を再現**（[設計](docs/plan/analysis_history.md)）
+- **解析履歴タブ**: config-log 解析の各実行を「入力 + Claude の推論過程 + 結果」付きで SQLite に保存し、一覧 → 詳細で**解析終了後の画面（構成図ハイライト + 会話形式の推論過程 + 最終結果）を再現**（標準/チャットの表示切替あり・既定は標準）（[設計](docs/plan/analysis_history.md)）
+- **再解析（過去解析を種にした再調査）**: 履歴詳細から「前回の推論をもとに再解析」で、前回結果の推論要約を種に、追加コメント（問診票）・新規ログ・BigQuery テーブルを足して再度解析を回す。結果は元の解析と系譜（`root_run_id`/`revision`）で紐づき、一覧は調査単位でまとめ 2 回以上前の版はトグルで開閉（[設計](docs/plan/reanalysis.md)）
 - Langfuse による全 LLM 呼び出しのトレース・トークン消費記録 + UI 直リンク
 - **Prompt caching**: orchestrator / 監視 / integrator の system プロンプトと安定 user ブロックに `cache_control: ephemeral` を設定し、連続実行で 2 回目以降の入力 token を最大 90% 削減
 
@@ -214,7 +215,7 @@ npm run dev
 | **ログ管理** | `samples/logs/` 配下のログを一覧 / アップロード（10 MB 上限）/ 先頭 200 行プレビュー / 削除 |
 | **実行履歴** | SQLite に蓄積した過去実行を構成 / ログ / 部分文字列でフィルタ表示 + Langfuse 直リンク |
 | **config-log 解析** | 構成図 + Config / Log を入力に rally で根本原因を解析（構成は config4 固定でセレクタなし）。**1 段階**（config のみ / log のみ / config + log 同時）と **2 段階**（config → log / log → config。**人間承認なしで自動的に Stage 2 へ進行**、最終結果に各 Stage を保持）を選択。1 段階で config のみ・log のみのときは不要な入力フォームを自動的に隠す。構成図・ログ・設定は**ファイルのドラッグ＆ドロップ**でも追加可。**デフォルトでチャット表示**、実行中の介入入力 (コメント / ログ / 設定) で **orchestrator が初期ノードを再選択**。問診票・GPT 監査・ラウンド単位 metrics 表示も対応。テストシナリオ: `samples/topology/scenario2_api_acl_missing/` |
-| **解析履歴** | config-log 解析の各実行を完全な状態（入力 / 推論過程 / 結果）で保存し、一覧 → 詳細で**解析終了後の画面を再現**（構成図ハイライト + 会話形式の推論過程 + 最終結果 + ラウンド metrics）。設計: [docs/plan/analysis_history.md](docs/plan/analysis_history.md) |
+| **解析履歴** | config-log 解析の各実行を完全な状態（入力 / 推論過程 / 結果）で保存し、一覧 → 詳細で**解析終了後の画面を再現**（構成図ハイライト + 会話形式の推論過程 + 最終結果 + ラウンド metrics・標準/チャット切替）。詳細から**「前回の推論をもとに再解析」**で再調査でき、結果は系譜で紐づき一覧で版管理。設計: [analysis_history.md](docs/plan/analysis_history.md) / [reanalysis.md](docs/plan/reanalysis.md) |
 | （非表示）**構成比較 / 構成設計 / トポロジー解析** | 現在 UI 非表示（コードは残置） |
 
 ノードをクリックすると **プロンプト・モデルをその場で編集** でき、実行前に試したり、ユーザー定義構成として別名保存できます。
@@ -333,6 +334,7 @@ PoC 段階のため未設定。
 - [docs/plan/implementation_plan.md](docs/plan/implementation_plan.md) — 全体実装計画
 - [docs/plan/config_log_stages.md](docs/plan/config_log_stages.md) — config-log 解析 設計書 (1 段階 / 2 段階モード + Phase A〜F + E 拡張 + orchestrator 再選択)
 - [docs/plan/analysis_history.md](docs/plan/analysis_history.md) — 解析履歴タブ 仕様 & DB 設計
+- [docs/plan/reanalysis.md](docs/plan/reanalysis.md) — 再解析（過去解析を種にした再調査）設計 & 系譜/版管理・BQ持ち越し
 - [docs/plan/remaining_work.md](docs/plan/remaining_work.md) — 未実装バックログ
 - [docs/reports/poc_progress_2026-05-25.md](docs/reports/poc_progress_2026-05-25.md) — トポロジー解析タブ進捗
 - [docs/reports/poc_progress_2026-05-14.md](docs/reports/poc_progress_2026-05-14.md) — 構成4 委譲チェーン刷新

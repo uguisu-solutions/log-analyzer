@@ -183,6 +183,8 @@ has_any_log = (... 既存 ...) or has_any_bq or bool(req.prior_reasoning)
 - `root_run_id: str | None`（初回は自分、再解析は親の root を引き継ぐ）
 - `revision: int`（親.revision + 1、初回は 0）
 - `input_files: list[str]`（対象ファイル名だけ。`request_json` に格納。本文は入れない）
+- `node_bigquery: dict`（BQ テーブル指定 = host/table/期間/列の**参照メタのみ**。`request_json` に格納。
+  取得結果（中身）は保存せず毎回ライブ取得のため no-save 方針と整合。再解析で持ち越す用）
 
 > 保存はフロント主導（`saveAnalysisHistory`＝`ConfigLogAnalysis.tsx:519`）。
 > フロントは「元エントリの run_id（親）」と「今回の新 run_id（子）」を両方知っているため、
