@@ -45,9 +45,11 @@ from typing import AsyncIterator
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from log_analyzer import evaluation_agent, filestore, pipeline_runner, prompt_slots, storage
@@ -93,6 +95,49 @@ async def _lifespan(_app: "FastAPI"):
 
 
 app = FastAPI(title="log-analyzer API", version="0.2.0", lifespan=_lifespan)
+
+# 解析実行のエンドポイント。ここへのリクエストがバリデーションで弾かれた場合も
+# 実行履歴に残す (確認事項 B-4: 「トークン 0 で履歴に無い実行」の正体)。
+_ANALYSIS_PATHS = (
+    "/api/runs/config-log-stream",
+    "/api/runs/topology-stream",
+    "/api/runs/stream",
+    "/api/runs",
+)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    """解析エンドポイントの 422 バリデーションエラーを実行履歴に残す。
+
+    LLM を 1 回も呼ばずに失敗するため従来はどこにも記録が残らず、Langfuse 側にも
+    トレースが作られなかった (確認事項 B-4)。他のエンドポイントは記録しない。
+    """
+    if request.url.path in _ANALYSIS_PATHS:
+        _record_run_failure(
+            log_name="(validation error)",
+            config_id="?",
+            base_config="?",
+            status="error",
+            stage="validation",
+            message=json.dumps(exc.errors(), ensure_ascii=False, default=str)[:1000],
+        )
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+
+
+@app.exception_handler(HTTPException)
+async def _http_error_handler(request: Request, exc: HTTPException):
+    """解析エンドポイントの 4xx (400 の事前バリデーション等) を実行履歴に残す。"""
+    if exc.status_code == 400 and request.url.path in _ANALYSIS_PATHS:
+        _record_run_failure(
+            log_name="(validation error)",
+            config_id="?",
+            base_config="?",
+            status="error",
+            stage="validation",
+            message=str(exc.detail),
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 @app.get("/health")
@@ -964,6 +1009,11 @@ class RunHistoryEntry(BaseModel):
     trace_id: str | None = None
     top_category: str | None = None
     top_summary: str | None = None
+    # 実行の結末 (確認事項 B-4)。"ok" / "error" / "aborted" / "rejected"。
+    # 対応前に記録された行は 'ok' (正常終了しか記録していなかったため)。
+    status: str = "ok"
+    error_stage: str | None = None
+    error_message: str | None = None
 
 
 class RunHistoryListResponse(BaseModel):
@@ -973,16 +1023,61 @@ class RunHistoryListResponse(BaseModel):
     offset: int
 
 
+def _record_run_failure(
+    *,
+    log_name: str,
+    config_id: str,
+    base_config: str,
+    status: str,
+    stage: str,
+    message: str,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+) -> None:
+    """失敗・中断・却下を実行履歴 (run_history) に残す (確認事項 B-4、best-effort)。
+
+    従来は正常終了しか記録がなく、バリデーションエラー・方針却下・途中例外・
+    中断は「解析履歴にも実行履歴にも残らない」状態だった。結果が無いため
+    完全再現用の analysis_history ではなく、軽量メタの run_history に残す。
+
+    ``status``: "error" (異常終了) / "aborted" (中断) / "rejected" (方針却下)。
+    記録自体の失敗は握りつぶす (レスポンスや解析を壊さないため)。
+    """
+    try:
+        storage.insert_run_history(
+            log_name=log_name,
+            config_id=config_id,
+            base_config=base_config,
+            confidence=None,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=None,
+            trace_id=None,
+            top_category=None,
+            top_summary=None,
+            status=status,
+            error_stage=stage,
+            error_message=str(message)[:1000],
+        )
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("[run_history] 失敗記録に失敗: %s", e)
+
+
 @app.get("/api/runs/history", response_model=RunHistoryListResponse)
 def list_run_history_endpoint(
     log_name: str | None = None,
     config_id: str | None = None,
     base_config: str | None = None,
     q: str | None = None,
+    status: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> RunHistoryListResponse:
-    """実行履歴をフィルタ付きで返す。新しい順。"""
+    """実行履歴をフィルタ付きで返す。新しい順。
+
+    ``status`` は "ok" / "error" / "aborted" / "rejected"、および正常終了以外を
+    まとめて絞る "failed" (確認事項 B-4)。
+    """
     if limit < 1 or limit > 1000:
         raise HTTPException(status_code=400, detail="limit は 1〜1000")
     if offset < 0:
@@ -992,6 +1087,7 @@ def list_run_history_endpoint(
         config_id=config_id or None,
         base_config=base_config or None,
         q=q or None,
+        status=status or None,
         limit=limit,
         offset=offset,
     )
@@ -1764,6 +1860,13 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
     async def gen() -> AsyncIterator[bytes]:
         yield _sse_bytes("run_id_assigned", {"run_id": run_id})
         final_data: dict | None = None
+        # 失敗・中断も実行履歴に残す (確認事項 B-4)
+        def _fail(status: str, stage: str, message: str) -> None:
+            _record_run_failure(
+                log_name=req.log_name, config_id=req.config, base_config=base_config,
+                status=status, stage=stage, message=message,
+            )
+
         try:
             async for ev in run_rally_stream(
                 log_text,
@@ -1777,11 +1880,18 @@ async def runs_stream(req: RunRequest) -> StreamingResponse:
                 yield _sse_bytes(ev.kind, ev.data)
                 if ev.kind == "final":
                     final_data = ev.data.get("result")
+        except (asyncio.CancelledError, GeneratorExit):
+            _fail("aborted", "client", "クライアント切断により中断されました")
+            raise
         except Exception as e:
+            _fail("error", "stream", str(e))
             yield _sse_bytes("error", {"message": str(e), "stage": "stream"})
             return
         finally:
             _APPEND_QUEUES.pop(run_id, None)
+
+        if final_data is None:
+            _fail("error", "stream", "rally が結果を返しませんでした")
 
         # 履歴記録 (best-effort)
         if final_data is not None:
@@ -1902,12 +2012,30 @@ async def runs_topology_stream(req: TopologyRunRequest) -> StreamingResponse:
                 yield _sse_bytes(ev.kind, ev.data)
                 if ev.kind == "final":
                     final_data = ev.data.get("result")
+        except (asyncio.CancelledError, GeneratorExit):
+            # 中断も実行履歴に残す (確認事項 B-4)
+            _record_run_failure(
+                log_name=log_ref, config_id=req.config, base_config=base_config,
+                status="aborted", stage="client",
+                message="クライアント切断により中断されました",
+            )
+            raise
         except Exception as e:
+            _record_run_failure(
+                log_name=log_ref, config_id=req.config, base_config=base_config,
+                status="error", stage="topology-stream", message=str(e),
+            )
             yield _sse_bytes("error", {"message": str(e), "stage": "topology-stream"})
             return
         finally:
             _APPEND_QUEUES.pop(run_id, None)
 
+        if final_data is None:
+            _record_run_failure(
+                log_name=log_ref, config_id=req.config, base_config=base_config,
+                status="error", stage="topology-stream",
+                message="rally が結果を返しませんでした",
+            )
         if final_data is not None:
             try:
                 cands = final_data.get("root_cause_candidates") or []
@@ -2114,8 +2242,32 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         finally:
             _PENDING_DECISIONS.pop(run_id, None)
 
+    # 解析が final まで到達したか。到達せずにジェネレータが終わった場合は
+    # 中断とみなして実行履歴に残す (確認事項 B-4)。
+    run_outcome: dict = {"finished": False, "recorded": False}
+
+    def _record_failure(status: str, stage: str, message: str) -> None:
+        """この解析の失敗・中断を 1 回だけ実行履歴へ記録する (確認事項 B-4)。"""
+        if run_outcome.get("recorded"):
+            return
+        run_outcome["recorded"] = True
+        planner_usage = policy_prefix.get("usage") or {}
+        _record_run_failure(
+            log_name=log_ref,
+            config_id=req.config,
+            base_config=base_config,
+            status=status,
+            stage=stage,
+            message=message,
+            # 方針プランナーだけ動いて中断した場合、その消費は残す
+            tokens_in=int(planner_usage.get("tokens_in") or 0),
+            tokens_out=int(planner_usage.get("tokens_out") or 0),
+        )
+
     def _record_history(final_dict: dict) -> None:
         """最終 AnalysisResult を実行履歴へ記録する (best-effort)。"""
+        run_outcome["finished"] = True
+        run_outcome["recorded"] = True
         try:
             cands = final_dict.get("root_cause_candidates") or []
             top = cands[0] if cands else None
@@ -2196,6 +2348,7 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             )
         except Exception as e:
             # 本流を止めない: ゲートをスキップして通常解析へ
+            _record_failure("error", "policy", str(e))
             yield _sse_bytes("error", {"stage": "policy", "message": str(e)})
             return
         # Langfuse 記録用の計測値を proposal から抜き出して保持 (確認事項 B-1)。
@@ -2216,6 +2369,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         yield _sse_bytes("user_decision", decision)
         if decision.get("action") == "reject_policy":
             policy_prefix["rejected"] = True
+            # 方針却下は「プランナーのトークンは消費したが履歴に残らない」典型例
+            # だったので、実行履歴に rejected として残す (確認事項 B-4)。
+            _record_failure("rejected", "policy", "ユーザーが解析方針を却下しました")
             yield _sse_bytes(
                 "policy_rejected",
                 {"message": "解析方針が却下されました。解析を中止します。"},
@@ -2330,10 +2486,12 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                     continue
                 yield _sse_bytes(ev.kind, ev.data)
         except Exception as e:
+            _record_failure("error", "config-log-stream", str(e))
             yield _sse_bytes("error", {"message": str(e), "stage": "config-log-stream"})
             return
 
         if final_result is None:
+            _record_failure("error", source, "1 段階 rally が結果を返しませんでした")
             yield _sse_bytes("error", {"message": "1 段階 rally が結果を返しませんでした", "stage": source})
             return
 
@@ -2419,23 +2577,42 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                     final_data = res
                 yield _sse_bytes(ev.kind, ev.data)
         except Exception as e:
+            _record_failure("error", "config-log-stream", str(e))
             yield _sse_bytes("error", {"message": str(e), "stage": "config-log-stream"})
             return
 
         if final_data is not None:
             _record_history(final_data)
+        else:
+            _record_failure("error", "config-log-stream", "2 段階解析が結果を返しませんでした")
 
     # ─── ラッパ: run_id 通知 → (任意) 方針ゲート → 本解析 ───────
     async def _gen() -> AsyncIterator[bytes]:
-        yield _sse_bytes("run_id_assigned", {"run_id": run_id})
-        if req.require_policy_approval:
-            async for b in _run_policy_gate():
+        # final に到達せずに終わった場合 (クライアント切断 / タスク取消 / 想定外の
+        # 例外) も実行履歴に残す (確認事項 B-4)。個別のエラー経路で既に記録済みなら
+        # _record_failure 側で二重記録を防ぐ。
+        try:
+            yield _sse_bytes("run_id_assigned", {"run_id": run_id})
+            if req.require_policy_approval:
+                async for b in _run_policy_gate():
+                    yield b
+                if policy_prefix.get("rejected"):
+                    return  # 方針却下 → 本解析は実行しない
+            inner = _gen_single() if req.analysis_mode == "single" else _gen_two_stage()
+            async for b in inner:
                 yield b
-            if policy_prefix.get("rejected"):
-                return  # 方針却下 → 本解析は実行しない
-        inner = _gen_single() if req.analysis_mode == "single" else _gen_two_stage()
-        async for b in inner:
-            yield b
+        except asyncio.CancelledError:
+            _record_failure("aborted", "client", "クライアント切断により中断されました")
+            raise
+        except GeneratorExit:
+            _record_failure("aborted", "client", "ストリームが閉じられ中断されました")
+            raise
+        except Exception as e:  # noqa: BLE001 — 想定外の例外も記録して落とす
+            _record_failure("error", "config-log-stream", str(e))
+            raise
+        finally:
+            if not run_outcome["finished"]:
+                _record_failure("aborted", "stream", "解析が最後まで到達しませんでした")
 
     return StreamingResponse(
         _gen(),

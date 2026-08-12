@@ -15,6 +15,7 @@ import { ChatHistoryView } from './ChatHistoryView'
 import { CombinedResultView, ResultTabs, StageResultView } from './ConfigLogAnalysis'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { EvaluationPanel } from './EvaluationPanel'
+import { FailedRunsView } from './FailedRunsView'
 import { plannerUsage } from './PolicySummaryView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
@@ -228,6 +229,9 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
         <h3>解析履歴（{loading ? '...' : `${entries.length} / ${total} 件`}）</h3>
         {detailLoading && <span className="muted">詳細を読み込み中…</span>}
       </div>
+
+      {/* 解析履歴に出てこない実行 (失敗・中断・方針却下)。確認事項 B-4。 */}
+      <FailedRunsView />
 
       {entries.length === 0 && !loading ? (
         <div className="log-empty">

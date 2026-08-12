@@ -4043,6 +4043,53 @@ code {
 .policy-planner-note {
   margin-left: 0.4rem;
 }
+/* ─── 失敗・中断した実行の一覧 (確認事項 B-4) ─────────────────── */
+.failed-runs {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid #f3bdb7;
+  border-left: 5px solid #b3261e;
+  border-radius: 6px;
+  background: #fdf6f5;
+}
+.failed-runs-head {
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.failed-runs .table-wrap {
+  margin-top: 0.6rem;
+}
+.failed-runs-message {
+  max-width: 40rem;
+  word-break: break-word;
+  font-size: 0.85rem;
+}
+.failed-runs-note {
+  margin: 0.4rem 0 0;
+}
+
+/* ─── 実行履歴の結末バッジ (確認事項 B-4) ─────────────────────── */
+.run-status {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.run-status-ok { background: #e7f5ec; color: #1a7f3e; border: 1px solid #b7e0c6; }
+.run-status-error { background: #fdecea; color: #b3261e; border: 1px solid #f3bdb7; cursor: help; }
+.run-status-aborted { background: #f3f4f6; color: #555; border: 1px solid #d7dde5; cursor: help; }
+.run-status-rejected { background: #fff8e1; color: #7a5c00; border: 1px solid #e0c56b; cursor: help; }
+.run-detail-error {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85rem;
+  color: #b3261e;
+}
+
 /* ─── 監視ノードの調査根拠 (確認事項 A-3) ─────────────────────── */
 /* 標準表示 (結果ペイン) の一覧セクション。監視 1 ノード = 1 エントリ。 */
 .monitor-evidence-section {

@@ -121,6 +121,11 @@ export interface RunHistoryEntry {
   trace_id: string | null
   top_category: string | null
   top_summary: string | null
+  // 実行の結末 (確認事項 B-4)。"ok" | "error" | "aborted" | "rejected"。
+  // 対応前に記録された行は "ok"（正常終了しか記録していなかったため）。
+  status?: string
+  error_stage?: string | null
+  error_message?: string | null
 }
 
 export interface RunHistoryListResponse {

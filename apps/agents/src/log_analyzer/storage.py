@@ -187,6 +187,7 @@ def init_db() -> None:
         conn.execute("DROP TABLE IF EXISTS saved_prompts")
 
         # run_history テーブル（実行 1 件 1 行のメタデータのみ。詳細は Langfuse へ）
+        # status / error_stage / error_message は失敗・中断の記録用 (確認事項 B-4)。
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS run_history (
@@ -201,10 +202,23 @@ def init_db() -> None:
                 latency_ms INTEGER,
                 trace_id TEXT,
                 top_category TEXT,
-                top_summary TEXT
+                top_summary TEXT,
+                status TEXT NOT NULL DEFAULT 'ok',
+                error_stage TEXT,
+                error_message TEXT
             )
             """
         )
+        # 既存 DB へのマイグレーション: 失敗・中断の記録列を後付けする
+        # (確認事項 B-4)。従来は正常終了しか記録していなかったため、既存行は
+        # すべて status='ok' 相当。DEFAULT 'ok' で既存行も自動的に埋まる。
+        rh_cols = _table_columns(conn, "run_history")
+        if rh_cols and "status" not in rh_cols:
+            conn.execute(
+                "ALTER TABLE run_history ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'"
+            )
+            conn.execute("ALTER TABLE run_history ADD COLUMN error_stage TEXT")
+            conn.execute("ALTER TABLE run_history ADD COLUMN error_message TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_run_history_started_at "
             "ON run_history(started_at DESC)"
@@ -546,7 +560,8 @@ def delete_saved_config(config_id: int) -> bool:
 
 _RUN_COLS = (
     "id, started_at, log_name, config_id, base_config, confidence, "
-    "tokens_in, tokens_out, latency_ms, trace_id, top_category, top_summary"
+    "tokens_in, tokens_out, latency_ms, trace_id, top_category, top_summary, "
+    "status, error_stage, error_message"
 )
 
 
@@ -563,18 +578,27 @@ def insert_run_history(
     top_category: str | None,
     top_summary: str | None,
     started_at: str | None = None,
+    status: str = "ok",
+    error_stage: str | None = None,
+    error_message: str | None = None,
 ) -> int:
-    """実行 1 件分のメタデータを記録し、行 ID を返す。"""
+    """実行 1 件分のメタデータを記録し、行 ID を返す。
+
+    ``status`` は "ok" / "error" / "aborted" / "rejected" (確認事項 B-4)。
+    既定は "ok" なので、正常終了の既存呼び出しは変更不要。
+    """
     when = started_at or _now_iso()
     with _connect() as conn:
         new_id = _insert_returning_id(
             conn,
             "INSERT INTO run_history (started_at, log_name, config_id, base_config, "
-            "confidence, tokens_in, tokens_out, latency_ms, trace_id, top_category, top_summary) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "confidence, tokens_in, tokens_out, latency_ms, trace_id, top_category, top_summary, "
+            "status, error_stage, error_message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 when, log_name, config_id, base_config, confidence,
                 tokens_in, tokens_out, latency_ms, trace_id, top_category, top_summary,
+                status, error_stage, error_message,
             ),
         )
         conn.commit()
@@ -587,12 +611,13 @@ def list_run_history(
     config_id: str | None = None,
     base_config: str | None = None,
     q: str | None = None,
+    status: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
     """フィルタ付きで一覧を返す。``(rows, total_count)`` のタプル。
 
-    - ``log_name`` / ``config_id`` / ``base_config``: 完全一致
+    - ``log_name`` / ``config_id`` / ``base_config`` / ``status``: 完全一致
     - ``q``: top_summary に部分一致
     """
     where: list[str] = []
@@ -600,6 +625,13 @@ def list_run_history(
     if log_name:
         where.append("log_name = ?")
         args.append(log_name)
+    if status == "failed":
+        # 正常終了以外をまとめて (error / aborted / rejected)。確認事項 B-4 の
+        # 「失敗した実行だけ見たい」用途。
+        where.append("status <> 'ok'")
+    elif status:
+        where.append("status = ?")
+        args.append(status)
     if config_id:
         where.append("config_id = ?")
         args.append(config_id)
