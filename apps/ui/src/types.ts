@@ -313,6 +313,8 @@ export interface AnalysisResult {
   audit_report: AuditReport | null
   // ラウンド単位集計 (Phase D)
   round_metrics: RoundMetrics[]
+  // 各監視ノードの調査根拠 (確認事項 A-3)。対応前に保存された履歴では undefined/空。
+  monitor_reports?: MonitorReport[]
   // 解析方針の事前確認 (Phase 2) で承認された方針。確認ゲート未使用なら null/undefined。
   // focus_edited=true はユーザーが観点を修正して承認したことを示す。
   policy_proposal?: (PolicyProposal & { focus_edited?: boolean }) | null
@@ -387,6 +389,29 @@ export interface RoundMetrics {
   latency_ms: number
 }
 
+// 監視ノードの調査根拠 (確認事項 A-3) ─────────────────
+// 監視 1 回ぶんの所見と、その根拠。(round, role) で delegation_history と対応する。
+export interface MonitorFinding {
+  category: string  // "FW" | "Net" | "App" | "DNS" | "Sec" | "Unknown" | ""
+  summary: string
+  evidence: string[]
+}
+
+export interface MonitorReport {
+  round: number
+  role: string  // "fw" | "routing" | "app" | "dns" | "sec"
+  model: string
+  confidence: number
+  findings: MonitorFinding[]
+  tool_calls: string[]
+  rationale: string
+  focus_hint_received: string
+  focus_hint_for_next: string
+  // 保存時に上限で切り詰めた場合の注記 (空なら全量保存)
+  truncation_note: string
+  parse_error: string | null
+}
+
 // 監査エージェント (Phase C) の所見 ─────────────────────
 export interface AuditReport {
   verdict: string  // "agree" | "partial" | "disagree" | "uncertain"
@@ -417,6 +442,8 @@ export interface StageOutput {
   root_cause_candidates: RootCauseCandidate[]
   recommended_actions: RecommendedAction[]
   round_metrics: RoundMetrics[]
+  // この Stage で動いた監視の調査根拠 (確認事項 A-3)
+  monitor_reports?: MonitorReport[]
 }
 
 // トポロジー解析タブで使うノード定義 ─────────────────────────

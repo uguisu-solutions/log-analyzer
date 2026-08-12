@@ -3999,6 +3999,165 @@ code {
   box-sizing: border-box;
 }
 
+/* ─── 承認済み解析方針の事後表示 (確認事項 A-1 / A-2) ─────────── */
+/* 解析後 (結果ペイン / 解析履歴詳細) に方針全項目を折りたたみで再掲する。
+   配色は方針モーダル (.policy-section) を流用し、枠だけこちらで与える。 */
+.policy-summary {
+  margin: 1rem 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border, #e3e6ec);
+  border-left: 5px solid #6b7fa8;
+  border-radius: 6px;
+  background: #f7f9fc;
+}
+.policy-summary-head {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+.policy-summary[open] .policy-summary-head {
+  margin-bottom: 0.3rem;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.4rem;
+}
+.policy-summary-body .policy-section {
+  margin: 0.6rem 0;
+}
+.policy-edited-badge {
+  background: #fff3cd;
+  border: 1px solid #e0c56b;
+  border-radius: 10px;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+  color: #7a5c00;
+}
+/* 方針プランナーの消費量。本解析の合計とは別枠であることを明記する行。 */
+.policy-planner-usage {
+  margin: 0.6rem 0 0;
+  padding-top: 0.4rem;
+  border-top: 1px dashed #d7dde5;
+}
+.policy-planner-note {
+  margin-left: 0.4rem;
+}
+/* ─── 監視ノードの調査根拠 (確認事項 A-3) ─────────────────────── */
+/* 標準表示 (結果ペイン) の一覧セクション。監視 1 ノード = 1 エントリ。 */
+.monitor-evidence-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.monitor-evidence-entry {
+  border: 1px solid var(--border, #e3e6ec);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  background: #fff;
+}
+.monitor-evidence-entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.monitor-entry-rationale {
+  margin: 0.35rem 0 0;
+  font-size: 0.88rem;
+  color: #333;
+}
+.monitor-evidence-entry .monitor-evidence {
+  margin-top: 0.5rem;
+}
+
+/* 委譲チェーン履歴とチャット表示の両方で使う折りたたみ。 */
+.monitor-evidence {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border, #e3e6ec);
+  border-left: 4px solid #7a9ab8;
+  border-radius: 5px;
+  background: #f6f9fb;
+  font-size: 0.85rem;
+}
+.monitor-evidence-head {
+  cursor: pointer;
+  font-weight: 600;
+}
+.monitor-findings {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+}
+.monitor-finding + .monitor-finding {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #dbe3ea;
+}
+.monitor-finding-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.monitor-finding-summary {
+  color: #1a1a1a;
+}
+.monitor-evidence-list {
+  margin: 0.3rem 0 0;
+  padding-left: 1.2rem;
+}
+.monitor-evidence-list code,
+.monitor-tool-calls code {
+  background: #eef2f6;
+  border-radius: 3px;
+  padding: 0.05rem 0.25rem;
+  font-size: 0.8rem;
+  word-break: break-word;
+}
+.monitor-tool-calls {
+  margin-top: 0.5rem;
+}
+.monitor-tool-calls ul {
+  margin: 0.2rem 0 0;
+  padding-left: 1.2rem;
+}
+.monitor-subtitle {
+  font-weight: 600;
+  color: #555;
+}
+.monitor-focus,
+.monitor-truncation {
+  margin: 0.4rem 0 0;
+}
+.monitor-parse-error {
+  margin: 0.4rem 0 0;
+  color: #b3261e;
+}
+.monitor-evidence-missing {
+  margin: 0 0 0.6rem;
+}
+
+/* ラウンド別リソース消費に足す方針プランナー行 (ラウンド外の消費)。 */
+.round-metrics-table .round-row.role-planner {
+  background: #f4f1fa;
+}
+.round-metrics-table .role-planner .rm-round {
+  color: #777;
+}
+.rm-role-note {
+  margin-left: 0.3rem;
+}
+
+/* チャット表示の「不足データ・前提」。見落としやすいので注意色にする。 */
+.chat-missing-data {
+  color: #7a5c00;
+  background: #fff8e1;
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+}
+
 /* ソースコード解析の結果ブロック (Phase 3) */
 .source-reference {
   margin-top: 1rem;

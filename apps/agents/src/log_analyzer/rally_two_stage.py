@@ -127,6 +127,7 @@ def _result_to_stage_output(
         root_cause_candidates=list(result.root_cause_candidates),
         recommended_actions=list(result.recommended_actions),
         round_metrics=list(result.round_metrics),
+        monitor_reports=list(result.monitor_reports),
     )
 
 
@@ -242,6 +243,9 @@ def _build_final_result(
         suspected_node_findings=list(primary.suspected_node_findings),
         stage_outputs=stage_outputs,
         round_metrics=combined_rounds,
+        # 監視の調査根拠 (A-3) は delegation_history と同じく主 Stage 分をトップレベルに。
+        # Stage 別は stage_outputs[].monitor_reports に残る。
+        monitor_reports=list(primary.monitor_reports),
     )
 
 

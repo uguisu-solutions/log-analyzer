@@ -23,8 +23,10 @@ import { ChatHistoryView } from './ChatHistoryView'
 import { ChatInput } from './ChatInput'
 import { ConfirmationModal } from './ConfirmationModal'
 import { PolicyProposalModal } from './PolicyProposalModal'
+import { PolicySummaryView, plannerUsage } from './PolicySummaryView'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { LiveChatView } from './LiveChatView'
+import { MonitorEvidenceSection } from './MonitorEvidenceView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { QuestionnairePanel } from './QuestionnairePanel'
@@ -1479,6 +1481,10 @@ export function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTw
         </div>
       </div>
 
+      {/* 承認済み解析方針 (確認事項 A-1/A-2)。方針ゲートを使った解析のみ。
+          想定原因・不足データ・プランナー消費量はここでしか UI に出ない。 */}
+      {result.policy_proposal && <PolicySummaryView policy={result.policy_proposal} />}
+
       {/* 2 段階モードのときだけ Stage 別サマリを出す */}
       {isTwoStage && (
         <>
@@ -1540,14 +1546,23 @@ export function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTw
       <h4>推奨アクション（{result.recommended_actions.length}）</h4>
       <RecommendedActionList actions={result.recommended_actions} />
 
+      {/* 各監視が何を根拠に判断したか (確認事項 A-3)。標準表示には委譲チェーン履歴が
+          無いため、ここに独立したセクションとして出す。 */}
+      <MonitorEvidenceSection
+        reports={result.monitor_reports}
+        hasMonitorRuns={(result.delegation_history ?? []).some(d => d.from_node && d.from_node !== 'orchestrator')}
+      />
+
       {/* 参照したソースコード (Phase 3) */}
       {result.source_context && <SourceReferenceView context={result.source_context} />}
 
       {/* 監査エージェント (Phase C) の所見 */}
       {result.audit_report && <AuditReportView report={result.audit_report} />}
 
-      {/* ラウンド単位リソース消費 (Phase D) */}
-      {result.round_metrics.length > 0 && <RoundMetricsView rounds={result.round_metrics} />}
+      {/* ラウンド単位リソース消費 (Phase D)。方針プランナー分も 1 行として添える (A-2) */}
+      {result.round_metrics.length > 0 && (
+        <RoundMetricsView rounds={result.round_metrics} planner={plannerUsage(result.policy_proposal)} />
+      )}
     </>
   )
 }
@@ -1579,6 +1594,8 @@ export function StageResultView({ stage, topology }: StageResultViewProps) {
     stage_outputs: [],
     audit_report: null,
     round_metrics: stage.round_metrics,
+    // この Stage の監視根拠 (A-3) を DelegationHistoryView に渡す
+    monitor_reports: stage.monitor_reports ?? [],
   }
   return (
     <>
@@ -1605,8 +1622,13 @@ export function StageResultView({ stage, topology }: StageResultViewProps) {
           )
         })}
       </ul>
+      {/* この Stage の監視根拠 (A-3) */}
+      <MonitorEvidenceSection
+        reports={stage.monitor_reports}
+        hasMonitorRuns={(stage.delegation_history ?? []).some(d => d.from_node && d.from_node !== 'orchestrator')}
+      />
       <h4>このステージの委譲チェーン</h4>
-      <DelegationHistoryView result={fakeResult} />
+      <DelegationHistoryView result={fakeResult} showMonitorEvidence={false} />
       {stage.round_metrics.length > 0 && <RoundMetricsView rounds={stage.round_metrics} />}
     </>
   )

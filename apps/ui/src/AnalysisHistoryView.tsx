@@ -15,6 +15,7 @@ import { ChatHistoryView } from './ChatHistoryView'
 import { CombinedResultView, ResultTabs, StageResultView } from './ConfigLogAnalysis'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { EvaluationPanel } from './EvaluationPanel'
+import { plannerUsage } from './PolicySummaryView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { buildReasoningReport, downloadText } from './reasoningReport'
@@ -336,6 +337,8 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onR
   const qa = detail.request?.questionnaire_answers ?? {}
   const qconf = detail.request?.questionnaire_confidences ?? {}
   const traceUrl = langfuseHost && result?.trace_id ? `${langfuseHost}/trace/${result.trace_id}` : null
+  // 方針プランナーの消費量 (確認事項 A-2)。方針ゲート未使用の解析では null。
+  const planner = plannerUsage(result?.policy_proposal)
 
   // 表示モード (config-log 解析画面と同じ 標準/チャット 切替)。既定は「標準」。
   const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
@@ -389,8 +392,27 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onR
         <dt>解析日時</dt><dd>{formatDate(detail.created_at)}</dd>
         <dt>モード</dt><dd>{modeText(detail)}</dd>
         <dt>確信度</dt><dd>{result?.confidence?.toFixed(3) ?? '-'}</dd>
-        <dt>tokens (in / out)</dt><dd>{(result?.metrics?.tokens_in ?? 0).toLocaleString()} / {(result?.metrics?.tokens_out ?? 0).toLocaleString()}</dd>
-        <dt>レイテンシ</dt><dd>{formatLatency(result?.metrics?.latency_ms_total ?? null)}</dd>
+        <dt>tokens (in / out){planner ? '（本解析）' : ''}</dt>
+        <dd>{(result?.metrics?.tokens_in ?? 0).toLocaleString()} / {(result?.metrics?.tokens_out ?? 0).toLocaleString()}</dd>
+        <dt>レイテンシ{planner ? '（本解析）' : ''}</dt><dd>{formatLatency(result?.metrics?.latency_ms_total ?? null)}</dd>
+        {/* 方針プランナーは本解析の metrics に含まれない別枠の消費 (確認事項 A-2)。
+            既存の値の意味を変えないよう、合算せず別行 + 合計行で示す。 */}
+        {planner && (
+          <>
+            <dt>方針プランナー（別枠）</dt>
+            <dd>
+              {planner.tokensIn.toLocaleString()} / {planner.tokensOut.toLocaleString()} tok ·{' '}
+              {formatLatency(planner.latencyMs)}
+              {planner.model && <span className="muted small"> · {planner.model}</span>}
+            </dd>
+            <dt>合計（プランナー込み）</dt>
+            <dd>
+              {((result?.metrics?.tokens_in ?? 0) + planner.tokensIn).toLocaleString()} /{' '}
+              {((result?.metrics?.tokens_out ?? 0) + planner.tokensOut).toLocaleString()} tok ·{' '}
+              {formatLatency((result?.metrics?.latency_ms_total ?? 0) + planner.latencyMs)}
+            </dd>
+          </>
+        )}
         <dt>trace_id</dt><dd className="mono small">
           {traceUrl ? <a href={traceUrl} target="_blank" rel="noopener noreferrer" className="trace-link">{result.trace_id} ↗</a> : (result?.trace_id ?? '-')}
         </dd>
@@ -454,14 +476,18 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onR
 
       {/* 監査所見は ChatHistoryView 内に会話として含まれる (重複回避のためここでは出さない) */}
 
-      {/* 委譲チェーン (各監視の rationale / focus_hint。評価が参照する推論の跡) */}
+      {/* 委譲チェーン (各監視の rationale / focus_hint。評価が参照する推論の跡)。
+          監視の根拠 (A-3) は標準表示なら結果ペインのセクション、チャット表示なら
+          各監視の発言に出るため、ここでは重複させない。 */}
       {result?.delegation_history && result.delegation_history.length > 0 && (
-        <DelegationHistoryView result={result} />
+        <DelegationHistoryView result={result} showMonitorEvidence={false} />
       )}
 
-      {/* ラウンド単位 metrics */}
-      {result?.round_metrics && result.round_metrics.length > 0 && (
-        <RoundMetricsView rounds={result.round_metrics} />
+      {/* ラウンド単位 metrics。標準表示では CombinedResultView / StageResultView が
+          既に描画しているため、ここで出すのはチャット表示のときだけ
+          （従来は標準表示で 2 つ並んで表示されていた）。 */}
+      {viewMode === 'chat' && result?.round_metrics && result.round_metrics.length > 0 && (
+        <RoundMetricsView rounds={result.round_metrics} planner={planner} />
       )}
 
       {/* 解答と比較評価 (真因到達度の 10 段階採点、履歴に紐付け)。

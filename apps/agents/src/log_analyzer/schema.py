@@ -144,6 +144,46 @@ class SuspectedNodeFinding(BaseModel):
     severity: str = ""  # "primary" | "secondary" | "info" | ""
 
 
+class MonitorFinding(BaseModel):
+    """監視ノードが出した所見 1 件と、その根拠 (evidence)。
+
+    evidence はモデルが引用したログ行・問診票の欄・ツール取得結果のいずれか。
+    保存時は文字数・件数を切り詰める (rally_agent の ``_MAX_EVIDENCE_*`` 参照)。
+    """
+
+    category: str = ""  # "FW" | "Net" | "App" | "DNS" | "Sec" | "Unknown"
+    summary: str = ""
+    evidence: list[str] = Field(default_factory=list)
+
+
+class MonitorReport(BaseModel):
+    """監視ノード 1 回分の調査根拠 (確認事項 A-3)。
+
+    従来、各監視の findings / evidence / tool_calls は実行中メモリと Langfuse の
+    Output にしか存在せず、解析結果には要約 (suspected_node_findings) しか
+    残らなかった。シニアレビューで「この監視が何を根拠にそう判断したか」を
+    後から追えるようにするため、監視 1 回ごとに本モデルとして保存する。
+
+    ``round`` / ``role`` は ``delegation_history`` の各イベントと対応し、UI は
+    (round, from_node) で突き合わせて表示する。
+    """
+
+    round: int = 0
+    role: str = ""  # "fw" | "routing" | "app" | "dns" | "sec"
+    model: str = ""
+    confidence: float = 0.0
+    findings: list[MonitorFinding] = Field(default_factory=list)
+    # 実行したツール呼び出し (LLM の自己申告 + 実際の BigQuery / ソース参照)
+    tool_calls: list[str] = Field(default_factory=list)
+    # 次ノード選定の理由。棄却した仮説の跡もここに書かれる
+    rationale: str = ""
+    focus_hint_received: str = ""   # 前ノードから引き継いだ観点
+    focus_hint_for_next: str = ""   # 次ノードへ渡した観点
+    # 保存時に上限で切り詰めた場合の注記 (UI に「N 件省略」と出す)
+    truncation_note: str = ""
+    parse_error: str | None = None
+
+
 class StageOutput(BaseModel):
     """config-log 解析の各 Stage の中間結果。
 
@@ -170,6 +210,8 @@ class StageOutput(BaseModel):
     root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
     recommended_actions: list[RecommendedAction] = Field(default_factory=list)
     round_metrics: list["RoundMetrics"] = Field(default_factory=list)
+    # この Stage で動いた各監視の調査根拠 (確認事項 A-3)。対応前の履歴では空。
+    monitor_reports: list[MonitorReport] = Field(default_factory=list)
 
 
 class DelegationEventDTO(BaseModel):
@@ -405,6 +447,10 @@ class AnalysisResult(BaseModel):
     # ラウンド単位集計 (Phase D)。token_log を round 順に並べたもの。
     # 他構成 (config1-3,5) では空のまま。
     round_metrics: list[RoundMetrics] = Field(default_factory=list)
+    # 各監視ノードの調査根拠 (findings / evidence / tool_calls)。確認事項 A-3。
+    # 2 段階解析では主 Stage 分がここに入り、Stage 別は stage_outputs[].monitor_reports。
+    # 本対応より前に保存された履歴では空配列 (後方互換のため任意フィールド)。
+    monitor_reports: list[MonitorReport] = Field(default_factory=list)
     # ソースコード解析のコンテキスト。コードベース未指定の run では None。
     # 設計: docs/plan/source_code_analysis.md
     source_context: SourceContext | None = None

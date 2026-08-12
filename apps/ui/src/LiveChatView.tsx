@@ -198,20 +198,52 @@ export function LiveChatView({ events, questionnaireAnswers, questionnaireConfid
         )
         return
       case 'policy_proposal': {
+        // 想定原因・不足データも出す (確認事項 A-1。履歴側の表示と項目を揃える)
         const pr = (d.proposal ?? {}) as {
           situation_summary?: string
+          primary_hypotheses?: string[]
           investigation_plan?: string[]
+          data_to_use?: string[]
+          missing_data_notes?: string
           suggested_first_node?: string
           focus?: string
         }
+        const hypotheses = pr.primary_hypotheses ?? []
         const plan = pr.investigation_plan ?? []
+        const dataToUse = pr.data_to_use ?? []
+        const missing = (pr.missing_data_notes ?? '').trim()
         messages.push(
           <ChatMessage key={`ev-${i}`} sender="agent" speaker="方針プランナー" tag="方針提案（承認待ち）">
             {pr.situation_summary && <p className="chat-rationale">現象: {pr.situation_summary}</p>}
+            {hypotheses.length > 0 && (
+              <>
+                <p className="chat-section-title">想定される原因の方向性</p>
+                <ul className="chat-qa-list">
+                  {hypotheses.map((h, j) => <li key={j}>{h}</li>)}
+                </ul>
+              </>
+            )}
             {plan.length > 0 && (
-              <ol className="chat-qa-list">
-                {plan.map((p, j) => <li key={j}>{p}</li>)}
-              </ol>
+              <>
+                <p className="chat-section-title">調査方針</p>
+                <ol className="chat-qa-list">
+                  {plan.map((p, j) => <li key={j}>{p}</li>)}
+                </ol>
+              </>
+            )}
+            {dataToUse.length > 0 && (
+              <>
+                <p className="chat-section-title">使用するデータ</p>
+                <ul className="chat-qa-list">
+                  {dataToUse.map((x, j) => <li key={j}>{x}</li>)}
+                </ul>
+              </>
+            )}
+            {missing && (
+              <>
+                <p className="chat-section-title">不足データ・前提</p>
+                <p className="chat-missing-data">{missing}</p>
+              </>
             )}
             {pr.suggested_first_node && (
               <p className="chat-arrow">起点候補: <strong>{roleLabel(pr.suggested_first_node)}</strong></p>

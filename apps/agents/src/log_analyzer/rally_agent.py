@@ -32,6 +32,8 @@ from log_analyzer.schema import (
     GraphEdge,
     GraphNode,
     Metrics,
+    MonitorFinding,
+    MonitorReport,
     RecommendedAction,
     RootCauseCandidate,
     RoundMetrics,
@@ -41,6 +43,16 @@ from log_analyzer.tracing import flush, get_client, usage_for
 
 # uvicorn 起動時にコンソールへ確実に出るよう uvicorn のロガーに載せる。
 _logger = logging.getLogger("uvicorn.error")
+
+# ─── 監視ノードの調査根拠 (確認事項 A-3) の保存上限 ─────────────────
+# findings / evidence は解析結果 JSON (analysis_history.result_json) に保存される。
+# evidence はモデルが引用した **ログ本文そのもの** なので、無制限に残すと
+# 履歴 DB の肥大と機微データの保持量増加につながる。通常の解析はこの範囲に
+# 収まる想定で、超えた分は切り詰めて ``truncation_note`` に記録する。
+_MAX_FINDINGS_PER_MONITOR = 10
+_MAX_EVIDENCE_PER_FINDING = 5
+_MAX_EVIDENCE_CHARS = 500
+_MAX_TOOL_CALLS = 20
 
 # decision_waiter コールバックの戻り値型:
 #   {"action": "continue", "extend_by": int}  rally_max_rounds を +extend_by 延長して再開
@@ -200,6 +212,85 @@ def _build_round_metrics(token_log: list[dict]) -> list[RoundMetrics]:
     return out
 
 
+def _truncate(text: str, limit: int) -> tuple[str, bool]:
+    """``limit`` 文字で切り詰める。切り詰めたら末尾に … を付け、フラグを返す。"""
+    if len(text) <= limit:
+        return text, False
+    return text[:limit] + "…", True
+
+
+def _build_monitor_report(result: dict, *, round_no: int) -> MonitorReport:
+    """監視ノードの実行結果 (dict) を保存用 MonitorReport に変換する (確認事項 A-3)。
+
+    LLM 出力そのままの findings は形が揺れる (evidence が文字列 1 件だけ、
+    エントリが dict でない等) ため正規化し、上限で切り詰める。何を落としたかは
+    ``truncation_note`` に残して UI に「N 件省略」と出せるようにする。
+    """
+    raw_findings = result.get("findings") or []
+    if not isinstance(raw_findings, list):
+        raw_findings = []
+    notes: list[str] = []
+
+    if len(raw_findings) > _MAX_FINDINGS_PER_MONITOR:
+        notes.append(f"findings {len(raw_findings)} 件中 {_MAX_FINDINGS_PER_MONITOR} 件のみ保存")
+        raw_findings = raw_findings[:_MAX_FINDINGS_PER_MONITOR]
+
+    findings: list[MonitorFinding] = []
+    dropped_evidence = 0
+    truncated_evidence = 0
+    for entry in raw_findings:
+        if not isinstance(entry, dict):
+            # 稀に findings が文字列配列で返ることがある → summary 扱いで拾う
+            findings.append(MonitorFinding(summary=str(entry)))
+            continue
+        raw_ev = entry.get("evidence")
+        if isinstance(raw_ev, str):
+            raw_ev = [raw_ev]
+        elif not isinstance(raw_ev, list):
+            raw_ev = []
+        if len(raw_ev) > _MAX_EVIDENCE_PER_FINDING:
+            dropped_evidence += len(raw_ev) - _MAX_EVIDENCE_PER_FINDING
+            raw_ev = raw_ev[:_MAX_EVIDENCE_PER_FINDING]
+        evidence: list[str] = []
+        for ev in raw_ev:
+            text, cut = _truncate(str(ev), _MAX_EVIDENCE_CHARS)
+            truncated_evidence += 1 if cut else 0
+            evidence.append(text)
+        findings.append(
+            MonitorFinding(
+                category=str(entry.get("category") or ""),
+                summary=str(entry.get("summary") or ""),
+                evidence=evidence,
+            )
+        )
+    if dropped_evidence:
+        notes.append(f"evidence {dropped_evidence} 件を省略")
+    if truncated_evidence:
+        notes.append(f"evidence {truncated_evidence} 件を {_MAX_EVIDENCE_CHARS} 字で切り詰め")
+
+    raw_calls = result.get("tool_calls_made") or []
+    if not isinstance(raw_calls, list):
+        raw_calls = []
+    tool_calls = [str(c) for c in raw_calls]
+    if len(tool_calls) > _MAX_TOOL_CALLS:
+        notes.append(f"tool_calls {len(tool_calls)} 件中 {_MAX_TOOL_CALLS} 件のみ保存")
+        tool_calls = tool_calls[:_MAX_TOOL_CALLS]
+
+    return MonitorReport(
+        round=round_no,
+        role=str(result.get("role") or ""),
+        model=str(result.get("model") or ""),
+        confidence=float(result.get("confidence") or 0.0),
+        findings=findings,
+        tool_calls=tool_calls,
+        rationale=str(result.get("rationale") or ""),
+        focus_hint_received=str(result.get("focus_hint_received") or ""),
+        focus_hint_for_next=str(result.get("focus_hint_for_next") or ""),
+        truncation_note=" / ".join(notes),
+        parse_error=result.get("_parse_error"),
+    )
+
+
 def _build_analysis_result(
     *,
     log_ref: str,
@@ -213,6 +304,7 @@ def _build_analysis_result(
     topology_node_ids: list[str] | None = None,
     log_text: str = "",
     bq_evidence: list[dict] | None = None,
+    monitor_reports: list[MonitorReport] | None = None,
 ) -> AnalysisResult:
     """final イベント用の AnalysisResult を組み立てる。"""
     total_in = sum(e["tokens_in"] for e in token_log)
@@ -356,6 +448,7 @@ def _build_analysis_result(
         suspected_node_ids=suspected_node_ids,
         suspected_node_findings=suspected_node_findings,
         round_metrics=_build_round_metrics(token_log),
+        monitor_reports=list(monitor_reports or []),
     )
 
 
@@ -403,6 +496,9 @@ async def run_rally_stream(
         "prompt_overrides": prompt_overrides or {},
         "model_overrides": model_overrides or {},
         "monitor_results": {},
+        # 各監視の調査根拠 (findings / evidence / tool_calls) を結果に残すための蓄積
+        # (確認事項 A-3)。monitor_results は「次の監視へ渡す参考材料」で用途が異なる。
+        "monitor_reports": [],
         "delegation_history": [],
         "token_log": [],
         "rally_round": 0,
@@ -675,6 +771,8 @@ async def run_rally_stream(
         }
         if result.get("_parse_error"):
             state["monitor_results"][current]["_parse_error"] = result["_parse_error"]
+        # 調査根拠を結果に残す (確認事項 A-3)。上限で切り詰めて保存する。
+        state["monitor_reports"].append(_build_monitor_report(result, round_no=next_round))
         # BigQuery 取得実ログを監査の証拠として蓄積 (rally 本体へは再投入しない)
         if result.get("_bq_fetched"):
             state.setdefault("bq_evidence", []).extend(result["_bq_fetched"])
@@ -782,6 +880,7 @@ async def run_rally_stream(
         topology_node_ids=topology_node_ids or None,
         log_text=state["log_text"],
         bq_evidence=state.get("bq_evidence"),
+        monitor_reports=state.get("monitor_reports"),
     )
 
     # ソースツールが使われていれば、参照記録を SourceContext として結果に載せる
