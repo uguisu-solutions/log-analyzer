@@ -48,5 +48,13 @@ def test_usage_for_backward_compatible_without_cache():
 
 
 def test_usage_for_unknown_model_omits_cost():
-    u = usage_for("gpt-5.5", 100, 50)
+    u = usage_for("mystery-model-9", 100, 50)
     assert u == {"input": 100, "output": 50, "unit": "TOKENS"}
+
+
+def test_usage_for_audit_model_has_cost():
+    """監査エージェント (gpt-5.5) も価格表に載せたのでコストが出る (確認事項 B-1)。"""
+    u = usage_for("gpt-5.5", 1_000_000, 1_000_000)
+    assert abs(u["input_cost"] - 5.0) < 1e-9
+    assert abs(u["output_cost"] - 30.0) < 1e-9
+    assert abs(u["total_cost"] - 35.0) < 1e-9

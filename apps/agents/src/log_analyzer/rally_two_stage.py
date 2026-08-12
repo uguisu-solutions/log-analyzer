@@ -493,6 +493,9 @@ async def _attach_audit(
             lambda: run_audit(
                 log_text_for_audit, topology_context, final,
                 system_prompt=audit_system_prompt, bq_evidence=bq_evidence,
+                # 監査を Langfuse の Generation として記録する (確認事項 B-1)。
+                # 2 段階では監査対象が最終 Stage の結果なので、その trace に紐付く。
+                trace_id=final.trace_id or None,
             ),
         )
     except Exception as e:

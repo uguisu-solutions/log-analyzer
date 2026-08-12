@@ -18,6 +18,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from log_analyzer import evidence_grounding
@@ -540,6 +541,9 @@ async def run_rally_stream(
 
     # ─── 1. Orchestrator (初回 1 回のみ) ─────────────────────────
     yield StreamEvent("orchestrator_start", {})
+    # 確認事項 B-3: Langfuse の Generation に渡す開始/終了の絶対時刻。
+    # ノード側は perf_counter による経過時間しか持たないため、呼び出し側で取る。
+    orch_started_at = datetime.now(timezone.utc)
     try:
         orch = await _run_sync(orchestrator_select_first, state)
     except Exception as e:
@@ -557,6 +561,9 @@ async def run_rally_stream(
             "latency_ms": orch["latency_ms"],
             "input": orch["user_input"][:2000],
             "raw_output": orch["raw_output"],
+            "started_at": orch_started_at,
+            "ended_at": datetime.now(timezone.utc),
+            "parse_error": orch.get("parse_error"),
         }
     )
     first_event = {
@@ -740,6 +747,7 @@ async def run_rally_stream(
             state["current_node"] = "integrator"
             break
 
+        monitor_started_at = datetime.now(timezone.utc)
         try:
             result = await _run_sync(monitor_fn, state)
         except Exception as e:
@@ -761,6 +769,9 @@ async def run_rally_stream(
                 "input": result["user_input"][:2000],
                 "raw_output": result["raw_output"],
                 "round": next_round,
+                "started_at": monitor_started_at,
+                "ended_at": datetime.now(timezone.utc),
+                "parse_error": result.get("_parse_error"),
             }
         )
         # findings + confidence のみ monitor_results に残す（次監視への参考材料）
@@ -828,14 +839,20 @@ async def run_rally_stream(
     for record in _drain_appends(state, append_queue):
         yield StreamEvent("log_appended", record)
     yield StreamEvent("integrator_start", {})
+    integrator_started_at = datetime.now(timezone.utc)
     try:
         integ = await _run_sync(integrator_node, state)
     except Exception as e:
         yield StreamEvent("error", {"stage": "integrator", "message": str(e)})
         return
 
-    state["token_log"].append(integ["token_log_entry"])
     integrator_result = integ["result"]
+    state["token_log"].append({
+        **integ["token_log_entry"],
+        "started_at": integrator_started_at,
+        "ended_at": datetime.now(timezone.utc),
+        "parse_error": integrator_result.get("_parse_error"),
+    })
     yield StreamEvent(
         "integrator_done",
         {
@@ -846,19 +863,29 @@ async def run_rally_stream(
     )
 
     # ─── 4. Langfuse へ全 generation を反映 ────────────────────
+    # 確認事項 B-3: start_time / end_time を渡さないと Langfuse の Latency が
+    # 0.00s のままになる (計装漏れ)。JSON パースに失敗したノードは WARNING で
+    # 印を付け、トレース上で「なぜフォールバックしたか」を追えるようにする。
     for entry in state["token_log"]:
-        trace.generation(
-            name=f"{entry['model']}-{entry['role']}"
+        gen_kwargs: dict[str, Any] = {
+            "name": f"{entry['model']}-{entry['role']}"
             + (f"-r{entry['round']}" if "round" in entry else ""),
-            model=entry["model"],
-            input=entry.get("input", "")[:2000],
-            output=entry.get("raw_output", ""),
-            usage=usage_for(
+            "model": entry["model"],
+            "input": entry.get("input", "")[:2000],
+            "output": entry.get("raw_output", ""),
+            "usage": usage_for(
                 entry["model"], entry["tokens_in"], entry["tokens_out"],
                 cache_creation=entry.get("cache_creation", 0),
                 cache_read=entry.get("cache_read", 0),
             ),
-        )
+        }
+        if entry.get("started_at"):
+            gen_kwargs["start_time"] = entry["started_at"]
+            gen_kwargs["end_time"] = entry.get("ended_at")
+        if entry.get("parse_error"):
+            gen_kwargs["level"] = "WARNING"
+            gen_kwargs["status_message"] = f"parse_error: {str(entry['parse_error'])[:200]}"
+        trace.generation(**gen_kwargs)
 
     wall_ms = int((time.perf_counter() - wall_start) * 1000)
     topology_node_ids: list[str] = []
@@ -897,6 +924,8 @@ async def run_rally_stream(
                     log_text, topology_context, result,
                     system_prompt=audit_system_prompt,
                     bq_evidence=state.get("bq_evidence"),
+                    # 監査もこのトレースに Generation として残す (確認事項 B-1)
+                    trace_id=trace_id,
                 )
             )
         except Exception as e:

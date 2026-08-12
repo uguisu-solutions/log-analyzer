@@ -2198,6 +2198,19 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
             # 本流を止めない: ゲートをスキップして通常解析へ
             yield _sse_bytes("error", {"stage": "policy", "message": str(e)})
             return
+        # Langfuse 記録用の計測値を proposal から抜き出して保持 (確認事項 B-1)。
+        # プランナーは rally のトレース生成より前に走るため、trace_id が確定してから
+        # Generation にする。datetime は JSON 化できないので SSE へ流す前に取り除く。
+        policy_prefix["usage"] = {
+            "model": proposal.get("model") or "",
+            "tokens_in": int(proposal.get("tokens_in") or 0),
+            "tokens_out": int(proposal.get("tokens_out") or 0),
+            "started_at": proposal.pop("started_at", None),
+            "ended_at": proposal.pop("ended_at", None),
+            "user_input": proposal.pop("user_input", ""),
+            "raw_output": proposal.get("raw_output") or "",
+            "parse_error": proposal.get("parse_error"),
+        }
         yield _sse_bytes("policy_proposal", {"proposal": proposal})
         decision = await _wait_for_decision()
         yield _sse_bytes("user_decision", decision)
@@ -2212,14 +2225,51 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
         policy_prefix["text"] = build_approved_policy_block(
             proposal, edited_focus=edited_focus
         )
-        # 記録用に承認方針を保持 (raw_output / parse_error は除外して軽量化)。
-        # 最終 AnalysisResult に policy_proposal として載せ、履歴・レポートに残す。
-        clean = {k: v for k, v in proposal.items() if k not in ("raw_output", "parse_error")}
+        # 記録用に承認方針を保持 (raw_output / parse_error と Langfuse 用の計測値は
+        # 除外して軽量化)。最終 AnalysisResult に policy_proposal として載せ、
+        # 履歴・レポートに残す。
+        clean = {
+            k: v for k, v in proposal.items()
+            if k not in ("raw_output", "parse_error", "started_at", "ended_at", "user_input")
+        }
         if edited_focus is not None and str(edited_focus).strip():
             # ユーザーが観点を修正した場合は、実際に使われた観点を記録する
             clean["focus"] = str(edited_focus)
             clean["focus_edited"] = True
         policy_prefix["proposal"] = clean
+
+    def _emit_planner_generation(trace_id: str) -> None:
+        """方針プランナーの 1 回を Langfuse の Generation として記録する (確認事項 B-1)。
+
+        プランナーは rally より前に走りトレースがまだ無いため、rally の
+        ``run_started`` で trace_id が確定した後にこの関数で後付けする。
+        2 段階解析では Stage 1 のトレース (＝最初の run_started) に紐付ける。
+        記録は補助情報なので、失敗しても解析は止めない。
+        """
+        usage = policy_prefix.get("usage")
+        if not usage or policy_prefix.get("usage_logged") or not trace_id:
+            return
+        policy_prefix["usage_logged"] = True
+        try:
+            from log_analyzer.tracing import get_client, usage_for
+            model = usage["model"]
+            parse_error = usage.get("parse_error")
+            get_client().generation(
+                trace_id=trace_id,
+                name=f"{model}-policy-planner",
+                model=model,
+                input=str(usage.get("user_input") or "")[:2000],
+                output=str(usage.get("raw_output") or ""),
+                usage=usage_for(model, usage["tokens_in"], usage["tokens_out"]),
+                start_time=usage.get("started_at"),
+                end_time=usage.get("ended_at"),
+                **(
+                    {"level": "WARNING", "status_message": f"parse_error: {str(parse_error)[:200]}"}
+                    if parse_error else {}
+                ),
+            )
+        except Exception as e:  # noqa: BLE001 — 記録失敗で解析を止めない
+            _logger.warning("[planner] Langfuse への generation 記録に失敗: %s", e)
 
     # ─── 1 段階モード ───────────────────────────────────────────
     async def _gen_single() -> AsyncIterator[bytes]:
@@ -2269,6 +2319,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 if "stage" not in ev.data:
                     ev.data["stage"] = source
                 ev.data.setdefault("stage_ordinal", 1)
+                if ev.kind == "run_started":
+                    # trace_id が確定 → プランナー分を Generation として記録 (B-1)
+                    _emit_planner_generation(str(ev.data.get("trace_id") or ""))
                 if ev.kind == "final":
                     payload = ev.data.get("result")
                     if isinstance(payload, dict):
@@ -2355,6 +2408,9 @@ async def runs_config_log_stream(req: ConfigLogRunRequest) -> StreamingResponse:
                 source_db_schema=source_db,
                 source_codebase=req.source_codebase or "",
             ):
+                if ev.kind == "run_started":
+                    # 最初の Stage の trace にプランナー分を記録 (B-1、2 回目以降は no-op)
+                    _emit_planner_generation(str(ev.data.get("trace_id") or ""))
                 if ev.kind == "final":
                     res = ev.data.get("result")
                     # 承認された解析方針を結果に載せる (記録・レポート・履歴再現用)

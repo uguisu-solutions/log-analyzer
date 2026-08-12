@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timezone
 
 import anthropic
 
@@ -150,6 +151,11 @@ def plan_policy(
 
     返り値: 正規化済み proposal に計測 (model / tokens_in / tokens_out / latency_ms /
     raw_output / parse_error) を加えた dict。
+
+    Langfuse への記録用に ``started_at`` / ``ended_at`` (UTC datetime) と
+    ``user_input`` も返す (確認事項 B-1)。プランナーは rally のトレース生成より
+    前に走るため、ここでは送信せず、呼び出し側が trace_id 確定後に
+    Generation として記録する。これらは保存対象の proposal からは除外される。
     """
     chosen_model = model or os.environ.get("RALLY_PLANNER_MODEL", _DEFAULT_PLANNER_MODEL)
     sys_prompt = (system_prompt or "").strip() or PLANNER_PROMPT
@@ -171,6 +177,7 @@ def plan_policy(
     total_in = 0
     total_out = 0
     started = time.perf_counter()
+    started_at = datetime.now(timezone.utc)
 
     response = client.messages.create(
         model=chosen_model, max_tokens=max_toks, system=system, messages=messages
@@ -218,6 +225,10 @@ def plan_policy(
             "latency_ms": latency_ms,
             "raw_output": raw,
             "parse_error": parse_error,
+            # Langfuse 記録用 (確認事項 B-1)。保存対象の proposal からは除外される。
+            "started_at": started_at,
+            "ended_at": datetime.now(timezone.utc),
+            "user_input": user_input,
         }
     )
     return proposal
