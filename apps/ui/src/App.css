@@ -4043,32 +4043,29 @@ code {
 .policy-planner-note {
   margin-left: 0.4rem;
 }
-/* ─── 失敗・中断した実行の一覧 (確認事項 B-4) ─────────────────── */
-.failed-runs {
-  margin: 0 0 1rem;
-  padding: 0.5rem 0.8rem;
-  border: 1px solid #f3bdb7;
-  border-left: 5px solid #b3261e;
-  border-radius: 6px;
+/* ─── 失敗・中断した実行の行 (確認事項 B-4) ─────────────────────
+   解析履歴の表に日時順で混ぜて表示する。結果が無いので詳細へは遷移しない
+   (クリック不可)。成功行と見分けが付くよう淡い背景と左のマーカーを付ける。 */
+.run-history-table tr.ah-failed-row {
   background: #fdf6f5;
+  cursor: default;
+  color: #555;
 }
-.failed-runs-head {
-  cursor: pointer;
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  flex-wrap: wrap;
+.run-history-table tr.ah-failed-row:hover {
+  background: #fbeceb;
 }
-.failed-runs .table-wrap {
-  margin-top: 0.6rem;
+.run-history-table tr.ah-failed-row > td:first-child {
+  border-left: 3px solid #d99a94;
 }
-.failed-runs-message {
-  max-width: 40rem;
+.run-history-table tr.ah-failed-row.status-aborted > td:first-child {
+  border-left-color: #b9c0c9;
+}
+.run-history-table tr.ah-failed-row.status-rejected > td:first-child {
+  border-left-color: #e0c56b;
+}
+.ah-failed-message {
   word-break: break-word;
   font-size: 0.85rem;
-}
-.failed-runs-note {
-  margin: 0.4rem 0 0;
 }
 
 /* ─── 実行履歴の結末バッジ (確認事項 B-4) ─────────────────────── */

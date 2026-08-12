@@ -15,7 +15,6 @@ import { ChatHistoryView } from './ChatHistoryView'
 import { CombinedResultView, ResultTabs, StageResultView } from './ConfigLogAnalysis'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { EvaluationPanel } from './EvaluationPanel'
-import { FailedRunsView } from './FailedRunsView'
 import { plannerUsage } from './PolicySummaryView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
@@ -26,6 +25,8 @@ import type {
   AnalysisHistoryListResponse,
   AnalysisHistorySummary,
   ReanalyzeSeed,
+  RunHistoryEntry,
+  RunHistoryListResponse,
   StageOutput,
   SuspectedNodeFinding,
   TopologyDef,
@@ -52,6 +53,13 @@ function formatLatency(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+// 失敗・中断した実行の結末 (確認事項 B-4)。解析履歴の表に混ぜて表示する。
+const FAILED_STATUS_LABEL: Record<string, string> = {
+  error: 'エラー',
+  aborted: '中断',
+  rejected: '方針却下',
+}
+
 const SOURCE_LABEL: Record<string, string> = {
   config: 'config のみ',
   log: 'log のみ',
@@ -74,6 +82,9 @@ function modeText(e: { analysis_mode: string | null; single_source: string | nul
 
 export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
   const [entries, setEntries] = useState<AnalysisHistorySummary[]>([])
+  // 失敗・中断した実行 (確認事項 B-4)。結果が無いので解析履歴には保存されず、
+  // 実行履歴 (run_history) 側にだけ残る。同じ表に日時順で混ぜて表示する。
+  const [failedRuns, setFailedRuns] = useState<RunHistoryEntry[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -105,6 +116,17 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
       const data: AnalysisHistoryListResponse = await r.json()
       setEntries(data.entries)
       setTotal(data.total)
+      // 失敗・中断した実行も併せて取得し、同じ表に混ぜる (確認事項 B-4)。
+      // モード絞り込み中は該当情報を持たないので取得しない。
+      if (filterMode) {
+        setFailedRuns([])
+      } else {
+        const rf = await apiFetch(`${API_BASE}/api/runs/history?status=failed&limit=200`)
+        if (rf.ok) {
+          const fd: RunHistoryListResponse = await rf.json()
+          setFailedRuns(fd.entries)
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -177,6 +199,42 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
     })
   }
 
+  // ─── 失敗した実行を同じ表に混ぜる (確認事項 B-4) ─────────────
+  // 解析グループ (成功) と失敗行を日時降順で 1 本のリストにする。
+  // 失敗行は結果が無いため詳細へは遷移させない (行はクリック不可)。
+  const visibleFailedRuns = useMemo(() => {
+    if (!debouncedQ) return failedRuns
+    const q = debouncedQ.toLowerCase()
+    return failedRuns.filter(f =>
+      `${f.error_message ?? ''} ${f.error_stage ?? ''} ${f.log_name}`.toLowerCase().includes(q),
+    )
+  }, [failedRuns, debouncedQ])
+
+  type Row =
+    | { kind: 'group'; date: string; group: (typeof groups)[number] }
+    | { kind: 'failed'; date: string; run: RunHistoryEntry }
+  const rows: Row[] = useMemo(() => {
+    const merged: Row[] = [
+      ...groups.map(g => ({ kind: 'group' as const, date: g.latest.created_at, group: g })),
+      ...visibleFailedRuns.map(f => ({ kind: 'failed' as const, date: f.started_at, run: f })),
+    ]
+    merged.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    return merged
+  }, [groups, visibleFailedRuns])
+
+  const handleDeleteFailed = async (id: number) => {
+    if (!confirm(`失敗した実行の記録 #${id} を削除しますか？`)) return
+    setError(null); setInfo(null)
+    try {
+      const r = await apiFetch(`${API_BASE}/api/runs/history/${id}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+      setInfo(`実行記録 #${id} を削除しました`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   // ─── 詳細ビュー (解析後画面の再現) ───────────────────────────
   if (detail) {
     return (
@@ -226,14 +284,14 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
       {info && <div className="info">{info}</div>}
 
       <div className="run-history-header">
-        <h3>解析履歴（{loading ? '...' : `${entries.length} / ${total} 件`}）</h3>
+        <h3>
+          解析履歴（{loading ? '...' : `${entries.length} / ${total} 件`}
+          {visibleFailedRuns.length > 0 && `　＋ 失敗・中断 ${visibleFailedRuns.length} 件`}）
+        </h3>
         {detailLoading && <span className="muted">詳細を読み込み中…</span>}
       </div>
 
-      {/* 解析履歴に出てこない実行 (失敗・中断・方針却下)。確認事項 B-4。 */}
-      <FailedRunsView />
-
-      {entries.length === 0 && !loading ? (
+      {rows.length === 0 && !loading ? (
         <div className="log-empty">
           {hasFilters
             ? 'フィルタ条件に一致する解析履歴がありません'
@@ -255,7 +313,40 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
               </tr>
             </thead>
             <tbody>
-              {groups.map(g => {
+              {rows.map(row => {
+                // 失敗・中断した実行 (確認事項 B-4)。結果が無いので詳細へは遷移させない。
+                if (row.kind === 'failed') {
+                  const f = row.run
+                  const status = f.status || 'error'
+                  return (
+                    <tr key={`failed-${f.id}`} className={`ah-failed-row status-${status}`}>
+                      <td className="date">{formatDate(f.started_at)}</td>
+                      <td className="ah-mode-cell">
+                        <span className={`run-status run-status-${status}`}>
+                          {FAILED_STATUS_LABEL[status] ?? status}
+                        </span>
+                      </td>
+                      <td className="numeric">-</td>
+                      <td className="numeric">
+                        {(f.tokens_in ?? 0).toLocaleString()} / {(f.tokens_out ?? 0).toLocaleString()}
+                      </td>
+                      <td className="numeric">-</td>
+                      <td><code className="small">{f.error_stage || '-'}</code></td>
+                      <td className="ah-summary-cell ah-failed-message">
+                        {f.error_message || '（詳細不明）'}
+                      </td>
+                      <td className="ah-actions">
+                        <div className="ah-actions-inner">
+                          <span className="muted small">結果なし</span>
+                          <button onClick={() => handleDeleteFailed(f.id)} className="btn-small btn-delete">
+                            削除
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                }
+                const g = row.group
                 const expanded = expandedRoots.has(g.root)
                 // 既定表示 = 最新 (maxRev) と 1 つ前 (maxRev-1)。それ未満はトグルで開閉。
                 const isDefaultVisible = (r: AnalysisHistorySummary) => (r.revision ?? 0) >= g.maxRev - 1
