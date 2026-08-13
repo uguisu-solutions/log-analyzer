@@ -392,6 +392,11 @@ export interface RoundMetrics {
   tokens_in: number
   tokens_out: number
   latency_ms: number
+  // prompt caching の内訳と推定コスト (確認事項 D-2)。
+  // 対応前に保存された履歴では undefined / null。
+  cache_creation?: number
+  cache_read?: number
+  cost_usd?: number | null
 }
 
 // 監視ノードの調査根拠 (確認事項 A-3) ─────────────────
@@ -439,11 +444,15 @@ export interface StageOutput {
   suspected_node_ids: string[]
   suspected_node_findings: SuspectedNodeFinding[]
   delegation_rounds: number
+  // 委譲ラウンドの上限 (確認事項 D-1)。対応前に保存された履歴では undefined。
+  delegation_max_rounds?: number
   delegation_history: DelegationEvent[]
   trace_id: string
   tokens_in: number
   tokens_out: number
   latency_ms_total: number
+  // この Stage の推定コスト (確認事項 D-2)。対応前の履歴では undefined。
+  cost_usd?: number | null
   root_cause_candidates: RootCauseCandidate[]
   recommended_actions: RecommendedAction[]
   round_metrics: RoundMetrics[]

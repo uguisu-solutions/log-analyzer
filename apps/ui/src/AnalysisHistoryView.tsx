@@ -18,6 +18,7 @@ import { EvaluationPanel } from './EvaluationPanel'
 import { plannerUsage } from './PolicySummaryView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
+import { costBreakdown, formatCost } from './cost'
 import { buildReasoningReport, downloadText } from './reasoningReport'
 import { downloadTopologyDiagram } from './topologyImage'
 import type {
@@ -434,6 +435,10 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onR
   const traceUrl = langfuseHost && result?.trace_id ? `${langfuseHost}/trace/${result.trace_id}` : null
   // 方針プランナーの消費量 (確認事項 A-2)。方針ゲート未使用の解析では null。
   const planner = plannerUsage(result?.policy_proposal)
+  // 推定コストの内訳 (確認事項 D-2)
+  const cost = result
+    ? costBreakdown(result)
+    : { main: null, planner: null, audit: null, total: null, unpricedNote: null }
 
   // 表示モード (config-log 解析画面と同じ 標準/チャット 切替)。既定は「標準」。
   const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
@@ -490,6 +495,22 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onR
         <dt>tokens (in / out){planner ? '（本解析）' : ''}</dt>
         <dd>{(result?.metrics?.tokens_in ?? 0).toLocaleString()} / {(result?.metrics?.tokens_out ?? 0).toLocaleString()}</dd>
         <dt>レイテンシ{planner ? '（本解析）' : ''}</dt><dd>{formatLatency(result?.metrics?.latency_ms_total ?? null)}</dd>
+        {/* 推定コスト (確認事項 D-2)。対応前の解析は未計算なので「—」。 */}
+        <dt>推定コスト</dt>
+        <dd>
+          {cost.main == null ? (
+            <span className="muted">—（対応前の解析のため未計算）</span>
+          ) : (
+            <>
+              {formatCost(cost.total)}
+              <span className="muted small">
+                {'　'}本解析 {formatCost(cost.main)}
+                {cost.planner != null && ` ／ プランナー ${formatCost(cost.planner)}`}
+                {cost.audit != null && ` ／ 監査 ${formatCost(cost.audit)}`}
+              </span>
+            </>
+          )}
+        </dd>
         {/* 方針プランナーは本解析の metrics に含まれない別枠の消費 (確認事項 A-2)。
             既存の値の意味を変えないよう、合算せず別行 + 合計行で示す。 */}
         {planner && (

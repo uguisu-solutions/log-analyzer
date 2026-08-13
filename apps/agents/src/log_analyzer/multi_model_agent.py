@@ -24,6 +24,7 @@ import openai
 
 from log_analyzer.baseline_agent import SYSTEM_PROMPT
 from log_analyzer.schema import (
+    SCHEMA_VERSION,
     AnalysisResult,
     ConfigId,
     GraphEdge,
@@ -190,7 +191,7 @@ async def _run_multi_model_async(
     trace = langfuse.trace(
         name="config3-multi",
         input={"log_ref": log_ref, "log_size_bytes": len(log_text)},
-        metadata={"config_id": ConfigId.CONFIG3.value, "schema_version": "v0.1"},
+        metadata={"config_id": ConfigId.CONFIG3.value, "schema_version": SCHEMA_VERSION},
     )
 
     parallel_started = time.perf_counter()

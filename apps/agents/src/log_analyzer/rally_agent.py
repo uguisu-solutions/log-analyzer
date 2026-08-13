@@ -27,6 +27,7 @@ from log_analyzer.rally.integrator import integrator_node
 from log_analyzer.rally.monitors import MONITOR_FNS
 from log_analyzer.rally.orchestrator import orchestrator_select_first
 from log_analyzer.schema import (
+    SCHEMA_VERSION,
     AnalysisResult,
     ConfigId,
     DelegationEventDTO,
@@ -40,7 +41,7 @@ from log_analyzer.schema import (
     RoundMetrics,
     SuspectedNodeFinding,
 )
-from log_analyzer.tracing import flush, get_client, usage_for
+from log_analyzer.tracing import cost_usd, flush, get_client, usage_for
 
 # uvicorn 起動時にコンソールへ確実に出るよう uvicorn のロガーに載せる。
 _logger = logging.getLogger("uvicorn.error")
@@ -169,6 +170,33 @@ def _build_execution_graph(
     return nodes, edges
 
 
+def _round_metric(entry: dict, round_no: int, role: str) -> RoundMetrics:
+    """token_log の 1 エントリを RoundMetrics に変換する。
+
+    prompt caching の内訳と推定コストも載せる (確認事項 D-2 / C-1)。内訳が無いと
+    後からコストを再計算できず、キャッシュ効果も見えないため。
+    """
+    model = str(entry.get("model") or "")
+    tokens_in = int(entry.get("tokens_in") or 0)
+    tokens_out = int(entry.get("tokens_out") or 0)
+    cache_creation = int(entry.get("cache_creation") or 0)
+    cache_read = int(entry.get("cache_read") or 0)
+    return RoundMetrics(
+        round=round_no,
+        role=role,
+        model=model,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        latency_ms=int(entry.get("latency_ms") or 0),
+        cache_creation=cache_creation,
+        cache_read=cache_read,
+        cost_usd=cost_usd(
+            model, tokens_in, tokens_out,
+            cache_creation=cache_creation, cache_read=cache_read,
+        ),
+    )
+
+
 def _build_round_metrics(token_log: list[dict]) -> list[RoundMetrics]:
     """token_log を round 順に並べた per-round metrics を返す (Phase D)。
 
@@ -178,38 +206,17 @@ def _build_round_metrics(token_log: list[dict]) -> list[RoundMetrics]:
     # orchestrator (round=0)
     for entry in token_log:
         if entry.get("role") == "orchestrator":
-            out.append(RoundMetrics(
-                round=0,
-                role="orchestrator",
-                model=str(entry.get("model") or ""),
-                tokens_in=int(entry.get("tokens_in") or 0),
-                tokens_out=int(entry.get("tokens_out") or 0),
-                latency_ms=int(entry.get("latency_ms") or 0),
-            ))
+            out.append(_round_metric(entry, 0, "orchestrator"))
     # 監視 (round >= 1)
     monitors = [e for e in token_log if e.get("role") not in {"orchestrator", "integrator"}]
     monitors_sorted = sorted(monitors, key=lambda e: int(e.get("round") or 0))
     for entry in monitors_sorted:
-        out.append(RoundMetrics(
-            round=int(entry.get("round") or 0),
-            role=str(entry.get("role") or ""),
-            model=str(entry.get("model") or ""),
-            tokens_in=int(entry.get("tokens_in") or 0),
-            tokens_out=int(entry.get("tokens_out") or 0),
-            latency_ms=int(entry.get("latency_ms") or 0),
-        ))
+        out.append(_round_metric(entry, int(entry.get("round") or 0), str(entry.get("role") or "")))
     # integrator
     max_round = max((r.round for r in out), default=0)
     for entry in token_log:
         if entry.get("role") == "integrator":
-            out.append(RoundMetrics(
-                round=max_round + 1,
-                role="integrator",
-                model=str(entry.get("model") or ""),
-                tokens_in=int(entry.get("tokens_in") or 0),
-                tokens_out=int(entry.get("tokens_out") or 0),
-                latency_ms=int(entry.get("latency_ms") or 0),
-            ))
+            out.append(_round_metric(entry, max_round + 1, "integrator"))
     return out
 
 
@@ -313,7 +320,20 @@ def _build_analysis_result(
     per_call_latencies = sorted(e["latency_ms"] for e in token_log)
     p50 = per_call_latencies[len(per_call_latencies) // 2] if per_call_latencies else 0
 
+    # 推定コスト (確認事項 D-2)。従来は常に 0.0 で「当てにならない」値だった。
+    # 範囲は tokens と揃えて **本解析のみ** (orchestrator + 監視 + integrator)。
+    # 方針プランナー・監査GPT の分は policy_proposal / audit_report 側にあり、
+    # UI が別枠 + 合計として表示する (A-2 の判断と同じ整理)。
+    round_costs = _build_round_metrics(token_log)
+    total_cost = sum(r.cost_usd for r in round_costs if r.cost_usd is not None)
+    unpriced = sorted({r.model for r in round_costs if r.cost_usd is None and r.model})
+
     info_loss: list[str] = []
+    if unpriced:
+        # 0 を「無料」と誤読させないため、単価未登録のモデルがあることを残す
+        info_loss.append(
+            "cost_unpriced_models: " + ", ".join(unpriced) + "（このモデル分はコストに含まれません）"
+        )
     info_loss.append(f"delegation_rounds_completed: {rally_round} (max={rally_max_rounds})")
     visited = [d.get("to_node") for d in delegation_history if d.get("to_node")]
     info_loss.append("delegation_chain: " + " → ".join(["orchestrator", *visited]))
@@ -437,6 +457,7 @@ def _build_analysis_result(
         metrics=Metrics(
             tokens_in=total_in,
             tokens_out=total_out,
+            cost_usd=total_cost,
             latency_ms_total=wall_ms,
             latency_ms_p50=p50,
         ),
@@ -448,7 +469,7 @@ def _build_analysis_result(
         delegation_history=history_dtos,
         suspected_node_ids=suspected_node_ids,
         suspected_node_findings=suspected_node_findings,
-        round_metrics=_build_round_metrics(token_log),
+        round_metrics=round_costs,
         monitor_reports=list(monitor_reports or []),
     )
 
@@ -532,7 +553,7 @@ async def run_rally_stream(
     trace = langfuse.trace(
         name="config4-rally",
         input={"log_ref": log_ref, "log_size_bytes": len(log_text)},
-        metadata={"config_id": ConfigId.CONFIG4.value, "schema_version": "v0.1"},
+        metadata={"config_id": ConfigId.CONFIG4.value, "schema_version": SCHEMA_VERSION},
     )
     trace_id = str(trace.id)
     wall_start = time.perf_counter()

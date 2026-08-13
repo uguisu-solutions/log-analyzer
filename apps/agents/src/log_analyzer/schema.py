@@ -1,4 +1,4 @@
-"""Common output schema v0.1 — shared contract across all 4 configurations.
+"""Common output schema v0.2 — shared contract across all 4 configurations.
 
 Every configuration (config1..config4) returns an `AnalysisResult` so results
 can be compared mechanically. Do not break compatibility without bumping
@@ -12,6 +12,13 @@ from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
+
+# 出力スキーマの版数。``AnalysisResult.schema_version`` と、各構成が Langfuse の
+# trace metadata に載せる値の**唯一の定義元**。
+# v0.2 で ``rank`` を撤去済み。以前は各所に "v0.1" がリテラルで書かれており、
+# v0.2 へ上げた際に trace metadata 側だけ更新漏れが起きた (確認事項 D-3)。
+# 版数を上げるときはこの定数だけを変えること。
+SCHEMA_VERSION = "v0.2"
 
 
 class Category(str, Enum):
@@ -202,11 +209,17 @@ class StageOutput(BaseModel):
     suspected_node_ids: list[str] = Field(default_factory=list)
     suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)
     delegation_rounds: int = 0
+    # 委譲ラウンドの上限 (rally_max_rounds。ユーザー延長後の最終値)。
+    # 従来ここに無かったため config-log 解析で結果を組み直す際に落ち、UI が
+    # 「N ラウンド / 上限 0」と表示していた (確認事項 D-1)。
+    delegation_max_rounds: int = 0
     delegation_history: list["DelegationEventDTO"] = Field(default_factory=list)
     trace_id: str = ""
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms_total: int = 0
+    # この Stage の推定コスト (確認事項 D-2)。単価未登録のモデルのみなら None。
+    cost_usd: float | None = None
     root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
     recommended_actions: list[RecommendedAction] = Field(default_factory=list)
     round_metrics: list["RoundMetrics"] = Field(default_factory=list)
@@ -255,6 +268,13 @@ class RoundMetrics(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms: int = 0
+    # prompt caching の内訳と推定コスト (確認事項 D-2 / C-1)。
+    # tokens_in は「非キャッシュ + 書込 + 読出」の総量なので、内訳が無いと
+    # 後からコストを再計算できない (読出は 1/10 単価)。キャッシュ効果の
+    # 可視化にも使う。cost_usd は単価未登録のモデルでは None。
+    cache_creation: int = 0
+    cache_read: int = 0
+    cost_usd: float | None = None
 
 
 class AuditReport(BaseModel):
@@ -414,7 +434,7 @@ def _default_trace_id() -> str:
 
 
 class AnalysisResult(BaseModel):
-    schema_version: str = "v0.2"
+    schema_version: str = SCHEMA_VERSION
     # Langfuse が発行する trace ID（文字列）。UI のリンク生成と Langfuse UI 上の
     # 該当トレースを開く URL に直接使う。
     trace_id: str = Field(default_factory=_default_trace_id)

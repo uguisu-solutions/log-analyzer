@@ -37,6 +37,7 @@ from typing import Any
 import anthropic
 
 from log_analyzer.schema import (
+    SCHEMA_VERSION,
     AnalysisResult,
     ConfigId,
     GraphEdge,
@@ -302,7 +303,7 @@ async def _run_pipeline_async(
             "log_size_bytes": len(log_text),
             "node_count": len(nodes),
         },
-        metadata={"config_id": ConfigId.CONFIG5.value, "schema_version": "v0.1"},
+        metadata={"config_id": ConfigId.CONFIG5.value, "schema_version": SCHEMA_VERSION},
     )
 
     outputs: dict[str, str] = {}

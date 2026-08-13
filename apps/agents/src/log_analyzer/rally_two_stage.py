@@ -119,11 +119,13 @@ def _result_to_stage_output(
         suspected_node_ids=list(result.suspected_node_ids),
         suspected_node_findings=list(result.suspected_node_findings),
         delegation_rounds=result.delegation_rounds,
+        delegation_max_rounds=result.delegation_max_rounds,
         delegation_history=list(result.delegation_history),
         trace_id=result.trace_id,
         tokens_in=result.metrics.tokens_in,
         tokens_out=result.metrics.tokens_out,
         latency_ms_total=result.metrics.latency_ms_total,
+        cost_usd=result.metrics.cost_usd,
         root_cause_candidates=list(result.root_cause_candidates),
         recommended_actions=list(result.recommended_actions),
         round_metrics=list(result.round_metrics),
@@ -212,10 +214,13 @@ def _build_final_result(
     total_tokens_in = sum(s.tokens_in for s in stage_outputs)
     total_tokens_out = sum(s.tokens_out for s in stage_outputs)
     total_latency_ms = sum(s.latency_ms_total for s in stage_outputs)
+    # 推定コストも tokens / latency と同じく両 Stage の合算 (確認事項 D-2)
+    total_cost = sum(s.cost_usd for s in stage_outputs if s.cost_usd is not None)
     from log_analyzer.schema import Metrics  # 循環回避のため遅延 import
     metrics = Metrics(
         tokens_in=total_tokens_in,
         tokens_out=total_tokens_out,
+        cost_usd=total_cost,
         latency_ms_total=total_latency_ms,
     )
     info_loss: list[str] = []
@@ -238,6 +243,8 @@ def _build_final_result(
         metrics=metrics,
         info_loss_flags=info_loss,
         delegation_rounds=primary.delegation_rounds,
+        # 上限を引き継がないと UI が「N ラウンド / 上限 0」になる (確認事項 D-1)
+        delegation_max_rounds=primary.delegation_max_rounds,
         delegation_history=list(primary.delegation_history),
         suspected_node_ids=list(primary.suspected_node_ids),
         suspected_node_findings=list(primary.suspected_node_findings),

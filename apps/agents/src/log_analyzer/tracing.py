@@ -73,6 +73,35 @@ def usage_components(usage: Any) -> dict[str, int]:
     }
 
 
+def cost_usd(
+    model: str | None,
+    tokens_in: Any,
+    tokens_out: Any,
+    *,
+    cache_creation: Any = 0,
+    cache_read: Any = 0,
+) -> float | None:
+    """1 回の LLM 呼び出しの推定コスト (USD) を返す。未収載モデルは ``None``。
+
+    確認事項 D-2 で ``metrics.cost_usd`` を実計算するために切り出した。
+    Langfuse 送信用の :func:`usage_for` と**同じ計算**を共有する
+    (prompt caching の倍率: 書込 ×1.25 / 読出 ×0.1)。
+
+    ``tokens_in`` は入力処理トークンの総量 (非キャッシュ + 書込 + 読出)。
+    ``None`` を返した場合、呼び出し側は 0 とみなさず「単価未登録」として
+    扱うこと (0 を「無料」と誤読させないため)。
+    """
+    price = _model_price(model)
+    if price is None:
+        return None
+    p_in, p_out = price
+    ti, to = int(tokens_in or 0), int(tokens_out or 0)
+    cc, cr = int(cache_creation or 0), int(cache_read or 0)
+    uncached = max(0, ti - cc - cr)
+    billable_in = uncached + cc * _CACHE_WRITE_MULT + cr * _CACHE_READ_MULT
+    return billable_in / 1_000_000 * p_in + to / 1_000_000 * p_out
+
+
 def usage_for(
     model: str | None,
     tokens_in: Any,
