@@ -21,6 +21,7 @@ import anthropic
 from log_analyzer.baseline_agent import SYSTEM_PROMPT
 from log_analyzer.filters import FilterResult, filter_log
 from log_analyzer.schema import (
+    SCHEMA_VERSION,
     AnalysisResult,
     ConfigId,
     GraphEdge,
@@ -67,7 +68,7 @@ def run_filtered(
     trace = langfuse.trace(
         name="config2-filtered",
         input={"log_ref": log_ref, "log_size_bytes": len(log_text)},
-        metadata={"config_id": ConfigId.CONFIG2.value, "schema_version": "v0.1"},
+        metadata={"config_id": ConfigId.CONFIG2.value, "schema_version": SCHEMA_VERSION},
     )
 
     fr = filter_log(log_text)

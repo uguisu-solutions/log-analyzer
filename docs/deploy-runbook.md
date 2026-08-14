@@ -192,6 +192,100 @@ gcloud run services update "$SERVICE" --region="$REGION" \
 
 ---
 
+## STEP 7. 更新リリース（2 回目以降のデプロイ）
+
+初回構築（STEP 0〜6）が済んだ環境に、コード変更を反映する手順。
+**フロントは Git 連携ではなく手動デプロイ**なので、バックエンドだけ出して終わりにしないこと。
+
+現行環境（2026-08 時点の実測値）:
+
+| 項目 | 値 |
+|---|---|
+| Cloud Run | `log-analyzer-api`（asia-northeast1）/ URL `https://log-analyzer-api-w2zlpma4lq-an.a.run.app` |
+| スケール | minScale=1 / **maxScale=10** / cpu-throttling=false |
+| DB | Cloud SQL Postgres `log-analyzer-pg`（`DATABASE_URL`・Cloud SQL コネクタ接続） |
+| ストレージ | `gs://df-ibc-poc-log-analyzer/logs` |
+| フロント | Vercel プロジェクト `log-analyzer-ui`（**手動デプロイ**。`.vercel` の紐付けはメインのチェックアウトにのみ存在） |
+
+```powershell
+# gcloud は PowerShell から呼ぶ
+$gc = "C:\Users\develop\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.ps1"
+```
+
+### 7-1. 事前
+
+1. 変更を **main にマージ**する。
+2. DB のバックアップ（スキーマ変更を伴うリリースでは必須）:
+   ```powershell
+   & $gc sql export sql log-analyzer-pg `
+       gs://df-ibc-poc-log-analyzer/backup/appdb-$(Get-Date -f yyyy-MM-dd).sql --database=appdb
+   ```
+   権限エラーが出たら、Cloud SQL の SA（`gcloud sql instances describe log-analyzer-pg
+   --format="value(serviceAccountEmailAddress)"`）にバケットの `objectAdmin` を付与する。
+
+### 7-2. DB マイグレーション（列追加を伴う場合）
+
+`storage.py::init_db()` が起動時に条件付き `ALTER TABLE` を流すが、**maxScale=10 のため
+複数インスタンスが同時起動すると競合しうる**（起動失敗 → 再起動で回復するがログが汚れる）。
+確実にするには **Cloud SQL Studio か `gcloud sql connect` から先に 1 回流す**（冪等）:
+
+```sql
+-- 例: 失敗・中断の記録 (確認事項 B-4) で追加した列
+ALTER TABLE run_history ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ok';
+ALTER TABLE run_history ADD COLUMN IF NOT EXISTS error_stage TEXT;
+ALTER TABLE run_history ADD COLUMN IF NOT EXISTS error_message TEXT;
+```
+
+### 7-3. バックエンド（Cloud Run）
+
+**ビルドは必ず `cloudbuild.bq.yaml` を使う**。`--tag` だけの `builds submit` では
+`INSTALL_TOOLBOX` が渡らず **toolbox 無しイメージ＝BigQuery 取得が壊れる**。
+
+```powershell
+& $gc builds submit --config cloudbuild.bq.yaml .        # タグは :v2 固定（上書き）
+& $gc run deploy log-analyzer-api --region asia-northeast1 `
+    --image asia-northeast1-docker.pkg.dev/df-ibc-poc/log-analyzer/log-analyzer-api:v2
+```
+
+env・スケール・Cloud SQL 接続は既存設定が維持される（`--image` だけ差し替え）。
+
+```powershell
+curl https://log-analyzer-api-w2zlpma4lq-an.a.run.app/health
+& $gc run services logs read log-analyzer-api --region asia-northeast1 --limit 50   # 起動エラー無し
+```
+
+### 7-4. フロント（Vercel・手動）
+
+`.vercel/project.json` は**メインのチェックアウトにしか無い**。git worktree から実行すると
+プロジェクト選択の対話が出て、誤って新規プロジェクトを作る事故になる。必ずメイン側で:
+
+```powershell
+cd C:\Users\develop\Desktop\prottype1 ; git checkout main ; git pull
+cd apps\ui ; npm ci ; npm run build ; vercel --prod
+```
+
+環境変数（`VITE_API_BASE` / `VITE_API_KEY`）は Vercel 側に設定済みで変更不要。
+`VITE_SHOW_EVALUATION` は**設定しない**（設定すると採点パネルが顧客に見える）。
+
+### 7-5. 反映順序と互換性
+
+**バックエンド → フロント**を推奨。どちらの順でも壊れない（API の追加フィールドは後方互換）が:
+
+- バックエンドだけ反映 → 動作に支障なし。ただし新しい表示はフロントを出すまで現れない
+- フロントだけ反映 → 動作に支障なし。ただし新 API に依存する表示（失敗した実行の一覧など）は空になる
+
+### 7-6. ロールバック
+
+```powershell
+& $gc run services update-traffic log-analyzer-api --region asia-northeast1 `
+    --to-revisions <前リビジョン名>=100
+```
+
+**追加列の DB は戻さなくてよい**。旧コードは追加列を参照せず、INSERT も列を明示しているため
+既定値が入る（`status` は `DEFAULT 'ok'`）。フロントも旧デプロイに戻せば整合する。
+
+---
+
 ## 補足・注意
 
 - **課金の伴う作成（Cloud SQL / Cloud Run min-instances=1 / バケット）はユーザー承認前提**。

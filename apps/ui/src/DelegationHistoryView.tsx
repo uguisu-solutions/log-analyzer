@@ -2,7 +2,8 @@
  * 委譲チェーン履歴の表示コンポーネント。構成4 (rally) 結果と
  * トポロジー解析タブの両方から共用する。
  */
-import type { AnalysisResult } from './types'
+import { MonitorEvidenceUnavailable, MonitorEvidenceView, findMonitorReport } from './MonitorEvidenceView'
+import type { AnalysisResult, DelegationEvent } from './types'
 
 const DELEGATION_KIND_LABEL: Record<string, string> = {
   orchestrator_initial: 'orchestrator が初手を選択',
@@ -21,13 +22,31 @@ export function nodeLabel(name: string | null | undefined): string {
   return `${name}_monitor`
 }
 
-export function DelegationHistoryView({ result }: { result: AnalysisResult }) {
+// この委譲イベントの「実行者」が監視ノードかどうか (orchestrator / ユーザー操作を除く)
+function monitorRoleOf(d: DelegationEvent): string | null {
+  if (d.kind === 'orchestrator_initial' || d.kind === 'orchestrator_restart') return null
+  if (d.kind === 'user_finalize' || d.kind === 'user_extend') return null
+  if (!d.from_node || d.from_node === 'orchestrator') return null
+  return d.from_node
+}
+
+interface DelegationHistoryProps {
+  result: AnalysisResult
+  // 監視の調査根拠 (A-3) を各ラウンドに埋め込むか。結果ペイン側で
+  // MonitorEvidenceSection を出している画面では false にして二重表示を避ける。
+  showMonitorEvidence?: boolean
+}
+
+export function DelegationHistoryView({ result, showMonitorEvidence = true }: DelegationHistoryProps) {
   const rounds = result.delegation_rounds ?? 0
   const maxRounds = result.delegation_max_rounds ?? 0
   const history = result.delegation_history ?? []
   if (history.length === 0) return null
   const violations = history.filter(d => d.kind === 'routing_violation_fallback').length
   const extended = history.filter(d => d.kind === 'user_extend').length
+  // 監視ごとの調査根拠 (確認事項 A-3)。対応前の履歴では空。
+  const reports = showMonitorEvidence ? (result.monitor_reports ?? []) : []
+  const hasMonitorEvents = showMonitorEvidence && history.some(d => monitorRoleOf(d) != null)
   return (
     <section className="orchestrator-history">
       <h3>委譲チェーン履歴（{rounds} ラウンド / 上限 {maxRounds}）</h3>
@@ -49,8 +68,12 @@ export function DelegationHistoryView({ result }: { result: AnalysisResult }) {
           </span>
         )}
       </div>
+      {hasMonitorEvents && reports.length === 0 && <MonitorEvidenceUnavailable />}
       <ol className="orchestrator-rounds">
-        {history.map((d, i) => (
+        {history.map((d, i) => {
+          const monitorRole = monitorRoleOf(d)
+          const report = findMonitorReport(reports, d.round, monitorRole)
+          return (
           <li key={i} className={`orch-round action-${d.kind}`}>
             <div className="orch-round-header">
               <span className="round-num">round {d.round}</span>
@@ -74,8 +97,11 @@ export function DelegationHistoryView({ result }: { result: AnalysisResult }) {
                 <p>{d.focus_hint}</p>
               </details>
             )}
+            {/* この監視の所見・根拠・実行ツール (確認事項 A-3) */}
+            {report && <MonitorEvidenceView report={report} />}
           </li>
-        ))}
+          )
+        })}
       </ol>
     </section>
   )

@@ -1,4 +1,4 @@
-"""Common output schema v0.1 — shared contract across all 4 configurations.
+"""Common output schema v0.2 — shared contract across all 4 configurations.
 
 Every configuration (config1..config4) returns an `AnalysisResult` so results
 can be compared mechanically. Do not break compatibility without bumping
@@ -12,6 +12,13 @@ from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
+
+# 出力スキーマの版数。``AnalysisResult.schema_version`` と、各構成が Langfuse の
+# trace metadata に載せる値の**唯一の定義元**。
+# v0.2 で ``rank`` を撤去済み。以前は各所に "v0.1" がリテラルで書かれており、
+# v0.2 へ上げた際に trace metadata 側だけ更新漏れが起きた (確認事項 D-3)。
+# 版数を上げるときはこの定数だけを変えること。
+SCHEMA_VERSION = "v0.2"
 
 
 class Category(str, Enum):
@@ -144,6 +151,46 @@ class SuspectedNodeFinding(BaseModel):
     severity: str = ""  # "primary" | "secondary" | "info" | ""
 
 
+class MonitorFinding(BaseModel):
+    """監視ノードが出した所見 1 件と、その根拠 (evidence)。
+
+    evidence はモデルが引用したログ行・問診票の欄・ツール取得結果のいずれか。
+    保存時は文字数・件数を切り詰める (rally_agent の ``_MAX_EVIDENCE_*`` 参照)。
+    """
+
+    category: str = ""  # "FW" | "Net" | "App" | "DNS" | "Sec" | "Unknown"
+    summary: str = ""
+    evidence: list[str] = Field(default_factory=list)
+
+
+class MonitorReport(BaseModel):
+    """監視ノード 1 回分の調査根拠 (確認事項 A-3)。
+
+    従来、各監視の findings / evidence / tool_calls は実行中メモリと Langfuse の
+    Output にしか存在せず、解析結果には要約 (suspected_node_findings) しか
+    残らなかった。シニアレビューで「この監視が何を根拠にそう判断したか」を
+    後から追えるようにするため、監視 1 回ごとに本モデルとして保存する。
+
+    ``round`` / ``role`` は ``delegation_history`` の各イベントと対応し、UI は
+    (round, from_node) で突き合わせて表示する。
+    """
+
+    round: int = 0
+    role: str = ""  # "fw" | "routing" | "app" | "dns" | "sec"
+    model: str = ""
+    confidence: float = 0.0
+    findings: list[MonitorFinding] = Field(default_factory=list)
+    # 実行したツール呼び出し (LLM の自己申告 + 実際の BigQuery / ソース参照)
+    tool_calls: list[str] = Field(default_factory=list)
+    # 次ノード選定の理由。棄却した仮説の跡もここに書かれる
+    rationale: str = ""
+    focus_hint_received: str = ""   # 前ノードから引き継いだ観点
+    focus_hint_for_next: str = ""   # 次ノードへ渡した観点
+    # 保存時に上限で切り詰めた場合の注記 (UI に「N 件省略」と出す)
+    truncation_note: str = ""
+    parse_error: str | None = None
+
+
 class StageOutput(BaseModel):
     """config-log 解析の各 Stage の中間結果。
 
@@ -162,14 +209,22 @@ class StageOutput(BaseModel):
     suspected_node_ids: list[str] = Field(default_factory=list)
     suspected_node_findings: list[SuspectedNodeFinding] = Field(default_factory=list)
     delegation_rounds: int = 0
+    # 委譲ラウンドの上限 (rally_max_rounds。ユーザー延長後の最終値)。
+    # 従来ここに無かったため config-log 解析で結果を組み直す際に落ち、UI が
+    # 「N ラウンド / 上限 0」と表示していた (確認事項 D-1)。
+    delegation_max_rounds: int = 0
     delegation_history: list["DelegationEventDTO"] = Field(default_factory=list)
     trace_id: str = ""
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms_total: int = 0
+    # この Stage の推定コスト (確認事項 D-2)。単価未登録のモデルのみなら None。
+    cost_usd: float | None = None
     root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
     recommended_actions: list[RecommendedAction] = Field(default_factory=list)
     round_metrics: list["RoundMetrics"] = Field(default_factory=list)
+    # この Stage で動いた各監視の調査根拠 (確認事項 A-3)。対応前の履歴では空。
+    monitor_reports: list[MonitorReport] = Field(default_factory=list)
 
 
 class DelegationEventDTO(BaseModel):
@@ -213,6 +268,13 @@ class RoundMetrics(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms: int = 0
+    # prompt caching の内訳と推定コスト (確認事項 D-2 / C-1)。
+    # tokens_in は「非キャッシュ + 書込 + 読出」の総量なので、内訳が無いと
+    # 後からコストを再計算できない (読出は 1/10 単価)。キャッシュ効果の
+    # 可視化にも使う。cost_usd は単価未登録のモデルでは None。
+    cache_creation: int = 0
+    cache_read: int = 0
+    cost_usd: float | None = None
 
 
 class AuditReport(BaseModel):
@@ -372,7 +434,7 @@ def _default_trace_id() -> str:
 
 
 class AnalysisResult(BaseModel):
-    schema_version: str = "v0.2"
+    schema_version: str = SCHEMA_VERSION
     # Langfuse が発行する trace ID（文字列）。UI のリンク生成と Langfuse UI 上の
     # 該当トレースを開く URL に直接使う。
     trace_id: str = Field(default_factory=_default_trace_id)
@@ -405,6 +467,10 @@ class AnalysisResult(BaseModel):
     # ラウンド単位集計 (Phase D)。token_log を round 順に並べたもの。
     # 他構成 (config1-3,5) では空のまま。
     round_metrics: list[RoundMetrics] = Field(default_factory=list)
+    # 各監視ノードの調査根拠 (findings / evidence / tool_calls)。確認事項 A-3。
+    # 2 段階解析では主 Stage 分がここに入り、Stage 別は stage_outputs[].monitor_reports。
+    # 本対応より前に保存された履歴では空配列 (後方互換のため任意フィールド)。
+    monitor_reports: list[MonitorReport] = Field(default_factory=list)
     # ソースコード解析のコンテキスト。コードベース未指定の run では None。
     # 設計: docs/plan/source_code_analysis.md
     source_context: SourceContext | None = None

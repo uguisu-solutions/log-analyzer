@@ -28,6 +28,27 @@ function formatLatency(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+// 実行の結末 (確認事項 B-4)。従来は正常終了しか記録がなく、失敗・中断・方針却下は
+// どこにも残らなかった。status を持たない古い行は正常終了として扱う。
+const STATUS_LABEL: Record<string, string> = {
+  ok: '完了',
+  error: 'エラー',
+  aborted: '中断',
+  rejected: '方針却下',
+}
+
+export function RunStatusBadge({ entry }: { entry: RunHistoryEntry }) {
+  const status = entry.status || 'ok'
+  const label = STATUS_LABEL[status] ?? status
+  if (status === 'ok') return <span className="run-status run-status-ok">{label}</span>
+  const detail = [entry.error_stage, entry.error_message].filter(Boolean).join(': ')
+  return (
+    <span className={`run-status run-status-${status}`} title={detail || label}>
+      {label}
+    </span>
+  )
+}
+
 export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
   const [entries, setEntries] = useState<RunHistoryEntry[]>([])
   const [total, setTotal] = useState(0)
@@ -39,6 +60,8 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
   // フィルタ
   const [filterLog, setFilterLog] = useState<string>('')
   const [filterConfig, setFilterConfig] = useState<string>('')
+  // 結果 (ok / error / aborted / rejected) の絞り込み。確認事項 B-4。
+  const [filterStatus, setFilterStatus] = useState<string>('')
   const [searchQ, setSearchQ] = useState<string>('')
   // クライアント側で type=text の入力をデバウンスして送る
   const [debouncedQ, setDebouncedQ] = useState<string>('')
@@ -54,6 +77,7 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
       const params = new URLSearchParams()
       if (filterLog) params.set('log_name', filterLog)
       if (filterConfig) params.set('config_id', filterConfig)
+      if (filterStatus) params.set('status', filterStatus)
       if (debouncedQ) params.set('q', debouncedQ)
       params.set('limit', '200')
       const r = await apiFetch(`${API_BASE}/api/runs/history?${params}`)
@@ -66,7 +90,7 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [filterLog, filterConfig, debouncedQ])
+  }, [filterLog, filterConfig, filterStatus, debouncedQ])
 
   useEffect(() => {
     load()
@@ -91,13 +115,14 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
   const handleResetFilters = () => {
     setFilterLog('')
     setFilterConfig('')
+    setFilterStatus('')
     setSearchQ('')
   }
 
   // 設定中のフィルタが有効か（クリアボタン活性化用）
   const hasFilters = useMemo(
-    () => filterLog || filterConfig || searchQ,
-    [filterLog, filterConfig, searchQ],
+    () => filterLog || filterConfig || filterStatus || searchQ,
+    [filterLog, filterConfig, filterStatus, searchQ],
   )
 
   return (
@@ -121,6 +146,16 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
               {configList.map(c => (
                 <option key={c.id} value={c.id}>{c.label}</option>
               ))}
+            </select>
+          </label>
+          <label>
+            <span className="filter-label">結果</span>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+              <option value="">（全て）</option>
+              <option value="ok">完了</option>
+              <option value="error">エラー</option>
+              <option value="aborted">中断</option>
+              <option value="rejected">方針却下</option>
             </select>
           </label>
           <label className="flex-grow">
@@ -168,6 +203,7 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
             <thead>
               <tr>
                 <th>実行日時</th>
+                <th>結果</th>
                 <th>ログ</th>
                 <th>構成</th>
                 <th>確信度</th>
@@ -185,6 +221,7 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
                   className={selected?.id === e.id ? 'selected' : ''}
                 >
                   <td className="date">{formatDate(e.started_at)}</td>
+                  <td><RunStatusBadge entry={e} /></td>
                   <td><code>{e.log_name}</code></td>
                   <td>
                     <span className={`pill cfg-${e.base_config}`}>{e.config_id}</span>
@@ -225,6 +262,15 @@ export function RunHistoryView({ configList, logs, langfuseHost }: Props) {
             <div className="preview-modal-body">
               <dl className="run-detail">
                 <dt>実行日時</dt><dd>{formatDate(selected.started_at)}</dd>
+                <dt>結果</dt><dd><RunStatusBadge entry={selected} /></dd>
+                {/* 失敗・中断の内訳 (確認事項 B-4)。正常終了時は出さない。 */}
+                {(selected.status ?? 'ok') !== 'ok' && (
+                  <>
+                    <dt>失敗した段階</dt><dd>{selected.error_stage || '-'}</dd>
+                    <dt>エラー内容</dt>
+                    <dd className="run-detail-error">{selected.error_message || '-'}</dd>
+                  </>
+                )}
                 <dt>ログ</dt><dd><code>{selected.log_name}</code></dd>
                 <dt>構成</dt><dd>
                   <span className={`pill cfg-${selected.base_config}`}>{selected.config_id}</span>

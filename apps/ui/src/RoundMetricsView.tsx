@@ -7,10 +7,15 @@
  * 比較ベンチマークで計算したくなったら別途追加)。
  */
 import { useMemo } from 'react'
+import type { PlannerUsage } from './PolicySummaryView'
 import type { RoundMetrics } from './types'
 
 interface Props {
   rounds: RoundMetrics[]
+  // 方針プランナー (解析前に 1 回) の消費量。確認事項 A-2 で追加。
+  // ラウンドではないため round 列は "—"、合計は「本解析」と「プランナー込み」を
+  // 併記する (metrics.tokens_in/out にはプランナー分が入っていないため)。
+  planner?: PlannerUsage | null
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -23,17 +28,24 @@ const ROLE_LABEL: Record<string, string> = {
   sec: 'Sec 監視',
 }
 
-export function RoundMetricsView({ rounds }: Props) {
+export function RoundMetricsView({ rounds, planner }: Props) {
   const { totals, maxTokens, maxLatency } = useMemo(() => {
     const t_in = rounds.reduce((s, r) => s + r.tokens_in, 0)
     const t_out = rounds.reduce((s, r) => s + r.tokens_out, 0)
     const lat = rounds.reduce((s, r) => s + r.latency_ms, 0)
+    // バーの尺度はプランナー行も含めて揃える (プランナーだけ突出/潰れないように)
+    const tokenValues = rounds.map(r => r.tokens_in + r.tokens_out)
+    const latencyValues = rounds.map(r => r.latency_ms)
+    if (planner) {
+      tokenValues.push(planner.tokensIn + planner.tokensOut)
+      latencyValues.push(planner.latencyMs)
+    }
     return {
       totals: { in: t_in, out: t_out, latency: lat },
-      maxTokens: Math.max(1, ...rounds.map(r => r.tokens_in + r.tokens_out)),
-      maxLatency: Math.max(1, ...rounds.map(r => r.latency_ms)),
+      maxTokens: Math.max(1, ...tokenValues),
+      maxLatency: Math.max(1, ...latencyValues),
     }
-  }, [rounds])
+  }, [rounds, planner])
 
   if (rounds.length === 0) return null
 
@@ -44,6 +56,13 @@ export function RoundMetricsView({ rounds }: Props) {
         <span className="round-metrics-totals muted">
           計 tokens: {totals.in.toLocaleString()} in / {totals.out.toLocaleString()} out ·
           {' '}計 latency: {(totals.latency / 1000).toFixed(1)}s · {rounds.length} ステップ
+          {planner && (
+            <>
+              {' '}／ プランナー込み: {(totals.in + planner.tokensIn).toLocaleString()} in /
+              {' '}{(totals.out + planner.tokensOut).toLocaleString()} out ·
+              {' '}{((totals.latency + planner.latencyMs) / 1000).toFixed(1)}s
+            </>
+          )}
         </span>
       </div>
       <table className="round-metrics-table">
@@ -57,6 +76,38 @@ export function RoundMetricsView({ rounds }: Props) {
           </tr>
         </thead>
         <tbody>
+          {/* 方針プランナー: ラウンド 0 より前に 1 回だけ動くため先頭に置く。
+              上の「計」はラウンドのみの合算なので、この行は合算対象外である旨を添える。 */}
+          {planner && (
+            <tr className="round-row role-planner">
+              <td className="rm-round">—</td>
+              <td className="rm-role">
+                方針プランナー
+                <span className="muted small rm-role-note">（計に含まず）</span>
+              </td>
+              <td className="rm-model">{planner.model || '-'}</td>
+              <td className="rm-tokens">
+                <div className="rm-bar-cell">
+                  <div
+                    className="rm-bar rm-bar-tokens"
+                    style={{ width: `${((planner.tokensIn + planner.tokensOut) / maxTokens) * 100}%` }}
+                  />
+                  <span className="rm-bar-text">
+                    {planner.tokensIn.toLocaleString()} / {planner.tokensOut.toLocaleString()}
+                  </span>
+                </div>
+              </td>
+              <td className="rm-latency">
+                <div className="rm-bar-cell">
+                  <div
+                    className="rm-bar rm-bar-latency"
+                    style={{ width: `${(planner.latencyMs / maxLatency) * 100}%` }}
+                  />
+                  <span className="rm-bar-text">{(planner.latencyMs / 1000).toFixed(2)}s</span>
+                </div>
+              </td>
+            </tr>
+          )}
           {rounds.map((r, i) => {
             const tok = r.tokens_in + r.tokens_out
             const tokenPct = (tok / maxTokens) * 100

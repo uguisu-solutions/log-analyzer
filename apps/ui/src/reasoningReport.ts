@@ -9,6 +9,7 @@
 import type {
   AnalysisResult,
   DelegationEvent,
+  MonitorReport,
   RoundMetrics,
   SourceToolCall,
   StageOutput,
@@ -70,6 +71,31 @@ interface StageBlock {
   confidence: number
   candidates: AnalysisResult['root_cause_candidates']
   actions: AnalysisResult['recommended_actions']
+  // 監視ごとの調査根拠 (確認事項 A-3)。対応前の解析では空。
+  reports: MonitorReport[]
+}
+
+// 監視 1 回ぶんの所見・根拠・実行ツールを Markdown に落とす (A-3)。
+function emitMonitorReport(lines: string[], rep: MonitorReport | undefined): void {
+  if (!rep) return
+  const findings = rep.findings ?? []
+  if (findings.length > 0) {
+    lines.push('    - 調べたこと（所見と根拠）:')
+    for (const f of findings) {
+      lines.push(`        - [${f.category || '所見'}] ${f.summary || '(要約なし)'}`)
+      for (const e of f.evidence ?? []) lines.push(`            - 根拠: \`${e}\``)
+    }
+  }
+  if ((rep.tool_calls?.length ?? 0) > 0) {
+    lines.push(`    - 実行したツール: ${rep.tool_calls.map(c => `\`${c}\``).join(', ')}`)
+  }
+  if (rep.truncation_note) lines.push(`    - ※ 保存時に一部省略: ${rep.truncation_note}`)
+  if (rep.parse_error) lines.push(`    - ⚠ JSON 解析エラー: ${rep.parse_error}`)
+}
+
+function reportFor(reports: MonitorReport[], role: string, round: number): MonitorReport | undefined {
+  if (role === 'orchestrator' || role === 'integrator') return undefined
+  return reports.find(r => r.role === role && r.round === round) ?? reports.find(r => r.role === role)
 }
 
 function renderStage(lines: string[], st: StageBlock): void {
@@ -91,6 +117,7 @@ function renderStage(lines: string[], st: StageBlock): void {
       if (d.confidence != null) lines.push(`    - confidence: ${d.confidence.toFixed(2)}`)
       if (d.rationale) lines.push(`    - 理由: ${d.rationale}`)
       if (d.focus_hint) lines.push(`    - 次への観点: ${d.focus_hint}`)
+      emitMonitorReport(lines, reportFor(st.reports, role, d.round))
     }
     lines.push('')
   }
@@ -195,6 +222,7 @@ export function buildReasoningReport(result: AnalysisResult): string {
         confidence: s.confidence,
         candidates: s.root_cause_candidates ?? [],
         actions: s.recommended_actions ?? [],
+        reports: s.monitor_reports ?? [],
       })
     }
   } else {
@@ -207,6 +235,7 @@ export function buildReasoningReport(result: AnalysisResult): string {
       confidence: result.confidence,
       candidates: result.root_cause_candidates ?? [],
       actions: result.recommended_actions ?? [],
+      reports: result.monitor_reports ?? [],
     })
   }
 

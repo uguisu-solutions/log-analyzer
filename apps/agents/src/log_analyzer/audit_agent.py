@@ -18,14 +18,18 @@ Claude 系で動いた構成4 (rally) の結論を **独立した別モデル (G
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
+from datetime import datetime, timezone
 
 import openai
 
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.schema import AnalysisResult, AuditReport
+from log_analyzer.tracing import get_client, usage_for
 
+_logger = logging.getLogger("uvicorn.error")
 
 _DEFAULT_AUDIT_MODEL = "gpt-5.5"
 
@@ -208,6 +212,42 @@ def _build_user_input(
     return "\n".join(parts)
 
 
+def _emit_generation(
+    trace_id: str | None,
+    *,
+    model: str,
+    user_input: str,
+    output: str,
+    tokens_in: int,
+    tokens_out: int,
+    started_at: datetime,
+    ended_at: datetime,
+    status_message: str | None = None,
+) -> None:
+    """監査 1 回分を Langfuse の Generation として記録する (確認事項 B-1)。
+
+    監査は rally のトレース生成後に別実行されるため、``trace_id`` を指定して
+    既存トレースにぶら下げる。監査は補助機能なので、記録に失敗しても
+    本流 (AuditReport の返却) は止めない。
+    """
+    if not trace_id:
+        return
+    try:
+        get_client().generation(
+            trace_id=trace_id,
+            name=f"{model}-audit",
+            model=model,
+            input=user_input[:2000],
+            output=output,
+            usage=usage_for(model, tokens_in, tokens_out),
+            start_time=started_at,
+            end_time=ended_at,
+            **({"level": "WARNING", "status_message": status_message} if status_message else {}),
+        )
+    except Exception as e:  # noqa: BLE001 — 記録失敗で監査結果を捨てない
+        _logger.warning("[audit] Langfuse への generation 記録に失敗: %s", e)
+
+
 def run_audit(
     log_text: str,
     topology_context: dict | None,
@@ -216,11 +256,16 @@ def run_audit(
     model: str | None = None,
     system_prompt: str | None = None,
     bq_evidence: list[dict] | None = None,
+    trace_id: str | None = None,
 ) -> AuditReport:
     """同期的に GPT 監査を 1 回実行し、AuditReport を返す。
 
     ``system_prompt`` を渡すと既定の :data:`SYSTEM_PROMPT` の代わりに使う
     (UI から監査プロンプトを編集する用途)。空文字 / None なら既定にフォールバック。
+
+    ``trace_id`` を渡すと、監査の入出力・トークン・所要時間を Langfuse の
+    Generation としてそのトレースに記録する (確認事項 B-1)。省略時は記録しない
+    (CLI / 単体テスト用)。
 
     API キーが無い等で例外が出た場合は ``verdict='uncertain'`` の
     フォールバック AuditReport を返し、上層には伝播させない。監査は
@@ -237,6 +282,8 @@ def run_audit(
         )
 
     started = time.perf_counter()
+    started_at = datetime.now(timezone.utc)
+    user_input = _build_user_input(log_text, topology_context, analysis_result, bq_evidence)
     try:
         client = openai.OpenAI()
         # GPT-5.x は Responses API + reasoning.effort / text.verbosity が推奨
@@ -245,7 +292,7 @@ def run_audit(
         response = client.responses.create(
             model=chosen_model,
             instructions=sys_prompt,
-            input=_build_user_input(log_text, topology_context, analysis_result, bq_evidence),
+            input=user_input,
             max_output_tokens=4000,
             reasoning={"effort": "low"},
             text={"verbosity": "low"},
@@ -272,6 +319,17 @@ def run_audit(
         summary = str(parsed.get("summary") or "").strip()
         if parse_error:
             summary = (summary + f" [parse_error: {parse_error[:120]}]").strip()
+        _emit_generation(
+            trace_id,
+            model=chosen_model,
+            user_input=user_input,
+            output=raw,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            started_at=started_at,
+            ended_at=datetime.now(timezone.utc),
+            status_message=f"parse_error: {parse_error[:200]}" if parse_error else None,
+        )
         return AuditReport(
             verdict=verdict,
             confidence=float(parsed.get("confidence") or 0.0),
@@ -284,6 +342,18 @@ def run_audit(
             latency_ms=latency_ms,
         )
     except Exception as e:
+        # 失敗も Generation として残す (何も出ないと「監査が動いたか」すら追えないため)
+        _emit_generation(
+            trace_id,
+            model=chosen_model,
+            user_input=user_input,
+            output="",
+            tokens_in=0,
+            tokens_out=0,
+            started_at=started_at,
+            ended_at=datetime.now(timezone.utc),
+            status_message=f"audit failed: {str(e)[:200]}",
+        )
         return AuditReport(
             verdict="uncertain",
             confidence=0.0,

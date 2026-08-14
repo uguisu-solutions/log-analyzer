@@ -15,6 +15,7 @@ import { ChatHistoryView } from './ChatHistoryView'
 import { CombinedResultView, ResultTabs, StageResultView } from './ConfigLogAnalysis'
 import { DelegationHistoryView } from './DelegationHistoryView'
 import { EvaluationPanel } from './EvaluationPanel'
+import { plannerUsage } from './PolicySummaryView'
 import { RoundMetricsView } from './RoundMetricsView'
 import { ViewModeToggle } from './ViewModeToggle'
 import { buildReasoningReport, downloadText } from './reasoningReport'
@@ -24,6 +25,8 @@ import type {
   AnalysisHistoryListResponse,
   AnalysisHistorySummary,
   ReanalyzeSeed,
+  RunHistoryEntry,
+  RunHistoryListResponse,
   StageOutput,
   SuspectedNodeFinding,
   TopologyDef,
@@ -50,6 +53,13 @@ function formatLatency(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+// 失敗・中断した実行の結末 (確認事項 B-4)。解析履歴の表に混ぜて表示する。
+const FAILED_STATUS_LABEL: Record<string, string> = {
+  error: 'エラー',
+  aborted: '中断',
+  rejected: '方針却下',
+}
+
 const SOURCE_LABEL: Record<string, string> = {
   config: 'config のみ',
   log: 'log のみ',
@@ -72,6 +82,9 @@ function modeText(e: { analysis_mode: string | null; single_source: string | nul
 
 export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
   const [entries, setEntries] = useState<AnalysisHistorySummary[]>([])
+  // 失敗・中断した実行 (確認事項 B-4)。結果が無いので解析履歴には保存されず、
+  // 実行履歴 (run_history) 側にだけ残る。同じ表に日時順で混ぜて表示する。
+  const [failedRuns, setFailedRuns] = useState<RunHistoryEntry[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -103,6 +116,17 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
       const data: AnalysisHistoryListResponse = await r.json()
       setEntries(data.entries)
       setTotal(data.total)
+      // 失敗・中断した実行も併せて取得し、同じ表に混ぜる (確認事項 B-4)。
+      // モード絞り込み中は該当情報を持たないので取得しない。
+      if (filterMode) {
+        setFailedRuns([])
+      } else {
+        const rf = await apiFetch(`${API_BASE}/api/runs/history?status=failed&limit=200`)
+        if (rf.ok) {
+          const fd: RunHistoryListResponse = await rf.json()
+          setFailedRuns(fd.entries)
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -175,6 +199,42 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
     })
   }
 
+  // ─── 失敗した実行を同じ表に混ぜる (確認事項 B-4) ─────────────
+  // 解析グループ (成功) と失敗行を日時降順で 1 本のリストにする。
+  // 失敗行は結果が無いため詳細へは遷移させない (行はクリック不可)。
+  const visibleFailedRuns = useMemo(() => {
+    if (!debouncedQ) return failedRuns
+    const q = debouncedQ.toLowerCase()
+    return failedRuns.filter(f =>
+      `${f.error_message ?? ''} ${f.error_stage ?? ''} ${f.log_name}`.toLowerCase().includes(q),
+    )
+  }, [failedRuns, debouncedQ])
+
+  type Row =
+    | { kind: 'group'; date: string; group: (typeof groups)[number] }
+    | { kind: 'failed'; date: string; run: RunHistoryEntry }
+  const rows: Row[] = useMemo(() => {
+    const merged: Row[] = [
+      ...groups.map(g => ({ kind: 'group' as const, date: g.latest.created_at, group: g })),
+      ...visibleFailedRuns.map(f => ({ kind: 'failed' as const, date: f.started_at, run: f })),
+    ]
+    merged.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    return merged
+  }, [groups, visibleFailedRuns])
+
+  const handleDeleteFailed = async (id: number) => {
+    if (!confirm(`失敗した実行の記録 #${id} を削除しますか？`)) return
+    setError(null); setInfo(null)
+    try {
+      const r = await apiFetch(`${API_BASE}/api/runs/history/${id}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+      setInfo(`実行記録 #${id} を削除しました`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   // ─── 詳細ビュー (解析後画面の再現) ───────────────────────────
   if (detail) {
     return (
@@ -224,11 +284,14 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
       {info && <div className="info">{info}</div>}
 
       <div className="run-history-header">
-        <h3>解析履歴（{loading ? '...' : `${entries.length} / ${total} 件`}）</h3>
+        <h3>
+          解析履歴（{loading ? '...' : `${entries.length} / ${total} 件`}
+          {visibleFailedRuns.length > 0 && `　＋ 失敗・中断 ${visibleFailedRuns.length} 件`}）
+        </h3>
         {detailLoading && <span className="muted">詳細を読み込み中…</span>}
       </div>
 
-      {entries.length === 0 && !loading ? (
+      {rows.length === 0 && !loading ? (
         <div className="log-empty">
           {hasFilters
             ? 'フィルタ条件に一致する解析履歴がありません'
@@ -250,7 +313,40 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
               </tr>
             </thead>
             <tbody>
-              {groups.map(g => {
+              {rows.map(row => {
+                // 失敗・中断した実行 (確認事項 B-4)。結果が無いので詳細へは遷移させない。
+                if (row.kind === 'failed') {
+                  const f = row.run
+                  const status = f.status || 'error'
+                  return (
+                    <tr key={`failed-${f.id}`} className={`ah-failed-row status-${status}`}>
+                      <td className="date">{formatDate(f.started_at)}</td>
+                      <td className="ah-mode-cell">
+                        <span className={`run-status run-status-${status}`}>
+                          {FAILED_STATUS_LABEL[status] ?? status}
+                        </span>
+                      </td>
+                      <td className="numeric">-</td>
+                      <td className="numeric">
+                        {(f.tokens_in ?? 0).toLocaleString()} / {(f.tokens_out ?? 0).toLocaleString()}
+                      </td>
+                      <td className="numeric">-</td>
+                      <td><code className="small">{f.error_stage || '-'}</code></td>
+                      <td className="ah-summary-cell ah-failed-message">
+                        {f.error_message || '（詳細不明）'}
+                      </td>
+                      <td className="ah-actions">
+                        <div className="ah-actions-inner">
+                          <span className="muted small">結果なし</span>
+                          <button onClick={() => handleDeleteFailed(f.id)} className="btn-small btn-delete">
+                            削除
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                }
+                const g = row.group
                 const expanded = expandedRoots.has(g.root)
                 // 既定表示 = 最新 (maxRev) と 1 つ前 (maxRev-1)。それ未満はトグルで開閉。
                 const isDefaultVisible = (r: AnalysisHistorySummary) => (r.revision ?? 0) >= g.maxRev - 1
@@ -336,6 +432,8 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onR
   const qa = detail.request?.questionnaire_answers ?? {}
   const qconf = detail.request?.questionnaire_confidences ?? {}
   const traceUrl = langfuseHost && result?.trace_id ? `${langfuseHost}/trace/${result.trace_id}` : null
+  // 方針プランナーの消費量 (確認事項 A-2)。方針ゲート未使用の解析では null。
+  const planner = plannerUsage(result?.policy_proposal)
 
   // 表示モード (config-log 解析画面と同じ 標準/チャット 切替)。既定は「標準」。
   const [viewMode, setViewMode] = useState<'standard' | 'chat'>('standard')
@@ -389,8 +487,27 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onR
         <dt>解析日時</dt><dd>{formatDate(detail.created_at)}</dd>
         <dt>モード</dt><dd>{modeText(detail)}</dd>
         <dt>確信度</dt><dd>{result?.confidence?.toFixed(3) ?? '-'}</dd>
-        <dt>tokens (in / out)</dt><dd>{(result?.metrics?.tokens_in ?? 0).toLocaleString()} / {(result?.metrics?.tokens_out ?? 0).toLocaleString()}</dd>
-        <dt>レイテンシ</dt><dd>{formatLatency(result?.metrics?.latency_ms_total ?? null)}</dd>
+        <dt>tokens (in / out){planner ? '（本解析）' : ''}</dt>
+        <dd>{(result?.metrics?.tokens_in ?? 0).toLocaleString()} / {(result?.metrics?.tokens_out ?? 0).toLocaleString()}</dd>
+        <dt>レイテンシ{planner ? '（本解析）' : ''}</dt><dd>{formatLatency(result?.metrics?.latency_ms_total ?? null)}</dd>
+        {/* 方針プランナーは本解析の metrics に含まれない別枠の消費 (確認事項 A-2)。
+            既存の値の意味を変えないよう、合算せず別行 + 合計行で示す。 */}
+        {planner && (
+          <>
+            <dt>方針プランナー（別枠）</dt>
+            <dd>
+              {planner.tokensIn.toLocaleString()} / {planner.tokensOut.toLocaleString()} tok ·{' '}
+              {formatLatency(planner.latencyMs)}
+              {planner.model && <span className="muted small"> · {planner.model}</span>}
+            </dd>
+            <dt>合計（プランナー込み）</dt>
+            <dd>
+              {((result?.metrics?.tokens_in ?? 0) + planner.tokensIn).toLocaleString()} /{' '}
+              {((result?.metrics?.tokens_out ?? 0) + planner.tokensOut).toLocaleString()} tok ·{' '}
+              {formatLatency((result?.metrics?.latency_ms_total ?? 0) + planner.latencyMs)}
+            </dd>
+          </>
+        )}
         <dt>trace_id</dt><dd className="mono small">
           {traceUrl ? <a href={traceUrl} target="_blank" rel="noopener noreferrer" className="trace-link">{result.trace_id} ↗</a> : (result?.trace_id ?? '-')}
         </dd>
@@ -454,14 +571,18 @@ function AnalysisHistoryDetailView({ detail, langfuseHost, onBack, onDelete, onR
 
       {/* 監査所見は ChatHistoryView 内に会話として含まれる (重複回避のためここでは出さない) */}
 
-      {/* 委譲チェーン (各監視の rationale / focus_hint。評価が参照する推論の跡) */}
+      {/* 委譲チェーン (各監視の rationale / focus_hint。評価が参照する推論の跡)。
+          監視の根拠 (A-3) は標準表示なら結果ペインのセクション、チャット表示なら
+          各監視の発言に出るため、ここでは重複させない。 */}
       {result?.delegation_history && result.delegation_history.length > 0 && (
-        <DelegationHistoryView result={result} />
+        <DelegationHistoryView result={result} showMonitorEvidence={false} />
       )}
 
-      {/* ラウンド単位 metrics */}
-      {result?.round_metrics && result.round_metrics.length > 0 && (
-        <RoundMetricsView rounds={result.round_metrics} />
+      {/* ラウンド単位 metrics。標準表示では CombinedResultView / StageResultView が
+          既に描画しているため、ここで出すのはチャット表示のときだけ
+          （従来は標準表示で 2 つ並んで表示されていた）。 */}
+      {viewMode === 'chat' && result?.round_metrics && result.round_metrics.length > 0 && (
+        <RoundMetricsView rounds={result.round_metrics} planner={planner} />
       )}
 
       {/* 解答と比較評価 (真因到達度の 10 段階採点、履歴に紐付け)。

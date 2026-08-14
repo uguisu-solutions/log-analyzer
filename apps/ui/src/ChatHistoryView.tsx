@@ -12,11 +12,14 @@
  * - result.root_cause_candidates / recommended_actions: 最終結論
  * - result.audit_report: GPT 監査 (Phase C)
  */
+import { MonitorEvidenceView, findMonitorReport } from './MonitorEvidenceView'
+import { PlannerUsageLine } from './PolicySummaryView'
 import { RecommendedActionList } from './RecommendedActionList'
 import type {
   AnalysisResult,
   AuditReport,
   DelegationEvent,
+  MonitorReport,
   QuestionnaireAnswers,
   QuestionnaireConfidences,
   RecommendedAction,
@@ -65,6 +68,8 @@ interface ConversationArgs {
   candidates: RootCauseCandidate[]
   actions: RecommendedAction[]
   keyPrefix: string
+  // 監視ごとの調査根拠 (確認事項 A-3)。対応前の履歴では空。
+  reports: MonitorReport[]
 }
 
 function buildConversation(messages: React.ReactNode[], a: ConversationArgs): void {
@@ -83,6 +88,10 @@ function buildConversation(messages: React.ReactNode[], a: ConversationArgs): vo
     const speakerRole = d.kind === 'orchestrator_initial' ? 'orchestrator' : fromRole
     const speaker = roleLabel(speakerRole)
     const m = findMetricForRole(a.metrics, speakerRole, d.round)
+    // 監視の発言には、その監視の所見・根拠を折りたたみで添える (A-3)
+    const report = speakerRole === 'orchestrator'
+      ? null
+      : findMonitorReport(a.reports, d.round, speakerRole)
     messages.push(
       <ChatMessage key={`${a.keyPrefix}-ev-${i}`} sender={speakerRole === 'integrator' ? 'integrator' : 'agent'} speaker={speaker} tag={`round ${d.round}`} metric={m}>
         <p className="chat-arrow"><strong>{roleLabel(fromRole)}</strong> → <strong>{roleLabel(toRole)}</strong></p>
@@ -91,6 +100,7 @@ function buildConversation(messages: React.ReactNode[], a: ConversationArgs): vo
         {d.confidence != null && (
           <p className="chat-confidence muted">confidence {d.confidence.toFixed(2)}</p>
         )}
+        {report && <MonitorEvidenceView report={report} />}
       </ChatMessage>
     )
   })
@@ -204,12 +214,25 @@ export function ChatHistoryView({ result, questionnaireAnswers, questionnaireCon
   }
 
   // 2. 承認された解析方針 (Phase 2)。確認ゲートを使った場合のみ。
+  // 想定原因 (primary_hypotheses) と不足データ・前提 (missing_data_notes) も出す
+  // (確認事項 A-1: 従来はチャット・標準とも非表示で、レポート出力でしか追えなかった)。
   const policy = result.policy_proposal
   if (policy) {
+    const hypotheses = policy.primary_hypotheses ?? []
     const plan = policy.investigation_plan ?? []
+    const dataToUse = policy.data_to_use ?? []
+    const missing = (policy.missing_data_notes ?? '').trim()
     messages.push(
       <ChatMessage key="policy" sender="agent" speaker="方針プランナー" tag={policy.focus_edited ? '承認済み方針（観点修正あり）' : '承認済み方針'}>
         {policy.situation_summary && <p className="chat-rationale">現象: {policy.situation_summary}</p>}
+        {hypotheses.length > 0 && (
+          <>
+            <p className="chat-section-title">想定される原因の方向性</p>
+            <ul className="chat-qa-list">
+              {hypotheses.map((h, i) => <li key={i}>{h}</li>)}
+            </ul>
+          </>
+        )}
         {plan.length > 0 && (
           <>
             <p className="chat-section-title">調査方針</p>
@@ -218,10 +241,26 @@ export function ChatHistoryView({ result, questionnaireAnswers, questionnaireCon
             </ol>
           </>
         )}
+        {dataToUse.length > 0 && (
+          <>
+            <p className="chat-section-title">使用するデータ</p>
+            <ul className="chat-qa-list">
+              {dataToUse.map((d, i) => <li key={i}>{d}</li>)}
+            </ul>
+          </>
+        )}
+        {missing && (
+          <>
+            <p className="chat-section-title">不足データ・前提</p>
+            <p className="chat-missing-data">{missing}</p>
+          </>
+        )}
         {policy.suggested_first_node && (
           <p className="chat-arrow">起点: <strong>{roleLabel(policy.suggested_first_node)}</strong></p>
         )}
         {policy.focus && <p className="chat-focus">観点: {policy.focus}</p>}
+        {/* 方針プランナーの消費量 (確認事項 A-2)。本解析の metrics には含まれない別枠。 */}
+        <PlannerUsageLine policy={policy} />
       </ChatMessage>
     )
   }
@@ -242,6 +281,7 @@ export function ChatHistoryView({ result, questionnaireAnswers, questionnaireCon
         candidates: st.root_cause_candidates ?? [],
         actions: st.recommended_actions ?? [],
         keyPrefix: `s${si}`,
+        reports: st.monitor_reports ?? [],
       })
     })
   } else {
@@ -253,6 +293,7 @@ export function ChatHistoryView({ result, questionnaireAnswers, questionnaireCon
       candidates: result.root_cause_candidates,
       actions: result.recommended_actions,
       keyPrefix: 'top',
+      reports: result.monitor_reports ?? [],
     })
   }
 

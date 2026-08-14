@@ -18,6 +18,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from log_analyzer import evidence_grounding
@@ -26,21 +27,34 @@ from log_analyzer.rally.integrator import integrator_node
 from log_analyzer.rally.monitors import MONITOR_FNS
 from log_analyzer.rally.orchestrator import orchestrator_select_first
 from log_analyzer.schema import (
+    SCHEMA_VERSION,
     AnalysisResult,
     ConfigId,
     DelegationEventDTO,
     GraphEdge,
     GraphNode,
     Metrics,
+    MonitorFinding,
+    MonitorReport,
     RecommendedAction,
     RootCauseCandidate,
     RoundMetrics,
     SuspectedNodeFinding,
 )
-from log_analyzer.tracing import flush, get_client, usage_for
+from log_analyzer.tracing import cost_usd, flush, get_client, usage_for
 
 # uvicorn 起動時にコンソールへ確実に出るよう uvicorn のロガーに載せる。
 _logger = logging.getLogger("uvicorn.error")
+
+# ─── 監視ノードの調査根拠 (確認事項 A-3) の保存上限 ─────────────────
+# findings / evidence は解析結果 JSON (analysis_history.result_json) に保存される。
+# evidence はモデルが引用した **ログ本文そのもの** なので、無制限に残すと
+# 履歴 DB の肥大と機微データの保持量増加につながる。通常の解析はこの範囲に
+# 収まる想定で、超えた分は切り詰めて ``truncation_note`` に記録する。
+_MAX_FINDINGS_PER_MONITOR = 10
+_MAX_EVIDENCE_PER_FINDING = 5
+_MAX_EVIDENCE_CHARS = 500
+_MAX_TOOL_CALLS = 20
 
 # decision_waiter コールバックの戻り値型:
 #   {"action": "continue", "extend_by": int}  rally_max_rounds を +extend_by 延長して再開
@@ -156,6 +170,33 @@ def _build_execution_graph(
     return nodes, edges
 
 
+def _round_metric(entry: dict, round_no: int, role: str) -> RoundMetrics:
+    """token_log の 1 エントリを RoundMetrics に変換する。
+
+    prompt caching の内訳と推定コストも載せる (確認事項 D-2 / C-1)。内訳が無いと
+    後からコストを再計算できず、キャッシュ効果も見えないため。
+    """
+    model = str(entry.get("model") or "")
+    tokens_in = int(entry.get("tokens_in") or 0)
+    tokens_out = int(entry.get("tokens_out") or 0)
+    cache_creation = int(entry.get("cache_creation") or 0)
+    cache_read = int(entry.get("cache_read") or 0)
+    return RoundMetrics(
+        round=round_no,
+        role=role,
+        model=model,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        latency_ms=int(entry.get("latency_ms") or 0),
+        cache_creation=cache_creation,
+        cache_read=cache_read,
+        cost_usd=cost_usd(
+            model, tokens_in, tokens_out,
+            cache_creation=cache_creation, cache_read=cache_read,
+        ),
+    )
+
+
 def _build_round_metrics(token_log: list[dict]) -> list[RoundMetrics]:
     """token_log を round 順に並べた per-round metrics を返す (Phase D)。
 
@@ -165,39 +206,97 @@ def _build_round_metrics(token_log: list[dict]) -> list[RoundMetrics]:
     # orchestrator (round=0)
     for entry in token_log:
         if entry.get("role") == "orchestrator":
-            out.append(RoundMetrics(
-                round=0,
-                role="orchestrator",
-                model=str(entry.get("model") or ""),
-                tokens_in=int(entry.get("tokens_in") or 0),
-                tokens_out=int(entry.get("tokens_out") or 0),
-                latency_ms=int(entry.get("latency_ms") or 0),
-            ))
+            out.append(_round_metric(entry, 0, "orchestrator"))
     # 監視 (round >= 1)
     monitors = [e for e in token_log if e.get("role") not in {"orchestrator", "integrator"}]
     monitors_sorted = sorted(monitors, key=lambda e: int(e.get("round") or 0))
     for entry in monitors_sorted:
-        out.append(RoundMetrics(
-            round=int(entry.get("round") or 0),
-            role=str(entry.get("role") or ""),
-            model=str(entry.get("model") or ""),
-            tokens_in=int(entry.get("tokens_in") or 0),
-            tokens_out=int(entry.get("tokens_out") or 0),
-            latency_ms=int(entry.get("latency_ms") or 0),
-        ))
+        out.append(_round_metric(entry, int(entry.get("round") or 0), str(entry.get("role") or "")))
     # integrator
     max_round = max((r.round for r in out), default=0)
     for entry in token_log:
         if entry.get("role") == "integrator":
-            out.append(RoundMetrics(
-                round=max_round + 1,
-                role="integrator",
-                model=str(entry.get("model") or ""),
-                tokens_in=int(entry.get("tokens_in") or 0),
-                tokens_out=int(entry.get("tokens_out") or 0),
-                latency_ms=int(entry.get("latency_ms") or 0),
-            ))
+            out.append(_round_metric(entry, max_round + 1, "integrator"))
     return out
+
+
+def _truncate(text: str, limit: int) -> tuple[str, bool]:
+    """``limit`` 文字で切り詰める。切り詰めたら末尾に … を付け、フラグを返す。"""
+    if len(text) <= limit:
+        return text, False
+    return text[:limit] + "…", True
+
+
+def _build_monitor_report(result: dict, *, round_no: int) -> MonitorReport:
+    """監視ノードの実行結果 (dict) を保存用 MonitorReport に変換する (確認事項 A-3)。
+
+    LLM 出力そのままの findings は形が揺れる (evidence が文字列 1 件だけ、
+    エントリが dict でない等) ため正規化し、上限で切り詰める。何を落としたかは
+    ``truncation_note`` に残して UI に「N 件省略」と出せるようにする。
+    """
+    raw_findings = result.get("findings") or []
+    if not isinstance(raw_findings, list):
+        raw_findings = []
+    notes: list[str] = []
+
+    if len(raw_findings) > _MAX_FINDINGS_PER_MONITOR:
+        notes.append(f"findings {len(raw_findings)} 件中 {_MAX_FINDINGS_PER_MONITOR} 件のみ保存")
+        raw_findings = raw_findings[:_MAX_FINDINGS_PER_MONITOR]
+
+    findings: list[MonitorFinding] = []
+    dropped_evidence = 0
+    truncated_evidence = 0
+    for entry in raw_findings:
+        if not isinstance(entry, dict):
+            # 稀に findings が文字列配列で返ることがある → summary 扱いで拾う
+            findings.append(MonitorFinding(summary=str(entry)))
+            continue
+        raw_ev = entry.get("evidence")
+        if isinstance(raw_ev, str):
+            raw_ev = [raw_ev]
+        elif not isinstance(raw_ev, list):
+            raw_ev = []
+        if len(raw_ev) > _MAX_EVIDENCE_PER_FINDING:
+            dropped_evidence += len(raw_ev) - _MAX_EVIDENCE_PER_FINDING
+            raw_ev = raw_ev[:_MAX_EVIDENCE_PER_FINDING]
+        evidence: list[str] = []
+        for ev in raw_ev:
+            text, cut = _truncate(str(ev), _MAX_EVIDENCE_CHARS)
+            truncated_evidence += 1 if cut else 0
+            evidence.append(text)
+        findings.append(
+            MonitorFinding(
+                category=str(entry.get("category") or ""),
+                summary=str(entry.get("summary") or ""),
+                evidence=evidence,
+            )
+        )
+    if dropped_evidence:
+        notes.append(f"evidence {dropped_evidence} 件を省略")
+    if truncated_evidence:
+        notes.append(f"evidence {truncated_evidence} 件を {_MAX_EVIDENCE_CHARS} 字で切り詰め")
+
+    raw_calls = result.get("tool_calls_made") or []
+    if not isinstance(raw_calls, list):
+        raw_calls = []
+    tool_calls = [str(c) for c in raw_calls]
+    if len(tool_calls) > _MAX_TOOL_CALLS:
+        notes.append(f"tool_calls {len(tool_calls)} 件中 {_MAX_TOOL_CALLS} 件のみ保存")
+        tool_calls = tool_calls[:_MAX_TOOL_CALLS]
+
+    return MonitorReport(
+        round=round_no,
+        role=str(result.get("role") or ""),
+        model=str(result.get("model") or ""),
+        confidence=float(result.get("confidence") or 0.0),
+        findings=findings,
+        tool_calls=tool_calls,
+        rationale=str(result.get("rationale") or ""),
+        focus_hint_received=str(result.get("focus_hint_received") or ""),
+        focus_hint_for_next=str(result.get("focus_hint_for_next") or ""),
+        truncation_note=" / ".join(notes),
+        parse_error=result.get("_parse_error"),
+    )
 
 
 def _build_analysis_result(
@@ -213,6 +312,7 @@ def _build_analysis_result(
     topology_node_ids: list[str] | None = None,
     log_text: str = "",
     bq_evidence: list[dict] | None = None,
+    monitor_reports: list[MonitorReport] | None = None,
 ) -> AnalysisResult:
     """final イベント用の AnalysisResult を組み立てる。"""
     total_in = sum(e["tokens_in"] for e in token_log)
@@ -220,7 +320,20 @@ def _build_analysis_result(
     per_call_latencies = sorted(e["latency_ms"] for e in token_log)
     p50 = per_call_latencies[len(per_call_latencies) // 2] if per_call_latencies else 0
 
+    # 推定コスト (確認事項 D-2)。従来は常に 0.0 で「当てにならない」値だった。
+    # 範囲は tokens と揃えて **本解析のみ** (orchestrator + 監視 + integrator)。
+    # 方針プランナー・監査GPT の分は policy_proposal / audit_report 側にあり、
+    # UI が別枠 + 合計として表示する (A-2 の判断と同じ整理)。
+    round_costs = _build_round_metrics(token_log)
+    total_cost = sum(r.cost_usd for r in round_costs if r.cost_usd is not None)
+    unpriced = sorted({r.model for r in round_costs if r.cost_usd is None and r.model})
+
     info_loss: list[str] = []
+    if unpriced:
+        # 0 を「無料」と誤読させないため、単価未登録のモデルがあることを残す
+        info_loss.append(
+            "cost_unpriced_models: " + ", ".join(unpriced) + "（このモデル分はコストに含まれません）"
+        )
     info_loss.append(f"delegation_rounds_completed: {rally_round} (max={rally_max_rounds})")
     visited = [d.get("to_node") for d in delegation_history if d.get("to_node")]
     info_loss.append("delegation_chain: " + " → ".join(["orchestrator", *visited]))
@@ -344,6 +457,7 @@ def _build_analysis_result(
         metrics=Metrics(
             tokens_in=total_in,
             tokens_out=total_out,
+            cost_usd=total_cost,
             latency_ms_total=wall_ms,
             latency_ms_p50=p50,
         ),
@@ -355,7 +469,8 @@ def _build_analysis_result(
         delegation_history=history_dtos,
         suspected_node_ids=suspected_node_ids,
         suspected_node_findings=suspected_node_findings,
-        round_metrics=_build_round_metrics(token_log),
+        round_metrics=round_costs,
+        monitor_reports=list(monitor_reports or []),
     )
 
 
@@ -403,6 +518,9 @@ async def run_rally_stream(
         "prompt_overrides": prompt_overrides or {},
         "model_overrides": model_overrides or {},
         "monitor_results": {},
+        # 各監視の調査根拠 (findings / evidence / tool_calls) を結果に残すための蓄積
+        # (確認事項 A-3)。monitor_results は「次の監視へ渡す参考材料」で用途が異なる。
+        "monitor_reports": [],
         "delegation_history": [],
         "token_log": [],
         "rally_round": 0,
@@ -435,7 +553,7 @@ async def run_rally_stream(
     trace = langfuse.trace(
         name="config4-rally",
         input={"log_ref": log_ref, "log_size_bytes": len(log_text)},
-        metadata={"config_id": ConfigId.CONFIG4.value, "schema_version": "v0.1"},
+        metadata={"config_id": ConfigId.CONFIG4.value, "schema_version": SCHEMA_VERSION},
     )
     trace_id = str(trace.id)
     wall_start = time.perf_counter()
@@ -444,6 +562,9 @@ async def run_rally_stream(
 
     # ─── 1. Orchestrator (初回 1 回のみ) ─────────────────────────
     yield StreamEvent("orchestrator_start", {})
+    # 確認事項 B-3: Langfuse の Generation に渡す開始/終了の絶対時刻。
+    # ノード側は perf_counter による経過時間しか持たないため、呼び出し側で取る。
+    orch_started_at = datetime.now(timezone.utc)
     try:
         orch = await _run_sync(orchestrator_select_first, state)
     except Exception as e:
@@ -461,6 +582,9 @@ async def run_rally_stream(
             "latency_ms": orch["latency_ms"],
             "input": orch["user_input"][:2000],
             "raw_output": orch["raw_output"],
+            "started_at": orch_started_at,
+            "ended_at": datetime.now(timezone.utc),
+            "parse_error": orch.get("parse_error"),
         }
     )
     first_event = {
@@ -644,6 +768,7 @@ async def run_rally_stream(
             state["current_node"] = "integrator"
             break
 
+        monitor_started_at = datetime.now(timezone.utc)
         try:
             result = await _run_sync(monitor_fn, state)
         except Exception as e:
@@ -665,6 +790,9 @@ async def run_rally_stream(
                 "input": result["user_input"][:2000],
                 "raw_output": result["raw_output"],
                 "round": next_round,
+                "started_at": monitor_started_at,
+                "ended_at": datetime.now(timezone.utc),
+                "parse_error": result.get("_parse_error"),
             }
         )
         # findings + confidence のみ monitor_results に残す（次監視への参考材料）
@@ -675,6 +803,8 @@ async def run_rally_stream(
         }
         if result.get("_parse_error"):
             state["monitor_results"][current]["_parse_error"] = result["_parse_error"]
+        # 調査根拠を結果に残す (確認事項 A-3)。上限で切り詰めて保存する。
+        state["monitor_reports"].append(_build_monitor_report(result, round_no=next_round))
         # BigQuery 取得実ログを監査の証拠として蓄積 (rally 本体へは再投入しない)
         if result.get("_bq_fetched"):
             state.setdefault("bq_evidence", []).extend(result["_bq_fetched"])
@@ -730,14 +860,20 @@ async def run_rally_stream(
     for record in _drain_appends(state, append_queue):
         yield StreamEvent("log_appended", record)
     yield StreamEvent("integrator_start", {})
+    integrator_started_at = datetime.now(timezone.utc)
     try:
         integ = await _run_sync(integrator_node, state)
     except Exception as e:
         yield StreamEvent("error", {"stage": "integrator", "message": str(e)})
         return
 
-    state["token_log"].append(integ["token_log_entry"])
     integrator_result = integ["result"]
+    state["token_log"].append({
+        **integ["token_log_entry"],
+        "started_at": integrator_started_at,
+        "ended_at": datetime.now(timezone.utc),
+        "parse_error": integrator_result.get("_parse_error"),
+    })
     yield StreamEvent(
         "integrator_done",
         {
@@ -748,19 +884,29 @@ async def run_rally_stream(
     )
 
     # ─── 4. Langfuse へ全 generation を反映 ────────────────────
+    # 確認事項 B-3: start_time / end_time を渡さないと Langfuse の Latency が
+    # 0.00s のままになる (計装漏れ)。JSON パースに失敗したノードは WARNING で
+    # 印を付け、トレース上で「なぜフォールバックしたか」を追えるようにする。
     for entry in state["token_log"]:
-        trace.generation(
-            name=f"{entry['model']}-{entry['role']}"
+        gen_kwargs: dict[str, Any] = {
+            "name": f"{entry['model']}-{entry['role']}"
             + (f"-r{entry['round']}" if "round" in entry else ""),
-            model=entry["model"],
-            input=entry.get("input", "")[:2000],
-            output=entry.get("raw_output", ""),
-            usage=usage_for(
+            "model": entry["model"],
+            "input": entry.get("input", "")[:2000],
+            "output": entry.get("raw_output", ""),
+            "usage": usage_for(
                 entry["model"], entry["tokens_in"], entry["tokens_out"],
                 cache_creation=entry.get("cache_creation", 0),
                 cache_read=entry.get("cache_read", 0),
             ),
-        )
+        }
+        if entry.get("started_at"):
+            gen_kwargs["start_time"] = entry["started_at"]
+            gen_kwargs["end_time"] = entry.get("ended_at")
+        if entry.get("parse_error"):
+            gen_kwargs["level"] = "WARNING"
+            gen_kwargs["status_message"] = f"parse_error: {str(entry['parse_error'])[:200]}"
+        trace.generation(**gen_kwargs)
 
     wall_ms = int((time.perf_counter() - wall_start) * 1000)
     topology_node_ids: list[str] = []
@@ -782,6 +928,7 @@ async def run_rally_stream(
         topology_node_ids=topology_node_ids or None,
         log_text=state["log_text"],
         bq_evidence=state.get("bq_evidence"),
+        monitor_reports=state.get("monitor_reports"),
     )
 
     # ソースツールが使われていれば、参照記録を SourceContext として結果に載せる
@@ -798,6 +945,8 @@ async def run_rally_stream(
                     log_text, topology_context, result,
                     system_prompt=audit_system_prompt,
                     bq_evidence=state.get("bq_evidence"),
+                    # 監査もこのトレースに Generation として残す (確認事項 B-1)
+                    trace_id=trace_id,
                 )
             )
         except Exception as e:

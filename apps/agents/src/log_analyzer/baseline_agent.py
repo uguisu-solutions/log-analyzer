@@ -14,6 +14,7 @@ import time
 import anthropic
 
 from log_analyzer.schema import (
+    SCHEMA_VERSION,
     AnalysisResult,
     ConfigId,
     GraphEdge,
@@ -71,7 +72,7 @@ def run_baseline(
     trace = langfuse.trace(
         name="config1-baseline",
         input={"log_ref": log_ref, "log_size_bytes": len(log_text)},
-        metadata={"config_id": ConfigId.CONFIG1.value, "schema_version": "v0.1"},
+        metadata={"config_id": ConfigId.CONFIG1.value, "schema_version": SCHEMA_VERSION},
     )
 
     started = time.perf_counter()
