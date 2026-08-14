@@ -22,7 +22,6 @@ import { AuditReportView } from './AuditReportView'
 import { ChatHistoryView } from './ChatHistoryView'
 import { ChatInput } from './ChatInput'
 import { ConfirmationModal } from './ConfirmationModal'
-import { costBreakdown, formatCost } from './cost'
 import { PolicyProposalModal } from './PolicyProposalModal'
 import { PolicySummaryView, plannerUsage } from './PolicySummaryView'
 import { DelegationHistoryView } from './DelegationHistoryView'
@@ -1459,8 +1458,6 @@ interface CombinedResultViewProps {
 
 export function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTwoOutput, topology, langfuseHost }: CombinedResultViewProps) {
   const traceUrl = langfuseHost ? `${langfuseHost}/trace/${result.trace_id}` : null
-  // 推定コスト (確認事項 D-2)。本解析 + プランナー + 監査の内訳を持つ。
-  const cost = costBreakdown(result)
   return (
     <>
       <div className="summary-grid">
@@ -1471,21 +1468,6 @@ export function CombinedResultView({ result, isTwoStage, stageOneOutput, stageTw
         <div className="summary-card">
           <div className="summary-label">トークン合計 (in/out)</div>
           <div className="summary-value">{result.metrics.tokens_in.toLocaleString()} / {result.metrics.tokens_out.toLocaleString()}</div>
-        </div>
-        <div className="summary-card">
-          <div className="summary-label">推定コスト{cost.total != null && cost.total !== cost.main ? '（合計）' : ''}</div>
-          <div className="summary-value">{formatCost(cost.total)}</div>
-          {cost.main != null && (cost.planner != null || cost.audit != null) && (
-            <div className="summary-sub muted small">
-              本解析 {formatCost(cost.main)}
-              {cost.planner != null && ` ／ プランナー ${formatCost(cost.planner)}`}
-              {cost.audit != null && ` ／ 監査 ${formatCost(cost.audit)}`}
-            </div>
-          )}
-          {cost.main == null && <div className="summary-sub muted small">対応前の解析（未計算）</div>}
-          {cost.unpricedNote && (
-            <div className="summary-sub muted small">⚠ {cost.unpricedNote}</div>
-          )}
         </div>
         <div className="summary-card">
           <div className="summary-label">合計レイテンシ</div>

@@ -4183,19 +4183,6 @@ code {
   margin: 0 0 0.6rem;
 }
 
-/* コスト表示 (確認事項 D-2)。サマリカードの内訳とラウンド別のコスト列。 */
-.summary-card .summary-sub {
-  margin-top: 0.2rem;
-  line-height: 1.35;
-}
-.rm-cost {
-  white-space: nowrap;
-  text-align: right;
-}
-.rm-cache {
-  margin-top: 0.15rem;
-}
-
 /* ラウンド別リソース消費に足す方針プランナー行 (ラウンド外の消費)。 */
 .round-metrics-table .round-row.role-planner {
   background: #f4f1fa;

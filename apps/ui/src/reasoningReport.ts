@@ -6,7 +6,6 @@
  * 各ノードのラウンド・委譲先・理由・観点・confidence・モデル/トークン/レイテンシ
  * (round_metrics) を読みやすく並べる。2 段階解析では Stage ごとに展開する。
  */
-import { costBreakdown, formatCost } from './cost'
 import type {
   AnalysisResult,
   DelegationEvent,
@@ -175,15 +174,6 @@ export function buildReasoningReport(result: AnalysisResult): string {
   lines.push(`- 最終確信度: **${result.confidence.toFixed(2)}**`)
   lines.push(`- 合計トークン (in / out): ${result.metrics.tokens_in.toLocaleString()} / ${result.metrics.tokens_out.toLocaleString()}`)
   lines.push(`- 合計レイテンシ: ${(result.metrics.latency_ms_total / 1000).toFixed(1)}s`)
-  // 推定コスト (確認事項 D-2)。本解析 / プランナー / 監査の内訳付き。
-  const cost = costBreakdown(result)
-  if (cost.main != null) {
-    const parts = [`本解析 ${formatCost(cost.main)}`]
-    if (cost.planner != null) parts.push(`方針プランナー ${formatCost(cost.planner)}`)
-    if (cost.audit != null) parts.push(`GPT監査 ${formatCost(cost.audit)}`)
-    lines.push(`- 推定コスト: **${formatCost(cost.total)}**（${parts.join(' / ')}）`)
-    if (cost.unpricedNote) lines.push(`    - ⚠ ${cost.unpricedNote}`)
-  }
   if (result.trace_id) lines.push(`- trace_id: ${result.trace_id}`)
   // 証拠グラウンディング (グループ2-b) の結果を概要に出す。info_loss_flags に
   // backend が入れた evidence_grounding / ungrounded_evidence 行を拾って表示。

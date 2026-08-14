@@ -7,7 +7,6 @@
  * 比較ベンチマークで計算したくなったら別途追加)。
  */
 import { useMemo } from 'react'
-import { estimateCost, formatCost } from './cost'
 import type { PlannerUsage } from './PolicySummaryView'
 import type { RoundMetrics } from './types'
 
@@ -34,7 +33,6 @@ export function RoundMetricsView({ rounds, planner }: Props) {
     const t_in = rounds.reduce((s, r) => s + r.tokens_in, 0)
     const t_out = rounds.reduce((s, r) => s + r.tokens_out, 0)
     const lat = rounds.reduce((s, r) => s + r.latency_ms, 0)
-    const costs = rounds.map(r => r.cost_usd).filter((v): v is number => v != null)
     // バーの尺度はプランナー行も含めて揃える (プランナーだけ突出/潰れないように)
     const tokenValues = rounds.map(r => r.tokens_in + r.tokens_out)
     const latencyValues = rounds.map(r => r.latency_ms)
@@ -43,10 +41,7 @@ export function RoundMetricsView({ rounds, planner }: Props) {
       latencyValues.push(planner.latencyMs)
     }
     return {
-      totals: {
-        in: t_in, out: t_out, latency: lat,
-        cost: costs.length > 0 ? costs.reduce((a, b) => a + b, 0) : null,
-      },
+      totals: { in: t_in, out: t_out, latency: lat },
       maxTokens: Math.max(1, ...tokenValues),
       maxLatency: Math.max(1, ...latencyValues),
     }
@@ -61,7 +56,6 @@ export function RoundMetricsView({ rounds, planner }: Props) {
         <span className="round-metrics-totals muted">
           計 tokens: {totals.in.toLocaleString()} in / {totals.out.toLocaleString()} out ·
           {' '}計 latency: {(totals.latency / 1000).toFixed(1)}s · {rounds.length} ステップ
-          {totals.cost != null && <> · 計コスト: {formatCost(totals.cost)}</>}
           {planner && (
             <>
               {' '}／ プランナー込み: {(totals.in + planner.tokensIn).toLocaleString()} in /
@@ -79,7 +73,6 @@ export function RoundMetricsView({ rounds, planner }: Props) {
             <th>model</th>
             <th>tokens (in/out)</th>
             <th>latency (s)</th>
-            <th>コスト</th>
           </tr>
         </thead>
         <tbody>
@@ -113,9 +106,6 @@ export function RoundMetricsView({ rounds, planner }: Props) {
                   <span className="rm-bar-text">{(planner.latencyMs / 1000).toFixed(2)}s</span>
                 </div>
               </td>
-              <td className="rm-cost numeric">
-                {formatCost(estimateCost(planner.model, planner.tokensIn, planner.tokensOut))}
-              </td>
             </tr>
           )}
           {rounds.map((r, i) => {
@@ -134,14 +124,6 @@ export function RoundMetricsView({ rounds, planner }: Props) {
                       {r.tokens_in.toLocaleString()} / {r.tokens_out.toLocaleString()}
                     </span>
                   </div>
-                  {/* prompt caching の内訳 (確認事項 D-2/C-1)。キャッシュ読み出しは
-                      1/10 単価なので、コストの内訳としてここに出す。 */}
-                  {(r.cache_read ?? 0) + (r.cache_creation ?? 0) > 0 && (
-                    <div className="rm-cache muted small">
-                      cache 読出 {(r.cache_read ?? 0).toLocaleString()}
-                      {(r.cache_creation ?? 0) > 0 && ` / 書込 ${(r.cache_creation ?? 0).toLocaleString()}`}
-                    </div>
-                  )}
                 </td>
                 <td className="rm-latency">
                   <div className="rm-bar-cell">
@@ -149,7 +131,6 @@ export function RoundMetricsView({ rounds, planner }: Props) {
                     <span className="rm-bar-text">{(r.latency_ms / 1000).toFixed(2)}s</span>
                   </div>
                 </td>
-                <td className="rm-cost numeric">{formatCost(r.cost_usd)}</td>
               </tr>
             )
           })}
