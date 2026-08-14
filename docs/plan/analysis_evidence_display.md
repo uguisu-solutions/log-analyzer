@@ -229,7 +229,28 @@ grep）を追加して再発を防ぐ。既存トレースの metadata は書き
 UI 側の単価表（`cost.ts`）は `tracing.py` と揃える必要がある（プランナー・監査の
 別枠算出に使う。本解析の値はバックエンドの計算結果をそのまま表示）。
 
-## 6. 対応しない項目
+## 6. 本番反映
+
+手順は [deploy-runbook.md](../deploy-runbook.md) の **STEP 7（更新リリース）** に従う。
+本改修に固有の要点:
+
+- **DB 変更は B-4 の 1 件のみ**（`run_history` に `status` / `error_stage` / `error_message`）。
+  maxScale=10 のため、`init_db()` 任せにせず **Cloud SQL 側で先に `ALTER TABLE ... IF NOT EXISTS`
+  を流す**（STEP 7-2）。他の追加（`monitor_reports` / `delegation_max_rounds` / `cost_usd` /
+  キャッシュ内訳）はすべて `result_json` 内の JSON 拡張で、DDL 不要。
+- 新しい環境変数は無い。
+- **フロントは手動デプロイ**（STEP 7-4）。出さないと今回の表示改善は画面に現れない。
+- 反映後の確認（1 解析を流して）:
+  - [ ] 「承認済み解析方針」に想定原因・不足データが出る（A-1）
+  - [ ] 「監視ノードの調査根拠」に所見・根拠・実行ツールが出る（A-3）
+  - [ ] 委譲チェーン履歴が「上限 N」（0 でない）（D-1）
+  - [ ] Langfuse に `policy-planner` / `gpt-5.5-audit` の Generation が出て、Latency が 0.00s でない（B-1 / B-3）
+  - [ ] Langfuse の trace metadata が `schema_version: v0.2`（D-3）
+  - [ ] 入力チェックのエラーを 1 回起こすと、解析履歴の表に「エラー」行が出る（B-4）
+- **既存データは遡らない**。監視の根拠・コスト・委譲上限は反映後の解析から入り、
+  それ以前の履歴は「対応前の解析」と表示される。
+
+## 7. 対応しない項目
 
 | 項目 | 判断 |
 |---|---|
