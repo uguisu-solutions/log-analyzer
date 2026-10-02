@@ -8,6 +8,10 @@
 > 同ブランチには開発カーネル・ガードレールの整備のみ入っている）。
 > 未確定の論点は無い（§12）。**Phase 1 から着手可能**で、Phase 1・2 は GPU もローカルサーバも不要。
 >
+> **推論基盤は Ollama**（2026-10-02 決定）。実機 0.34.2 に対して
+> OpenAI 互換 / 構造化出力 / tool-use / コンテキスト長の挙動を**実測して設計に反映済み**
+> （§5 / §6-2 / §7-1 / §9-5）。
+>
 > **目的は「クラウドをローカルに置き換えること」ではなく「SLM を検証できる状態にすること」**。
 > この一点が設計全体の向きを決めている（§0）。
 
@@ -33,7 +37,8 @@ SLM 対応はその性格をそのまま引き継ぎ、**既存の構成軸に�
 
 | 論点 | 状態 |
 |---|---|
-| 実行環境 | Windows 11 + NVIDIA GeForce RTX 4070 Ti SUPER。vLLM は Windows ネイティブ非対応のため **WSL2 + CUDA** か **llama.cpp / Ollama**（ネイティブ）の二択 |
+| 実行環境 | Windows 11 + NVIDIA GeForce RTX 4070 Ti SUPER |
+| **推論基盤** | **Ollama（確定・2026-10-02）**。実機で **0.34.2 が稼働中**、モデル 5 件導入済み（§9-5）。vLLM は Windows ネイティブ非対応で WSL2 が必要になるため当面採らない。将来の選択肢としては §4 のプロバイダ差し替えで入れられる |
 | **使用可能 VRAM** | **専用 16GB**（RTX 4070 Ti SUPER の仕様値）。タスクマネージャの「GPU メモリ」は専用 16GB ＋ 共有（システム RAM の間借り）の合計表示であり、**共有分は推論に使えない**（WDDM 経由でスピルすると vLLM は OOM、llama.cpp は大幅減速）。念のため確認するなら `nvidia-smi --query-gpu=memory.total --format=csv` |
 | システム RAM | 64GB（MoE の expert を CPU オフロードする余地がある） |
 | **SLM 化の動機** | **確定（2026-10-02）：SLM の検証**。コスト削減・閉域要件・レイテンシ改善はいずれも目的ではない。したがって **クラウドと SLM を同時に扱えること**（併存・ノード単位の切替・結果の突合）が最優先の要件になる |
@@ -70,8 +75,8 @@ SLM 対応はその性格をそのまま引き継ぎ、**既存の構成軸に�
 
 | 機能 | 使用箇所 | ローカルでの対応 |
 |---|---|---|
-| `system` をブロック配列 ＋ `cache_control: ephemeral` | planner / orchestrator / monitors / integrator（計 7 箇所） | vLLM の Automatic Prefix Caching（**プロンプト側の変更不要**。安定/動的ブロックの分離がそのまま効く） |
-| `tools` ＋ `stop_reason == "tool_use"` ＋ `tool_result` ブロック | `monitors._run_monitor_llm` のみ | OpenAI 互換の `tools` / `tool_calls` / `role: "tool"` へ変換（§5） |
+| `system` をブロック配列 ＋ `cache_control: ephemeral` | planner / orchestrator / monitors / integrator（計 7 箇所） | Ollama（llama.cpp）のプロンプトキャッシュに読み替え。**プロンプト側の変更は不要**だが、再利用されるのは直前のリクエストと先頭が一致する範囲に限られる。効くのは**同一監視の tool-use ループ内**（往復ごとにプレフィックスが伸びる）で、監視をまたぐ再利用は system が異なるため期待できない（§7-2） |
+| `tools` ＋ `stop_reason == "tool_use"` ＋ `tool_result` ブロック | `monitors._run_monitor_llm` のみ | Ollama の `tools` / `message.tool_calls` / `role: "tool"` へ変換（§5。実機確認済み） |
 | `usage` の 4 分解（`input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` / `output_tokens`） | [tracing.usage_components](../../apps/agents/src/log_analyzer/tracing.py) | `cache_*` は 0 埋め（§8） |
 | `response.content[0].text` | 各所（monitors は `_extract_text` で text ブロックのみ連結） | 正規化して文字列で返す（§4） |
 
@@ -137,64 +142,127 @@ def complete(
 async def acomplete(...) -> LlmResponse: ...          # multi_model / pipeline_runner 用
 ```
 
-- **入力の形は Anthropic 準拠**にする。9 箇所の呼び出しを書き換える量を最小にするため
+- **入力の形は Anthropic 準拠**にする。10 箇所の呼び出しを書き換える量を最小にするため
 - `model` 文字列の接頭辞でプロバイダを決める（`claude-*` → Anthropic / `gpt-*` → OpenAI /
-  `local:*` → OpenAI 互換エンドポイント）。`LLM_PROVIDER` でも全体を上書きできる
-- ローカルの接続先は `LOCAL_LLM_BASE_URL`（既定 `http://127.0.0.1:8000/v1`）/ `LOCAL_LLM_MODEL`
+  `ollama:*` → Ollama）。`ollama:qwen3:14b` のように**残り全部**を Ollama のモデルタグとして扱う
+  （最初のコロンだけで分割する）
+- 接続先は `OLLAMA_BASE_URL`（既定 `http://127.0.0.1:11434`）
+- **Ollama はネイティブ `/api/chat` を使う**（OpenAI 互換 `/v1` ではない）。理由は §7-1 の
+  `num_ctx` 問題。`/v1` でもリクエストは通るが**コンテキスト長を変えられず、長いログが黙って切られる**
+- 将来 vLLM を足す場合は `openai_compat` プロバイダとして横に追加する（この層の形は変えない）
 - **テストの差し替え点は `llm_client.complete` の 1 箇所**にする（22 → 1 箇所）
 
 > 検討したが採らない案：LangChain / LiteLLM の導入。依存が重く、
 > `cache_control` と tool-use ループの制御を取り戻すために結局ラッパを書くことになる。
 > 使っている Anthropic 固有機能が §2-2 の 4 つに限られるため、自前の薄い層で足りる。
 
-## 5. tool-use の変換
+## 5. tool-use の変換（実機確認済み）
 
 変換が必要なのは `monitors._run_monitor_llm` のループ 1 箇所のみ。
+下表の Ollama 側は **gemma4:e4b で実際に往復を確認した結果**である。
 
-| Anthropic | OpenAI 互換 |
+| Anthropic | Ollama `/api/chat` |
 |---|---|
 | `tools: [{name, description, input_schema}]` | `tools: [{type: "function", function: {name, description, parameters}}]` |
-| `stop_reason == "tool_use"` | `choices[0].finish_reason == "tool_calls"` |
-| assistant の `content` に `tool_use` ブロック | `message.tool_calls[].function.{name, arguments(JSON 文字列)}` |
-| user ロールで `tool_result` ブロックを返す | `role: "tool"` ＋ `tool_call_id` |
+| `stop_reason == "tool_use"` | `message.tool_calls` が存在するか（`done_reason` は `stop` のまま） |
+| assistant の `content` に `tool_use` ブロック | `message.tool_calls[].function.{name, arguments}` |
+| user ロールで `tool_result` ブロックを返す | `role: "tool"` のメッセージを積む |
 
 注意点：
 
-- `arguments` は**文字列**で返るためパースが必要。SLM は壊れた JSON を返すことがあるので、
-  パース失敗時はツール結果に「引数が不正」と返して再試行させる（`_MAX_TOOL_ITERATIONS = 6` の内側で回す）
+- **`arguments` の型がエンドポイントで違う**。ネイティブ `/api/chat` は**オブジェクト**で返るため
+  パース不要（確認済み: `{"host":"fw-01"}`）。OpenAI 互換 `/v1` は**JSON 文字列**で返る。
+  将来 vLLM を足すときは文字列側の処理が必要になるので、アダプタで両対応にしておく
+- 壊れた引数が返った場合はツール結果に「引数が不正」と返して再試行させる
+  （`_MAX_TOOL_ITERATIONS = 6` の内側で回す）
+- **`done_reason` でツール要求を判定しない**。Anthropic の `stop_reason == "tool_use"` に相当する
+  信号が無く、`tool_calls` の有無で判定する必要がある
 - ツール名は `bigquery_schema` / `bigquery_query` / `source_search` / `source_read` / `db_schema` の 5 つ。
   変換は [rally/tools.py](../../apps/agents/src/log_analyzer/rally/tools.py) と
   [rally/source_tools.py](../../apps/agents/src/log_analyzer/rally/source_tools.py) のスキーマ定義を
   機械変換するだけで済む（`input_schema` → `parameters` はキー名の差のみ）
+- ツール対応は**モデルの capabilities 依存**。`/api/tags` の `capabilities` に `tools` が無いモデル
+  （導入済みの `gemma3:12b` / `llama3` が該当）は監視ノードに使えない（§9-5）
 
-## 6. 構造化出力（SLM 化の成否を決める部分）
+## 6. モデル出力の扱い（構造化出力 / thinking）
 
-### 現状の問題
+### 6-1. 構造化出力（SLM 化の成否を決める部分）
+
+#### 現状の問題
 
 各ノードの出力スキーマは **プロンプト内の JSON 仕様としてしか存在しない**。Pydantic モデルは
 `AnalysisResult`（最終形）しか無く、`monitors` / `orchestrator` / `integrator` の中間出力は
 dict をそのまま扱っている。そのため「モデルが形を守る」ことに依存している。
 
-### 方針
+#### 方針
 
 1. **中間出力を Pydantic モデルにする**（新規、[schema.py](../../apps/agents/src/log_analyzer/schema.py)）
    - `OrchestratorDecision`（`first_node` / `focus_hint` / `rationale`）
    - `MonitorOutput`（`findings` / `tool_calls_made` / `confidence` / `next` / `focus_hint_for_next` / `rationale`）
    - `IntegratorOutput`（`root_cause_candidates` / `recommended_actions` / `confidence` / `suspected_nodes`）
    - **プロンプト中の JSON 仕様と二重管理にならないよう、プロンプトのスキーマ部分はモデルから生成する**
-2. ローカルでは `response_schema` を vLLM の `guided_json`（xgrammar / Outlines）へ渡し、
-   **文法で強制**する。クラウドでは従来どおりプロンプト指定（挙動不変）
+2. ローカルでは `response_schema` を Ollama の **`format` に JSON Schema として渡す**（実機確認済み:
+   `format` に enum 付きスキーマを与えると、その形の JSON だけが返る）。
+   クラウドでは従来どおりプロンプト指定（挙動不変）
 3. 効果
    - `safe_extract_json` のフォールバック（監視スキップ）が**原理的に発生しなくなる**
    - 前置きの地の文が出なくなるため**出力トークンが減る**（`_MONITOR_MAX_TOKENS` の実効値が下がり、
      ローカルの生成時間がそのまま縮む）
    - `_retry_if_not_json` の再生成が不要になる（コードは後方互換のため残す）
 
-> これは SLM 化と独立に価値がある改善なので、**Phase 3 はクラウドのままでも先行導入できる**。
+> これは SLM 化と独立に価値がある改善なので、**Phase 2 はクラウドのままでも先行導入できる**。
 
-## 7. コンテキスト予算の見直し
+### 6-2. thinking 出力の扱い（Ollama 固有・要対応）
 
-16GB 級の GPU で 32k コンテキストに収める場合、現状の予算は大きすぎる。
+導入済みモデルの多くが `thinking` capability を持つ（`deepseek-r1:32b` / `gemma4:e4b`）。
+実機で確認した挙動：
+
+- 思考部分は **`content` ではなく別フィールド**に入る（`/v1` では `message.reasoning`、
+  ネイティブでは `message.thinking`）。**`content` だけを読むこと**。
+  既存の `monitors._extract_text` と同じ発想（text ブロックだけ拾う）をそのまま適用する
+- **思考が出力トークンを大量に食う**。2 フィールドだけの JSON を得るのに
+  `completion_tokens = 477` を消費した（うち本文は約 20 トークン）。
+  `_MONITOR_MAX_TOKENS` を思考が食い切ると**本文が出ないまま打ち切られる**
+- **`think: false` で抑止できる**（`/api/chat` / `/v1` 双方で有効・確認済み）
+
+**決定**：解析ノードは既定 `think: false` とし、`LLM_THINK=1` で明示的に有効化できるようにする。
+思考を使う検証は「`think` あり / なし」をプロファイルの一軸として別途測る。
+
+## 7. コンテキスト長とコンテキスト予算
+
+### 7-1. `num_ctx` は Ollama 最大の落とし穴（実機確認済み）
+
+| 確認したこと | 結果 |
+|---|---|
+| Ollama の既定コンテキスト長 | **4,096**（`/api/ps` の `context_length` で確認） |
+| `/v1/chat/completions` から `num_ctx` / `options` を渡す | **効かない**。4,096 のまま |
+| ネイティブ `/api/chat` の `options.num_ctx` | **効く**。32,768 を指定して反映を確認 |
+
+このアプリは圧縮後でも数千〜数万トークンのログを送るため、**既定の 4,096 では入力が黙って切られる**。
+しかも切られたことはレスポンスに現れないので、**「SLM は精度が出ない」という誤った結論になる**。
+これが §4 で OpenAI 互換ではなくネイティブ `/api/chat` を採る理由である。
+
+**対策（実装に入れる）**：
+
+1. ローカル呼び出しでは `options.num_ctx` を必ず明示する（`OLLAMA_NUM_CTX`、既定 32768）
+2. 呼び出し後に `prompt_eval_count` を記録し、**送ったはずのトークン数と大きく乖離したら警告を出す**
+   （切り捨てを黙って通さないための検知）
+3. 起動時に `/api/ps` の `context_length` を読み、意図した値かを確認する手順を `README` に残す
+
+### 7-2. プロンプトキャッシュの効き方
+
+Ollama（llama.cpp）のプロンプトキャッシュは**直前のリクエストと先頭が一致する範囲**の再利用である。
+Anthropic の `cache_control` とは効く条件が異なる。
+
+- **効く**：同一監視の tool-use ループ内（往復ごとにプレフィックスが伸びるだけなので再利用される）
+- **効きにくい**：監視をまたぐ呼び出し（system プロンプトが監視ごとに違うため先頭から不一致）
+
+プロンプト側の構造（安定ブロック＋動的ブロック）は変えない。
+将来 vLLM に替えれば Automatic Prefix Caching でまたぎの再利用も効くようになる。
+
+### 7-3. コンテキスト予算
+
+`num_ctx = 32768` に収める前提では、現状の予算は大きすぎる。
 **ローカル時のみ既定値を下げる**（クラウド時は現状維持）。
 
 | 箇所 | 環境変数 | 現状 | ローカル時の推奨 |
@@ -212,11 +280,16 @@ dict をそのまま扱っている。そのため「モデルが形を守る」
 
 ## 8. 観測とコスト
 
-- `tracing.usage_components` はそのまま使える。ローカルは `cache_creation` / `cache_read` が無いので 0 を返す
+- `tracing.usage_components` はそのまま使える。Ollama の `/api/chat` が返す
+  `prompt_eval_count` → `input`、`eval_count` → `output` に写す。`cache_creation` / `cache_read` は 0
+- **`prompt_eval_count` は切り捨て検知にも使う**（§7-1 の対策 2）。観測のためだけでなく
+  「入力が本当に全部入ったか」の確認値として扱う
 - `tracing.cost_usd` は未収載モデルで `None` を返す既存挙動を利用し、**ローカルはコスト非表示**にする
   （0 円と表示すると「無料」と誤読されるため。GPU 時間は別軸）
+- **思考トークンを分けて記録する**（`eval_count` に含まれてしまうため）。`think: false` が既定なので
+  通常は 0 だが、thinking あり検証時に「本文に使われたトークン」と区別できないと比較が濁る
 - `prompt_slots.ANTHROPIC_MODELS` / `pipeline_runner.ALLOWED_MODELS` にローカルモデルを追加し、
-  **UI からノード単位で切り替えられる**ようにする（ハイブリッド検証の operation がこれで回る）
+  **UI からノード単位で切り替えられる**ようにする（検証プロファイルの operation がこれで回る）
 - Langfuse はモデル名が変わるだけで従来どおり動く
 
 ## 9. 検証の形（モデル軸の追加）
@@ -281,17 +354,34 @@ dict をそのまま扱っている。そのため「モデルが形を守る」
 - OFF で走らせたときの `safe_extract_json` フォールバック発生回数を記録し、
   「文法強制なしでは監視が何回スキップされたか」を定量化する
 
-### 9-5. モデル候補（専用 VRAM 16GB）
+### 9-5. モデル（導入済みの実態と追加が必要なもの）
 
-| 順位 | モデル | 置き方 | 備考 |
-|---|---|---|---|
-| 1 | Qwen3-30B-A3B-Instruct-2507 | llama.cpp Q4_K_M、expert の一部を RAM へ（`--n-cpu-moe`） | 活性 3B のため CPU オフロードの罰則が小さい。RAM 64GB が前提。プリフィルが重いので prefix caching が必須 |
-| 2 | Qwen3-14B | Q4_K_M 約 9GB を全部 VRAM、32k | 日本語・ツール・JSON のバランス最良。**最初に試すのはこれ**（全部 VRAM に載り、変数が少ない） |
-| 3 | gpt-oss-20b | MXFP4 約 12GB、128k | KV が軽く長文向き。vLLM は Ada 世代で MXFP4 非対応なので llama.cpp 経由 |
-| 補助 | Qwen3-8B | 余裕あり | `front-local` プロファイル用 |
+実機の `/api/tags` で確認した**現在の導入状況**（2026-10-02）:
 
-複数モデルを**同時常駐はできない**（16GB）。プロファイルを替えるたびにサーバを張り替える運用になる。
-`LOCAL_LLM_MODEL` の切替手順を `docs/` に残す。
+| モデル | パラメータ | 量子化 | サイズ | 宣言 ctx | tools | 本用途での評価 |
+|---|---|---|---|---|---|---|
+| `deepseek-r1:32b` | 32.8B | Q4_K_M | 19.9GB | 131k | ○ | **16GB に載らない**。CPU スピルで極端に遅くなる。検証の初手には不適 |
+| `gemma4:e4b` | 8.0B | Q4_K_M | 9.6GB | 131k | ○ | **現状で唯一そのまま使える**。tool-use / `format` / `think:false` を実機確認済み。ただし 8B 級で監視ノードには小さい |
+| `gemma3:12b` | 12.2B | Q4_K_M | 8.1GB | 131k | **×** | tools 非対応のため**監視ノードに使えない**。integrator など非ツールノード専用 |
+| `llama3:latest` | 8.0B | Q4_0 | 4.7GB | 8k | **×** | tools 非対応・ctx 8k。本用途では不適 |
+| `nomic-embed-text` | 137M | F16 | 0.3GB | 2k | — | 埋め込み専用。本件では未使用 |
+
+**追加が必要**：日本語＋ツール＋長文のバランスが取れた 14B 級が入っていない。
+Phase 3 の着手時に以下を取得する。
+
+```powershell
+ollama pull qwen3:14b     # 第一候補。Q4_K_M 約 9GB で全部 VRAM に載る
+ollama pull qwen3:8b      # front-local プロファイル用
+```
+
+- **最初に試すのは `qwen3:14b`**。全部 VRAM に載りオフロードの変数が無いため、
+  うまくいかなかったときに原因（モデルの力量か、設定か）を切り分けやすい
+- `gemma4:e4b` は**既に動くので Phase 3 の配線確認（疎通・tool-use・format）に使う**。
+  精度の検証は `qwen3:14b` を入れてから
+- `deepseek-r1:32b` は 16GB を超えるため、使うなら CPU オフロード前提。
+  §9-2 の検証が一巡してから「32B 級なら届くのか」を見る用途に回す
+- **複数モデルの同時常駐はできない**（16GB）。プロファイルを替えるたびにモデルが入れ替わるため、
+  `cloud` と `monitors-local` を**同時並行では走らせられない**（順番に実行して比較する）
 
 ## 10. フェーズ分割
 
@@ -299,7 +389,7 @@ dict をそのまま扱っている。そのため「モデルが形を守る」
 |---|---|---|
 | **1** | `llm_client.py` を新設し 10 箇所を寄せる。**振る舞いは不変**。テスト 22 箇所の差し替え点を `llm_client.complete` へ移行 | `node scripts/check.mjs` が緑（pytest 321 件を維持）。クラウドでの実行結果が従来と一致 |
 | **2** | 中間出力の Pydantic 化（§6）。**クラウドのまま**入れる。プロンプトのスキーマ部分をモデルから生成 | 既存の parse フォールバック経路に到達しなくなる。出力トークンの減少を計測 |
-| **3** | OpenAI 互換アダプタ（§5 の tool-use 変換）＋ `guided_json` の ON/OFF（§9-4）＋ ローカル起動手順 | ローカルモデルで構成1 が完走し `AnalysisResult` が返る。tool-use は単体テストでカバー |
+| **3** | Ollama アダプタ（`/api/chat`・§5 の tool-use 変換・`format` による構造化出力・`num_ctx` 明示・`think:false`）＋ `qwen3:14b` の取得 ＋ 起動とモデル切替の手順 | ローカルモデルで構成1 が完走し `AnalysisResult` が返る。tool-use と切り捨て検知は単体テストでカバー。`/api/ps` の実効 ctx が意図どおり |
 | **4** | **検証基盤**：許可モデルの追加・検証プロファイル（§9-2）・履歴へのモデル列追加（§9-3） | 同じログを `cloud` と `monitors-local` で走らせ、履歴一覧でプロファイル別に並べられる |
 | **5** | **検証の実施**：プロファイル横断の比較、コンテキスト予算の調整（§7）、結果を本ファイルに追記 | 真因到達度（手採点 ＋ `evaluation_agent`）・レイテンシ・フォールバック発生回数を記録 |
 
@@ -318,8 +408,8 @@ dict をそのまま扱っている。そのため「モデルが形を守る」
 | 変更 | `tests/test_{evaluation,langfuse_instrumentation,planner,rally_bigquery_tool,rally_orchestrator,source_rally_integration}.py`（モック差し替え点の移行） | 1 |
 | 変更 | `schema.py`（`OrchestratorDecision` / `MonitorOutput` / `IntegratorOutput` 追加） | 2 |
 | 変更 | `rally/{orchestrator,monitors,integrator}.py`（プロンプトのスキーマ部分をモデルから生成） | 2 |
-| 新規 | `llm_client` 内の OpenAI 互換アダプタ（tool-use 変換・`guided_json`） | 3 |
-| 変更 | `README.md`（ローカル推論サーバの起動とモデル切替の手順） | 3 |
+| 新規 | `llm_client` 内の Ollama アダプタ（`/api/chat`・tool-use 変換・`format`・`num_ctx`・`think`・切り捨て検知） | 3 |
+| 変更 | `README.md`（Ollama の起動・`ollama pull`・モデル切替・実効 ctx の確認手順） | 3 |
 | 変更 | `prompt_slots.py` / `pipeline_runner.py`（`ALLOWED_MODELS` にローカルモデル追加） | 4 |
 | 変更 | `storage.py`（`run_history` / `analysis_history` に `model_profile` / `models_json` を後付け） | 4 |
 | 変更 | `api.py`（実績モデルを履歴に渡す）／ `apps/ui/src/RunHistoryView.tsx`・`AnalysisHistoryView.tsx`（プロファイル列・絞り込み） | 4 |
@@ -334,13 +424,18 @@ dict をそのまま扱っている。そのため「モデルが形を守る」
 |---|---|---|
 | **目的** | **SLM の検証**（2026-10-02 確定） | クラウド廃止・コスト削減・高速化はいずれも目的ではない。クラウドと SLM の**併存**が要件（§0 / §1） |
 | GPU の前提 | **専用 VRAM 16GB** | RTX 4070 Ti SUPER の仕様値。タスクマネージャの「GPU メモリ」は共有メモリ込みの合計で、推論には使えない（§1） |
+| **推論基盤** | **Ollama**（2026-10-02 確定。実機 0.34.2 稼働中） | Windows ネイティブで動く。vLLM は WSL2 が必要なため当面採らない。将来はプロバイダ追加で差し替え可（§4） |
+| **呼び出す API** | Ollama の**ネイティブ `/api/chat`**（OpenAI 互換 `/v1` は使わない） | `/v1` では `num_ctx` を変えられず、既定 4,096 のまま**長いログが黙って切られる**（実機確認済み・§7-1） |
+| コンテキスト長 | `options.num_ctx` を**毎回明示**（`OLLAMA_NUM_CTX`、既定 32768）＋ `prompt_eval_count` で切り捨て検知 | 黙って切られると「SLM は精度が出ない」という誤った結論になる（§7-1） |
+| thinking | 解析ノードは既定 **`think: false`**（`LLM_THINK=1` で有効化） | 思考が出力トークンを食い切り本文が出ないことがある（実機で 2 フィールドの JSON に 477 トークン消費）。思考あり/なしは検証の一軸として別に測る（§6-2） |
 | Phase の順序 | **抽象化 → 構造化出力 → ローカル接続 → 検証基盤 → 検証** | 構造化出力はクラウドのままで品質が上がり、先に入れると SLM 切替時の切り分けが楽になる（§10） |
-| 最初に試すモデル | **Qwen3-14B（Q4_K_M）** | 全部 VRAM に載りオフロードの変数が無いため、最初の検証で原因の切り分けがしやすい（§9-5） |
+| 最初に試すモデル | **`qwen3:14b`（要 `ollama pull`）**。配線確認は導入済みの `gemma4:e4b` で行う | 全部 VRAM に載りオフロードの変数が無いため、原因の切り分けがしやすい。導入済みモデルには 14B 級の tools 対応が無い（§9-5） |
 | 検証の最大の分岐点 | **`monitors-local` プロファイル** | tool-use ＋ 長文 ＋ 日本語の主戦場。ここが通るかで SLM 化の成否が決まる（§9-2） |
 | 採点役・監査役 | `evaluation_agent` は **Opus 固定**、`audit_agent` は **GPT-5.5 固定** | 審判をモデル軸に乗せると比較が成立しない（§9-2） |
 | integrator | **プロファイルで切替**（`monitors-local` ではクラウド、`all-local` ではローカル） | 検証目的なので「残す / 替える」の両方を測る。出力スキーマが最も複雑なので崩れ方を見る価値がある |
-| 構造化出力 | `guided_json` は **ON/OFF 切替可**（既定 ON） | 文法強制すると「素でどれだけ形を守れるか」が測れなくなるため、両方測る（§9-4） |
+| 構造化出力 | Ollama の **`format`（JSON Schema）** を使い、**ON/OFF 切替可**（既定 ON） | 実機で enum 付きスキーマの強制を確認済み。常時 ON だと「素でどれだけ形を守れるか」が測れなくなるため両方測る（§6-1 / §9-4） |
 | レイテンシ | **1 解析あたり数分を許容**する | 検証目的なので要件ではなく観測対象。SSE でラウンドごとに出るため画面は固まらない |
 | 構成3 / 構成5 | **比較用として残す**。ローカル時は同時実行数を 1 に制限 | 16GB では複数モデル同時常駐ができず実質シリアル化するが、構成を消すと本来の目的が崩れる |
+| プロファイル間の比較 | **同時並行ではなく順番に実行**して突合する | 16GB ではモデルを入れ替えるしかないため（§9-5） |
 | 観測 | ローカルは**コスト非表示**（0 円と出さない） | 0 円表示は「無料」と誤読される。GPU 時間は別軸で扱う（§8） |
 | 精度の判定基準 | **手採点（Excel「テストケース2」の真因⑥への到達度）が主**、`evaluation_agent` は補助 | 既存の評価方針を変えない。[reanalysis.md](./reanalysis.md) と同じ基準に揃える |
