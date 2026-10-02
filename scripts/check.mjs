@@ -37,7 +37,11 @@ for (const step of steps) {
     continue;
   }
   console.log(`\n=== ${step.name} (${step.cwd}) ===`);
-  const r = spawnSync(step.bin, step.args, { cwd: step.cwd, stdio: "inherit", shell: step.shell ?? false });
+  // npx は Windows では .cmd なので shell 経由で呼ぶ。その場合は引数を分けて渡すと
+  // Node が DEP0190 を出すため、コマンド全体を 1 本の文字列にして渡す。
+  const r = step.shell
+    ? spawnSync([step.bin, ...step.args].join(" "), { cwd: step.cwd, stdio: "inherit", shell: true })
+    : spawnSync(step.bin, step.args, { cwd: step.cwd, stdio: "inherit" });
   if (r.status !== 0) failed.push(step.name);
 }
 
