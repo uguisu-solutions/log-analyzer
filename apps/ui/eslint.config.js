@@ -12,11 +12,24 @@ export default defineConfig([
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
-      reactHooks.configs.flat.recommended,
+      reactHooks.configs['recommended-latest'],
       reactRefresh.configs.vite,
     ],
     languageOptions: {
       globals: globals.browser,
+    },
+    rules: {
+      // `const { [id]: _drop, ...rest } = prev` のような意図的な破棄を許す（接頭辞 _ の規約）
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+        destructuredArrayIgnorePattern: '^_',
+      }],
+      // 日本語 UI なので全角スペース（U+3000）はテンプレートリテラル・JSX テキスト内で許す
+      'no-irregular-whitespace': ['error', { skipTemplates: true, skipJSXText: true }],
+      // HMR の作法の話であって不具合ではないため警告に留める（定数の同居を許す）
+      'react-refresh/only-export-components': 'warn',
     },
   },
 ])

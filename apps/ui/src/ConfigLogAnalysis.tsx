@@ -113,7 +113,7 @@ function loadTopology(): TopologyDef {
   }
 }
 function saveTopology(t: TopologyDef) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(t)) } catch {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(t)) } catch { /* プライベートモード等で保存不可でも機能は続行する */ }
 }
 function uniqueNodeId(existing: TopologyNode[], base: string): string {
   if (!existing.some(n => n.id === base)) return base

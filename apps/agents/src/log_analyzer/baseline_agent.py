@@ -17,7 +17,6 @@ from log_analyzer.schema import (
     SCHEMA_VERSION,
     AnalysisResult,
     ConfigId,
-    GraphEdge,
     GraphNode,
     Metrics,
     RecommendedAction,

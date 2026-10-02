@@ -1,0 +1,6 @@
+#!/bin/sh
+# 参照プロジェクトの .husky/pre-commit 相当。ルートに package.json を置かない方針なので
+# husky ではなく git の core.hooksPath で有効化する（README の「開発ルール」参照）:
+#   git config core.hooksPath .githooks
+node scripts/guard-commit.mjs || exit 1
+node scripts/check.mjs || exit 1

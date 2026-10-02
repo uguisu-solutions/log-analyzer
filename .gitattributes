@@ -1,0 +1,5 @@
+# フック・ガードスクリプトは OS に関係なく LF で扱う
+# （CRLF だと sh が "node scripts/check.mjs\r" を実行して失敗する）
+.githooks/* text eol=lf
+scripts/*.mjs text eol=lf
+*.sh text eol=lf

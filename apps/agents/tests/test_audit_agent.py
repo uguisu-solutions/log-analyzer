@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
 
 from log_analyzer.audit_agent import run_audit

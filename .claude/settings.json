@@ -1,9 +1,46 @@
 {
   "permissions": {
     "allow": [
+      "Read", "Edit", "Write",
+      "Bash(node scripts/check.mjs*)",
+      "Bash(./apps/agents/.venv/Scripts/python.exe -m pytest*)",
+      "Bash(./apps/agents/.venv/Scripts/python.exe -m ruff check*)",
+      "Bash(npx tsc*)", "Bash(npx eslint*)",
+      "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git show*)",
+      "Bash(git add *)", "Bash(git commit *)", "Bash(git switch *)", "Bash(git branch*)",
+      "Bash(git stash*)", "Bash(git restore*)",
       "Bash(./.venv/Scripts/python.exe -m pytest -q)",
       "Bash(./.venv/Scripts/log-analyze.exe --help)",
       "Bash(./.venv/Scripts/python.exe -c \"from log_analyzer.schema import AnalysisResult, ConfigId; from log_analyzer.baseline_agent import SYSTEM_PROMPT; print\\('imports OK; schema_version=', AnalysisResult.model_fields['schema_version'].default\\); print\\('prompt chars=', len\\(SYSTEM_PROMPT\\)\\)\")"
+    ],
+    "deny": [
+      "Read(.env*)", "Read(**/.env*)", "Read(**/secrets/**)",
+      "Read(**/sa-key.json)", "Read(**/*service*account*.json)",
+      "Edit(.env*)", "Write(.env*)", "Edit(**/.env*)", "Write(**/.env*)",
+      "Edit(.claude/**)", "Write(.claude/**)",
+      "Edit(.githooks/**)", "Write(.githooks/**)",
+      "Edit(scripts/guard-*.mjs)", "Write(scripts/guard-*.mjs)",
+      "Edit(.github/workflows/**)", "Write(.github/workflows/**)",
+      "Bash(git push*)", "Bash(git commit --no-verify*)", "Bash(git reset --hard*)",
+      "Bash(rm -rf *)",
+      "Bash(gcloud run deploy*)", "Bash(gcloud builds submit*)", "Bash(gcloud iam*)",
+      "Bash(gcloud secrets*)", "Bash(gcloud projects add-iam-policy-binding*)",
+      "Bash(docker push*)",
+      "Bash(bq rm*)", "Bash(bq load*)", "Bash(bq mk*)", "Bash(bq cp*)", "Bash(bq query*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/guard-cmd.mjs\"" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && node scripts/guard-lint.mjs" }]
+      }
     ]
   }
 }

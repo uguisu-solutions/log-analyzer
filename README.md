@@ -293,8 +293,38 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 118 passed
+# 期待: 321 passed
 ```
+
+テストは **外部ネットワークへ出ません**。`apps/agents/tests/conftest.py` が localhost 以外への TCP 接続を落とすため、実 LLM API / BigQuery を誤って叩いて課金が発生することはありません（意図的に必要な場合のみ `@pytest.mark.allow_network`）。
+
+---
+
+## 開発ルール（ハーネス・ガードレール）
+
+開発の進め方・禁止事項・人間の確認が必要な操作は **`CLAUDE.md`** に集約しています（Claude Code が起動時に読むカーネル）。
+
+```powershell
+# クローン直後に 1 回だけ: commit フックを有効化
+git config core.hooksPath .githooks
+
+# lint → test → typecheck をまとめて流す
+node scripts/check.mjs            # 全部（ruff → pytest → tsc → eslint）
+node scripts/check.mjs backend    # Python のみ
+node scripts/check.mjs ui         # UI のみ
+```
+
+| 仕組み | タイミング | 役割 |
+|---|---|---|
+| `scripts/guard-cmd.mjs` | Claude Code の PreToolUse | `git push` / `rm -rf` / `gcloud` の変更系 / `bq` の書き込み / 課金スクリプトの実行などを**実行前に**ブロック |
+| `scripts/guard-lint.mjs` | Claude Code の PostToolUse | 編集したファイルだけを ruff / eslint にかけ、エラーなら差し戻す |
+| `scripts/guard-commit.mjs` | `git commit`（pre-commit） | API キー・秘密鍵・`.env`・実行時データ・`samples/logs/` 外の実ログの混入を止める |
+| `scripts/check.mjs` | pre-commit / CI | ruff → pytest → tsc → eslint |
+| `.github/workflows/check.yml` | PR / `main` への push | ローカルの pre-commit を通らず入った変更をここで止める |
+
+- `gcloud` は `describe` / `list` / `config get` などの**参照のみ**許可。デプロイ・IAM 変更は人が実行します（`docs/deploy-runbook.md`）
+- BigQuery は読み取り専用（MCP Toolbox を `writeMode=blocked` で使用）。`bq` CLI からの書き込みもブロックされます
+- ガード自身（`scripts/guard-*.mjs` / `.claude/settings.json` / `.githooks/` / CI）は Claude Code からは編集できません。変更は人が行います
 
 ---
 

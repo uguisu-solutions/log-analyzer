@@ -142,11 +142,12 @@ async def _execute_single(
         "links": [],
     }
     answers = dict(scenario.questionnaire) if use_questionnaire else {}
-    log_text, normalized_nodes = _build_topology_log_text(
+    # トポロジ情報は log_text に埋め込まれて LLM に渡る。run_rally_async は
+    # topology_context を受け取らないため、正規化済みノードはここでは使わない。
+    log_text, _ = _build_topology_log_text(
         topology, scenario.node_logs, scenario.node_configs,
         questionnaire_answers=answers,
     )
-    topology_context = {"nodes": normalized_nodes, "links": []}
     wall_start = time.perf_counter()
     result: AnalysisResult = await run_rally_async(
         log_text,
