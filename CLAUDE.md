@@ -84,7 +84,9 @@ UI・`storage.py`・評価エージェントが同じ形に依存しているた
 - `scripts/guard-cmd.mjs` — PreToolUse。危険なコマンドを実行前にブロック
 - `scripts/guard-lint.mjs` — PostToolUse。編集したファイルだけ ruff / eslint にかける
 - `scripts/guard-commit.mjs` — pre-commit。秘密情報・実行時データ・実ログの混入を止める
-- `scripts/check.mjs` — ruff → pytest → tsc → eslint をまとめて流す
+- `scripts/test-guard-cmd.mjs` — ガードの回帰テスト。遮断漏れと**誤検知**の両方を固定する。
+  赤くなったらガードを緩める前に「本当に通すべき操作か」を確認する
+- `scripts/check.mjs` — guard-cmd → ruff → pytest → tsc → eslint をまとめて流す
 - 有効化（クローン直後に 1 回）: `git config core.hooksPath .githooks`
 
 # 聞かずに進めてよいこと

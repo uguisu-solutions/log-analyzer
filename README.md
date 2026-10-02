@@ -319,7 +319,8 @@ node scripts/check.mjs ui         # UI のみ
 | `scripts/guard-cmd.mjs` | Claude Code の PreToolUse | `git push` / `rm -rf` / `gcloud` の変更系 / `bq` の書き込み / 課金スクリプトの実行などを**実行前に**ブロック |
 | `scripts/guard-lint.mjs` | Claude Code の PostToolUse | 編集したファイルだけを ruff / eslint にかけ、エラーなら差し戻す |
 | `scripts/guard-commit.mjs` | `git commit`（pre-commit） | API キー・秘密鍵・`.env`・実行時データ・`samples/logs/` 外の実ログの混入を止める |
-| `scripts/check.mjs` | pre-commit / CI | ruff → pytest → tsc → eslint |
+| `scripts/test-guard-cmd.mjs` | `check` の最初 | ガードの回帰テスト。「止めるべき 26 / 通すべき 20」を固定し、遮断漏れと誤検知の両方を検出する |
+| `scripts/check.mjs` | pre-commit / CI | guard-cmd → ruff → pytest → tsc → eslint |
 | `.github/workflows/check.yml` | PR / `main` への push | ローカルの pre-commit を通らず入った変更をここで止める |
 
 - `gcloud` は `describe` / `list` / `config get` などの**参照のみ**許可。デプロイ・IAM 変更は人が実行します（`docs/deploy-runbook.md`）

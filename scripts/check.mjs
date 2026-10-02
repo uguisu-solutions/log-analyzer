@@ -2,6 +2,7 @@
 // pre-commit（.githooks/pre-commit）と CI（.github/workflows/check.yml）が同じこれを呼ぶ。
 //
 //   node scripts/check.mjs            すべて流す
+//   node scripts/check.mjs guard      ガードの回帰テストだけ
 //   node scripts/check.mjs backend    Python だけ（ruff → pytest）
 //   node scripts/check.mjs ui         UI だけ（tsc → eslint）
 import { spawnSync } from "node:child_process";
@@ -23,6 +24,8 @@ const python = () => {
 
 const scope = process.argv[2] ?? "all";
 const steps = [
+  // ガードの回帰テストは速いので最初に流す（壊れていたら以降を回す意味がない）
+  { group: "guard", name: "guard-cmd", bin: process.execPath, args: ["scripts/test-guard-cmd.mjs"], cwd: "." },
   { group: "backend", name: "ruff", bin: python(), args: ["-m", "ruff", "check", "src", "tests", "scripts"], cwd: "apps/agents" },
   { group: "backend", name: "pytest", bin: python(), args: ["-m", "pytest", "-q"], cwd: "apps/agents" },
   { group: "ui", name: "tsc", bin: "npx", args: ["tsc", "-b"], cwd: "apps/ui", shell: true },
