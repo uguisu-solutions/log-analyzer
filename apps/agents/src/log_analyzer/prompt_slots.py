@@ -5,7 +5,7 @@ Phase 2 W6+ で導入。ユーザー定義構成は「base_config + 一部 slot 
 API を提供する。
 
 モデル選択:
-- 各 slot は Anthropic 系（現状 Opus 4.7 に統一）から選べる。
+- 各 slot は Anthropic 系（現状 Opus 4.7 に統一。既定）と SLM（``SLM_MODELS``）から選べる。
   config3.analyze だけは複数モデル並列実行が設計の本質なので model 上書き不可。
 - 将来 OpenAI / 他ベンダーを許可する場合は ``ANTHROPIC_MODELS`` を ``allowed_models`` に
   渡すか、slot ごとに別の許可リストを構成する。
@@ -26,6 +26,18 @@ class SlotInfo(TypedDict):
 ANTHROPIC_MODELS = [
     "claude-opus-4-7",
 ]
+
+# SLM（Ollama 経由。llm_client が ``ollama:`` 接頭辞で振り分ける）。docs/plan/slm_support.md §9-5。
+# 検証の主対象は Runpod の Gemma 4 26B / 31B、e4b は手元の配線確認用。
+# 単価は tracing に載せない（0 円と表示して「無料」と誤読させないため。設計 §8）
+SLM_MODELS = [
+    "ollama:gemma4:26b-a4b-it-q4_K_M",
+    "ollama:gemma4:31b-it-q4_K_M",
+    "ollama:gemma4:e4b",
+]
+
+# UI でノードごとに選べるモデル。先頭が既定（クラウド）
+SELECTABLE_MODELS = ANTHROPIC_MODELS + SLM_MODELS
 
 
 # slot_id → (表示ラベル, デフォルトモデル, モデル上書き可否) の順序付き定義
@@ -103,7 +115,7 @@ def get_slots(base_config: str) -> list[SlotInfo]:
     defaults = get_default_prompts(base_config)
     out: list[SlotInfo] = []
     for sid, meta in SLOT_DEFS[base_config].items():
-        allowed = ANTHROPIC_MODELS if meta["model_overridable"] else []
+        allowed = SELECTABLE_MODELS if meta["model_overridable"] else []
         out.append(
             {
                 "slot_id": sid,

@@ -33,7 +33,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any
 
-from log_analyzer import llm_client
+from log_analyzer import llm_client, prompt_slots
 from log_analyzer.schema import (
     SCHEMA_VERSION,
     AnalysisResult,
@@ -115,7 +115,7 @@ NODE_TYPE_DEFS = [
     },
 ]
 
-ALLOWED_MODELS = ["claude-opus-4-7"]
+ALLOWED_MODELS = list(prompt_slots.SELECTABLE_MODELS)
 
 
 # ─── パイプライン検証 ─────────────────────────────────────────────────
