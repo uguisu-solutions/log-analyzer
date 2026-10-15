@@ -273,7 +273,10 @@ def init_db() -> None:
                 result_json TEXT NOT NULL,
                 parent_run_id TEXT,
                 root_run_id TEXT,
-                revision INTEGER NOT NULL DEFAULT 0
+                revision INTEGER NOT NULL DEFAULT 0,
+                model_profile TEXT NOT NULL DEFAULT '',
+                models_json TEXT NOT NULL DEFAULT '{}',
+                input_fingerprint TEXT NOT NULL DEFAULT ''
             )
             """
         )
@@ -290,6 +293,22 @@ def init_db() -> None:
             conn.execute(
                 "UPDATE analysis_history SET root_run_id = run_id WHERE root_run_id IS NULL"
             )
+        # 既存 DB へのマイグレーション: モデル構成と入力の指紋を後付けする。
+        # 設計: docs/plan/slm_support.md §9-3 / §9-6。既存行は空（判別不能）のまま
+        if ah_cols and "input_fingerprint" not in ah_cols:
+            conn.execute(
+                "ALTER TABLE analysis_history ADD COLUMN model_profile TEXT NOT NULL DEFAULT ''"
+            )
+            conn.execute(
+                "ALTER TABLE analysis_history ADD COLUMN models_json TEXT NOT NULL DEFAULT '{}'"
+            )
+            conn.execute(
+                "ALTER TABLE analysis_history ADD COLUMN input_fingerprint TEXT NOT NULL DEFAULT ''"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_analysis_history_fingerprint "
+            "ON analysis_history(input_fingerprint)"
+        )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_history_run "
             "ON analysis_history(run_id)"
@@ -677,7 +696,7 @@ def delete_run_history(run_id: int) -> bool:
 _ANALYSIS_SUMMARY_COLS = (
     "id, run_id, created_at, kind, config_id, analysis_mode, single_source, stage_order, "
     "title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary, trace_id, "
-    "parent_run_id, root_run_id, revision"
+    "parent_run_id, root_run_id, revision, model_profile, models_json, input_fingerprint"
 )
 
 
@@ -703,6 +722,9 @@ def insert_analysis_history(
     root_run_id: str | None = None,
     revision: int = 0,
     created_at: str | None = None,
+    model_profile: str = "",
+    models_json: str = "{}",
+    input_fingerprint: str = "",
 ) -> tuple[int, bool]:
     """解析履歴を 1 件保存し、``(id, created)`` を返す。
 
@@ -726,12 +748,14 @@ def insert_analysis_history(
             "INSERT INTO analysis_history "
             "(run_id, created_at, kind, config_id, analysis_mode, single_source, stage_order, "
             " title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary, "
-            " trace_id, request_json, result_json, parent_run_id, root_run_id, revision) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " trace_id, request_json, result_json, parent_run_id, root_run_id, revision, "
+            " model_profile, models_json, input_fingerprint) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id, when, kind, config_id, analysis_mode, single_source, stage_order,
                 title, confidence, tokens_in, tokens_out, latency_ms, top_category, top_summary,
                 trace_id, request_json, result_json, parent_run_id, root, revision,
+                model_profile, models_json, input_fingerprint,
             ),
         )
         conn.commit()

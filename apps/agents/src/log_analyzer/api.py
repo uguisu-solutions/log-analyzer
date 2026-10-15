@@ -51,7 +51,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from log_analyzer import evaluation_agent, filestore, pipeline_runner, prompt_slots, storage
+from log_analyzer import (
+    evaluation_agent,
+    filestore,
+    pipeline_runner,
+    prompt_slots,
+    run_profile,
+    storage,
+)
 from log_analyzer.log_compaction import compact_log_reporting
 from log_analyzer.cli import CONFIG_RUNNERS
 from log_analyzer.rally_agent import run_rally_stream
@@ -1167,6 +1174,10 @@ class AnalysisHistorySummary(BaseModel):
     parent_run_id: str | None = None
     root_run_id: str | None = None
     revision: int = 0
+    # モデル構成と入力の指紋 (docs/plan/slm_support.md §9-3 / §9-6)。以前の行は空
+    model_profile: str = ""
+    models: dict[str, str] = {}
+    input_fingerprint: str = ""
 
 
 class AnalysisHistoryListResponse(BaseModel):
@@ -1198,6 +1209,7 @@ def _summarize_analysis_result(result: dict) -> dict:
 def create_analysis_history_endpoint(req: AnalysisHistorySaveRequest) -> dict:
     """解析完了時の状態を 1 件保存する。同一 run_id は no-op (created=false)。"""
     summary = _summarize_analysis_result(req.result)
+    models = run_profile.models_used(req.result)
     request_payload = {
         "config_id": req.config_id,
         "analysis_mode": req.analysis_mode,
@@ -1233,8 +1245,17 @@ def create_analysis_history_endpoint(req: AnalysisHistorySaveRequest) -> dict:
         parent_run_id=req.parent_run_id,
         root_run_id=req.root_run_id,
         revision=req.revision,
+        model_profile=run_profile.profile_of(models),
+        models_json=json.dumps(models, ensure_ascii=False),
+        input_fingerprint=run_profile.input_fingerprint(request_payload),
     )
     return {"id": entry_id, "created": created}
+
+
+def _history_summary(row: dict) -> AnalysisHistorySummary:
+    row = dict(row)
+    row["models"] = json.loads(row.pop("models_json", None) or "{}")
+    return AnalysisHistorySummary(**row)
 
 
 @app.get("/api/analysis-history", response_model=AnalysisHistoryListResponse)
@@ -1251,7 +1272,7 @@ def list_analysis_history_endpoint(
         limit=limit, offset=offset,
     )
     return AnalysisHistoryListResponse(
-        entries=[AnalysisHistorySummary(**r) for r in rows],
+        entries=[_history_summary(r) for r in rows],
         total=total,
         limit=limit,
         offset=offset,

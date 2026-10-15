@@ -177,3 +177,73 @@ def test_reanalysis_lineage_and_input_files():
     # 後始末
     client.delete(f"/api/analysis-history/{root_id}")
     client.delete(f"/api/analysis-history/{child_id}")
+
+
+# ─── モデル構成と入力の指紋（docs/plan/slm_support.md §9-3 / §9-6）──────────
+
+
+def _with_models(payload: dict, model: str) -> dict:
+    """実行グラフに orchestrator / fw 監視 / integrator のモデル実績を入れる。"""
+    result = dict(payload["result"])
+    result["execution_graph_nodes"] = [
+        {"id": nid, "label": model, "role": nid, "model": model}
+        for nid in ("orchestrator", "fw_monitor", "integrator")
+    ]
+    return {**payload, "result": result}
+
+
+def test_history_records_model_profile_and_input_fingerprint():
+    """同じ条件をクラウドと SLM で 1 回ずつ実行すると、指紋が同じでプロファイルが違う。"""
+    client = TestClient(api_mod.app)
+    slm = "ollama:gemma4:26b-a4b-it-q4_K_M"
+    client.post("/api/analysis-history", json=_with_models(_sample_payload("run-cloud"), "claude-opus-4-7"))
+    client.post("/api/analysis-history", json=_with_models(_sample_payload("run-slm"), slm))
+
+    entries = {e["run_id"]: e for e in client.get("/api/analysis-history").json()["entries"]}
+    cloud, local = entries["run-cloud"], entries["run-slm"]
+
+    assert cloud["model_profile"] == "cloud"
+    assert local["model_profile"] == f"local:{slm[len('ollama:'):]}"
+    assert local["models"] == {"orchestrator": slm, "fw_monitor": slm, "integrator": slm}
+    assert cloud["input_fingerprint"] == local["input_fingerprint"]
+    assert cloud["input_fingerprint"]  # 空ではない
+
+
+def test_history_fingerprint_differs_when_conditions_differ():
+    client = TestClient(api_mod.app)
+    a = _sample_payload("run-fp-a")
+    b = _sample_payload("run-fp-b") | {"questionnaire_answers": {"symptom_onset": "10:00 頃"}}
+    client.post("/api/analysis-history", json=a)
+    client.post("/api/analysis-history", json=b)
+
+    entries = {e["run_id"]: e for e in client.get("/api/analysis-history").json()["entries"]}
+    assert entries["run-fp-a"]["input_fingerprint"] != entries["run-fp-b"]["input_fingerprint"]
+
+
+def test_init_db_adds_profile_columns_to_existing_history():
+    """列追加前の DB に後付けでき、既存の行は保持されて「判別不能（空）」になる。"""
+    from log_analyzer import storage
+
+    with storage._connect() as conn:
+        conn.execute("DROP TABLE analysis_history")
+        conn.execute(
+            "CREATE TABLE analysis_history ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, created_at TEXT NOT NULL,"
+            " kind TEXT NOT NULL DEFAULT 'config-log', config_id TEXT NOT NULL, analysis_mode TEXT,"
+            " single_source TEXT, stage_order TEXT, title TEXT, confidence REAL, tokens_in INTEGER,"
+            " tokens_out INTEGER, latency_ms INTEGER, top_category TEXT, top_summary TEXT,"
+            " trace_id TEXT, request_json TEXT NOT NULL, result_json TEXT NOT NULL,"
+            " parent_run_id TEXT, root_run_id TEXT, revision INTEGER NOT NULL DEFAULT 0)"
+        )
+        conn.execute(
+            "INSERT INTO analysis_history (run_id, created_at, config_id, request_json, result_json,"
+            " root_run_id) VALUES ('old-run', '2026-09-01T00:00:00', 'config4', '{}', '{}', 'old-run')"
+        )
+        conn.commit()
+
+    storage.init_db()
+
+    rows, total = storage.list_analysis_history()
+    assert total == 1
+    assert rows[0]["run_id"] == "old-run"
+    assert (rows[0]["model_profile"], rows[0]["models_json"], rows[0]["input_fingerprint"]) == ("", "{}", "")

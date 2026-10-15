@@ -19,7 +19,7 @@ from typing import Any
 import anthropic
 import openai
 
-_OLLAMA_PREFIX = "ollama:"
+OLLAMA_PREFIX = "ollama:"
 # 複数の text ブロックを 1 つの文字列にするときの区切り。コードベースの既存の約束
 # （monitors._blocks_to_text / integrator の user_input）に合わせる
 _BLOCK_SEP = "\n\n"
@@ -155,7 +155,7 @@ def _anthropic_kwargs(
 
 
 def _is_ollama(model: str) -> bool:
-    return model.startswith(_OLLAMA_PREFIX)
+    return model.startswith(OLLAMA_PREFIX)
 
 
 def _ollama_base_url() -> str:
@@ -239,7 +239,7 @@ def _ollama_payload(
     # think=False・サンプリング指定なしは、基準線の Opus 4.7（思考なし・既定サンプリング）に揃えるため。
     # num_ctx は必ず明示する（Ollama の既定 4,096 では長いログが黙って切られる。§7-1）
     payload: dict[str, Any] = {
-        "model": model[len(_OLLAMA_PREFIX):],
+        "model": model[len(OLLAMA_PREFIX):],
         "messages": _ollama_messages(system, messages),
         "stream": False,
         "think": False,
