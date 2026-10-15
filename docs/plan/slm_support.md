@@ -208,9 +208,7 @@ async def acomplete(...) -> LlmResponse: ...          # multi_model / pipeline_r
 - テストの差し替え点は `llm_client._ollama_post`。送受信そのものは localhost の擬似サーバで確かめる
 - 同一性（§3-1）は `tests/test_llm_client_parity.py` で固定：`llm_client` 単体の呼び出しと、
   監視ノードの tool-use ループ全体の両方で、全往復のリクエスト中身が Anthropic 経路と一致する
-- 複数 text ブロックは `"
-
-"` で連結して 1 つの文字列にする（既存の `_blocks_to_text` と同じ約束）
+- 複数 text ブロックは空行（`"\n\n"`）で連結して 1 つの文字列にする（既存の `_blocks_to_text` と同じ約束）
 - Ollama が tool call の ID を返さない場合は振る（履歴で tool_result と対応付けるため）
 - 切り捨て検知は「`prompt_eval_count` が `num_ctx` に達した」で判定し、`LlmResponse.input_truncated`
   に立てる。Ollama のプロンプトキャッシュで評価済みトークンが少なく報告される場合に見逃す可能性があるため、
