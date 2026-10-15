@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -478,3 +478,48 @@ class AnalysisResult(BaseModel):
 
 # 前方参照の解決 (StageOutput が DelegationEventDTO を文字列参照しているため)
 StageOutput.model_rebuild()
+
+
+# ─── 構成4 の中間出力（LLM が返す JSON の形）──────────────────────────
+# 設計: docs/plan/slm_support.md §6-1。これまでプロンプト内の JSON 例としてしか存在しなかった
+# orchestrator / 監視 / integrator の出力を型にしたもの。AnalysisResult（最終契約）とは別物で、
+# 保存・UI には直接使わない。プロンプトの出力例との一致は test_intermediate_schema.py が固定する。
+# 方針: 最終契約より厳しい型にしない（既存モデルで足りる部分はそれを使う）。
+
+MonitorRole = Literal["fw", "routing", "app", "dns", "sec"]
+
+
+class OrchestratorDecision(BaseModel):
+    """orchestrator の出力。初手の監視を 1 つ選ぶ。"""
+
+    first_node: MonitorRole
+    focus_hint: str = ""
+    rationale: str = ""
+
+
+class MonitorOutput(BaseModel):
+    """監視（fw / routing / app / dns / sec）の出力。分析結果と次ノードの指名。
+
+    ``next`` の遷移制約（自己遷移・直前ノードへの即時差し戻しの禁止）は型では表せないため、
+    従来どおり ``rally.monitors._normalize_monitor_output`` が検証する。
+    """
+
+    findings: list[MonitorFinding] = Field(default_factory=list)
+    tool_calls_made: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    next: Literal["fw", "routing", "app", "dns", "sec", "integrator"]
+    focus_hint_for_next: str = ""
+    rationale: str = ""
+
+
+class IntegratorOutput(BaseModel):
+    """integrator の出力。AnalysisResult の中身（候補・推奨アクション・確信度）を組み立てる。
+
+    候補・アクション・ノード所見の型は最終契約（AnalysisResult）と同じものを使う。
+    ``suspected_nodes`` はトポロジーコンテキストがあるときだけプロンプトが出力を求める。
+    """
+
+    root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
+    recommended_actions: list[RecommendedAction] = Field(default_factory=list)
+    confidence: float = 0.0
+    suspected_nodes: list[SuspectedNodeFinding] = Field(default_factory=list)

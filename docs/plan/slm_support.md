@@ -214,6 +214,11 @@ dict をそのまま扱っている。そのため「モデルが形を守る」
    - `MonitorOutput`（`findings` / `tool_calls_made` / `confidence` / `next` / `focus_hint_for_next` / `rationale`）
    - `IntegratorOutput`（`root_cause_candidates` / `recommended_actions` / `confidence` / `suspected_nodes`）
    - **プロンプト中の JSON 仕様と二重管理にならないよう、プロンプトのスキーマ部分はモデルから生成する**
+   - **実装済み（2026-10-15）**：3 モデルを `schema.py` に追加。候補・アクション・ノード所見は
+     既存の `RootCauseCandidate` / `RecommendedAction` / `SuspectedNodeFinding` をそのまま使う
+     （**最終契約より厳しい型にしない**。例：`category` は自由文字列のまま）。
+     プロンプトの出力例とモデルのフィールドが一致すること、正規化処理の出力がモデルに収まることを
+     `test_intermediate_schema.py` で固定した。プロンプト本文は未変更（生成化は承認待ち・§12）
 2. ローカルでは `response_schema` を Ollama の **`format` に JSON Schema として渡す**（実機確認済み:
    `format` に enum 付きスキーマを与えると、その形の JSON だけが返る）。
    クラウドでは従来どおりプロンプト指定（挙動不変）
