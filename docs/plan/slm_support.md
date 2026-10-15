@@ -4,7 +4,7 @@
 > 関連：[config_log_stages.md](./config_log_stages.md) / [source_code_analysis.md](./source_code_analysis.md) /
 > [reanalysis.md](./reanalysis.md) / [deploy-runbook.md](../deploy-runbook.md)。
 >
-> **状態（2026-10-15）**: **Phase 1・2 完了、Phase 3 はコード完了**（ローカル `gemma4:e4b` での完走確認が残り）。次は Phase 4。
+> **状態（2026-10-15）**: **Phase 1〜3 完了**。次は Phase 4（観測基盤）。
 > 目的を「クラウド LLM と SLM の最終出力の精度差を観測する」に改訂し、**推論方法は同一（違うのはモデルだけ）**とした（§0 / §3-1）。
 >
 > **推論基盤は Ollama**（2026-10-02 決定）。実機 0.34.2 に対して
@@ -473,7 +473,8 @@ Q4_K_M で使う。別リポジトリの検証（`slm検証`、2026-10-13、Runp
 |---|---|---|
 | **1**（**完了** 2026-10-15） | `llm_client.py` を新設し 10 箇所を寄せる。**振る舞いは不変**。テスト 22 箇所の差し替え点を `llm_client` 内の SDK 生成へ移行 | `node scripts/check.mjs` が緑（pytest 321 → 335 件。既存の期待値は不変）。LLM 経路のテストが無かった構成1・2・3・5 は特性テスト（`test_llm_call_sites.py`）を先に足して固定 |
 | **2**（**完了** 2026-10-15） | 中間出力の Pydantic 化（§6-1）。プロンプト本文は不変、出力例との一致をテストで固定 | `check.mjs` 緑（pytest 349 件） |
-| **3**（**コード完了** 2026-10-15。実機確認待ち） | Ollama アダプタ（`/api/chat`・§5 の tool-use 変換・`num_ctx` 明示・`think:false`・切り捨て検知）＋ **送信内容の同一性テスト（§3-1）** ＋ 起動・SSH トンネル・モデル切替の手順 | 同一性テストが緑。ローカルの `gemma4:e4b` で構成1 が完走し `AnalysisResult` が返る。Runpod（26B / 31B）での実機確認は Phase 5 とまとめて行う |
+| **3**（**完了** 2026-10-15） | Ollama アダプタ（`/api/chat`・§5 の tool-use 変換・`num_ctx` 明示・`think:false`・切り捨て検知）＋ **送信内容の同一性テスト（§3-1）** ＋ 起動・SSH トンネル・モデル切替の手順 | 同一性テストが緑。ローカルの `gemma4:e4b` で構成1 が完走し `AnalysisResult` が返る。Runpod（26B / 31B）での実機確認は Phase 5 とまとめて行う |
+| ↳ 実機確認 | ローカル Ollama 0.40.4・`gemma4:e4b` で構成1 を実行（2026-10-15） | 完走し `AnalysisResult` が返った（tokens_in 1758 / out 1086、約 64 秒、JSON の読み取り失敗なし）。`/api/ps` の `context_length` = 32768。`metrics.cost_usd` が 0.0 と表示される点は Phase 4 で非表示にする |
 | **4** | **観測基盤**（§9-6）：許可モデルの追加・検証プロファイル・履歴へのモデル列と入力の指紋・形の遵守の記録・比較ビュー・CSV 書き出し・一括実行のプロファイル／回数指定 | 同じログを `cloud` と `all-local-*`（テストでは差し替えたモデル）で走らせ、比較ビューで並べて採点を比べられる |
 | **5** | **検証の実施**（Pod 起動）：`num_ctx` の実測、`cloud` 対 `all-local-26b` / `all-local-31b` を複数回、手採点と `evaluation_agent`、必要なら混在プロファイルで切り分け。結果を本ファイルに追記 | 真因到達度の差・ばらつき・形の遵守・切り捨て・レイテンシを記録 |
 
