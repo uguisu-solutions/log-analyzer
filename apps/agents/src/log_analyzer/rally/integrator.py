@@ -200,10 +200,14 @@ def integrator_node(state: Config4State) -> dict:
     ]
     messages: list[dict] = [{"role": "user", "content": user_blocks}]
     total_in = total_out = total_cc = total_cr = 0
+    # 出力の形の遵守と入力の切り捨て（docs/plan/slm_support.md §9-4 / §9-6）
+    format_retries = 0
+    input_truncated = False
 
-    def _accumulate(usage) -> None:
-        nonlocal total_in, total_out, total_cc, total_cr
-        c = usage_components(usage)
+    def _accumulate(resp: llm_client.LlmResponse) -> None:
+        nonlocal total_in, total_out, total_cc, total_cr, input_truncated
+        input_truncated = input_truncated or resp.input_truncated
+        c = usage_components(resp.usage)
         total_in += c["input"] + c["cache_creation"] + c["cache_read"]
         total_out += c["output"]
         total_cc += c["cache_creation"]
@@ -212,7 +216,7 @@ def integrator_node(state: Config4State) -> dict:
     response = llm_client.complete(
         model=model, max_tokens=_integrator_max_tokens(), system=system, messages=messages
     )
-    _accumulate(response.usage)
+    _accumulate(response)
     raw = response.text
     parsed, parse_error = safe_extract_json(
         raw,
@@ -240,7 +244,8 @@ def integrator_node(state: Config4State) -> dict:
             retry = llm_client.complete(
                 model=model, max_tokens=_integrator_max_tokens(), system=system, messages=messages
             )
-            _accumulate(retry.usage)
+            format_retries += 1
+            _accumulate(retry)
             rtext = retry.text
             retry_parsed, retry_err = safe_extract_json(rtext, fallback=parsed)
             if retry_err is None:
@@ -268,4 +273,6 @@ def integrator_node(state: Config4State) -> dict:
             "input": user_input[:2000],
             "raw_output": raw,
         },
+        "format_retries": format_retries,
+        "input_truncated": input_truncated,
     }

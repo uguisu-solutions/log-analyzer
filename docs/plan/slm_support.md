@@ -416,6 +416,14 @@ A40 48GB では Q4 の 26B / 31B の重み（18〜20GB）の残りを KV キャ�
 - 各ノードについて「生出力が中間モデル（§6-1）に収まったか」「再生成したか」
   「`safe_extract_json` のフォールバックに落ちたか」を実行ごとに記録する
 - これにより、精度差を「推論の誤り」と「形を守れずノードが飛んだ」に分けて見られる
+- **実装済み（2026-10-15）**：記録先は既存の `info_loss_flags`（schema を変えないため）。
+  構成4 は各ノードの再生成を `format_retry: <役割>[ (round N)][ xN]`、入力の切り捨てを
+  `input_truncated: <役割>[ (round N)]` で出す。最終的なフォールバックは従来の
+  `parse_error round=…` / `integrator_parse_error: …` / `routing_violations: N` のまま。
+  構成1 は `input_truncated: analyze` のみ（再生成の仕組みが無いため）。構成2・3・5 は未対応
+  （主比較は構成4・構成1 のため。必要になったら同じ書式で足す）。
+  比較ビュー用の件数は `run_profile.format_issues(result)` で数える。
+  観測用の値はモデルへの入力（`monitor_results` 等）に入らないことをテストで確かめている
 
 ### 9-5. モデル（ローカルの導入状況と Runpod の検証対象）
 

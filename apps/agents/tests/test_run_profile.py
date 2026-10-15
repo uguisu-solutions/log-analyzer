@@ -106,3 +106,32 @@ def test_fingerprint_changes_when_any_analysis_condition_changes():
         {**_REQUEST, "stage_order": "log-first"},
     ]
     assert all(run_profile.input_fingerprint(v) != base for v in variants)
+
+
+# ─── 出力の形の遵守・切り捨ての集計（比較ビューのセルに出す）──────────────
+
+
+def test_format_issues_counts_flags_in_result():
+    result = {"info_loss_flags": [
+        "cost_unpriced_models: ollama:m（このモデル分はコストに含まれません）",
+        "delegation_chain: orchestrator → fw → routing → integrator",
+        "format_retry: orchestrator",
+        "format_retry: fw (round 1) x2",
+        "parse_error round=2 kind=monitor_routing: no JSON object found",
+        "integrator_parse_error: Expecting value",
+        "routing_violations: 1 (自動的に integrator にフォールバック)",
+        "input_truncated: integrator",
+    ]}
+
+    assert run_profile.format_issues(result) == {
+        "format_retries": 3,      # 再生成で救済を試みた回数
+        "parse_fallbacks": 2,     # 再生成しても読めず既定値に落ちたノード
+        "routing_violations": 1,  # 遷移制約違反で integrator に送られた回数
+        "input_truncated": 1,     # 入力が切り捨てられた可能性のある呼び出し
+    }
+
+
+def test_format_issues_all_zero_for_clean_result():
+    assert run_profile.format_issues({"info_loss_flags": []}) == {
+        "format_retries": 0, "parse_fallbacks": 0, "routing_violations": 0, "input_truncated": 0,
+    }

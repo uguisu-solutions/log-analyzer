@@ -97,6 +97,24 @@ class StreamEvent:
 # ─── 内部ヘルパ ──────────────────────────────────────────────────────
 
 
+def _format_observation_flags(token_log: list[dict]) -> list[str]:
+    """出力の形の再生成と入力の切り捨てを、ノードごとのフラグにする。
+
+    クラウドと SLM の精度差を「推論の誤り」と分けて見るための記録
+    （docs/plan/slm_support.md §9-4 / §9-6）。監視は round 付きで出す。
+    """
+    flags: list[str] = []
+    for e in token_log:
+        where = e["role"] + (f" (round {e['round']})" if e.get("round") is not None else "")
+        retries = int(e.get("format_retries") or 0)
+        if retries:
+            flags.append(f"format_retry: {where}" + (f" x{retries}" if retries > 1 else ""))
+        if e.get("input_truncated"):
+            flags.append(f"input_truncated: {where}")
+    return flags
+
+
+
 async def _run_sync(fn: Callable[..., Any], *args, **kwargs) -> Any:
     """同期関数をデフォルト executor で実行（イベントループを塞がない）。"""
     loop = asyncio.get_running_loop()
@@ -355,6 +373,7 @@ def _build_analysis_result(
             info_loss.append(
                 f"parse_error round={d.get('round')} kind={d.get('kind')}: {d['parse_error']}"
             )
+    info_loss.extend(_format_observation_flags(token_log))
 
     graph_nodes, graph_edges = _build_execution_graph(token_log, delegation_history)
     history_dtos = [DelegationEventDTO(**_pick_event_dto_fields(d)) for d in delegation_history]
@@ -585,6 +604,8 @@ async def run_rally_stream(
             "started_at": orch_started_at,
             "ended_at": datetime.now(timezone.utc),
             "parse_error": orch.get("parse_error"),
+            "format_retries": orch.get("format_retries", 0),
+            "input_truncated": orch.get("input_truncated", False),
         }
     )
     first_event = {
@@ -714,6 +735,8 @@ async def run_rally_stream(
                     "latency_ms": orch["latency_ms"],
                     "input": orch["user_input"][:2000],
                     "raw_output": orch["raw_output"],
+                    "format_retries": orch.get("format_retries", 0),
+                    "input_truncated": orch.get("input_truncated", False),
                 }
             )
             restart_event = {
@@ -793,6 +816,8 @@ async def run_rally_stream(
                 "started_at": monitor_started_at,
                 "ended_at": datetime.now(timezone.utc),
                 "parse_error": result.get("_parse_error"),
+                "format_retries": result.get("format_retries", 0),
+                "input_truncated": result.get("input_truncated", False),
             }
         )
         # findings + confidence のみ monitor_results に残す（次監視への参考材料）
@@ -873,6 +898,8 @@ async def run_rally_stream(
         "started_at": integrator_started_at,
         "ended_at": datetime.now(timezone.utc),
         "parse_error": integrator_result.get("_parse_error"),
+        "format_retries": integ.get("format_retries", 0),
+        "input_truncated": integ.get("input_truncated", False),
     })
     yield StreamEvent(
         "integrator_done",

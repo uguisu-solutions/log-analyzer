@@ -118,6 +118,8 @@ def run_baseline(
             )
         ],
         execution_graph_edges=[],
+        # SLM で入力がコンテキスト長に達した場合の印（docs/plan/slm_support.md §7-1 / §9-6）
+        info_loss_flags=["input_truncated: analyze"] if response.input_truncated else [],
     )
 
     trace.generation(

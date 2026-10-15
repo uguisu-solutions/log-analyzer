@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from log_analyzer.llm_client import OLLAMA_PREFIX
 
@@ -72,3 +73,27 @@ def input_fingerprint(request: dict) -> str:
     payload = {k: v for k, v in request.items() if k not in _NON_INPUT_KEYS}
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+_RETRY_TIMES = re.compile(r" x(\d+)$")
+_VIOLATION_COUNT = re.compile(r"^routing_violations: (\d+)")
+
+
+def format_issues(result: dict) -> dict[str, int]:
+    """結果の ``info_loss_flags`` から、出力の形の遵守と入力の切り捨てを数える。
+
+    精度差の内訳（推論の誤りか、形を守れずノードが飛んだか、入力が切られたか）を
+    比較ビューで見るための集計。フラグの書式は rally_agent / baseline_agent が出すもの。
+    """
+    counts = {"format_retries": 0, "parse_fallbacks": 0, "routing_violations": 0, "input_truncated": 0}
+    for flag in result.get("info_loss_flags") or []:
+        if flag.startswith("format_retry: "):
+            m = _RETRY_TIMES.search(flag)
+            counts["format_retries"] += int(m.group(1)) if m else 1
+        elif flag.startswith(("parse_error ", "integrator_parse_error: ")):
+            counts["parse_fallbacks"] += 1
+        elif m := _VIOLATION_COUNT.match(flag):
+            counts["routing_violations"] += int(m.group(1))
+        elif flag.startswith("input_truncated: "):
+            counts["input_truncated"] += 1
+    return counts

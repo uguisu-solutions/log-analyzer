@@ -278,6 +278,7 @@ def _run_monitor_llm(
     user_blocks: list[dict],
     bq_sources: dict[str, dict],
     source_runtime: dict | None = None,
+    stats: dict | None = None,
 ) -> tuple[str, int, int, int, int, list[str], list[dict]]:
     """監視 LLM を呼ぶ。bq_sources / source_runtime があれば tool-use ループを回す。
 
@@ -287,7 +288,13 @@ def _run_monitor_llm(
     含む**入力処理トークン総量**。cache 内訳はコスト計算用に別途返す。
 
     bq_sources が空の場合は従来通りツール無しの単発呼び出しと等価。
+
+    ``stats`` を渡すと、出力の形の遵守と入力の切り捨てを書き込む
+    （``format_retries``: JSON が取れず再生成した回数、``input_truncated``: 入力が
+    コンテキスト長に達した呼び出しがあったか。docs/plan/slm_support.md §9-4 / §9-6）。
     """
+    obs = stats if stats is not None else {}
+    obs.update(format_retries=0, input_truncated=False)
     use_bq = bool(bq_sources)
     use_source = source_tools.has_source_tools(source_runtime)
     use_tools = use_bq or use_source
@@ -308,9 +315,10 @@ def _run_monitor_llm(
     executed: list[str] = []
     fetched: list[dict] = []  # bigquery_query で取得した実ログ (監査の証拠用)
 
-    def _accumulate(usage) -> None:
+    def _accumulate(resp: llm_client.LlmResponse) -> None:
         nonlocal total_in, total_out, total_cc, total_cr
-        c = usage_components(usage)
+        obs["input_truncated"] = obs["input_truncated"] or resp.input_truncated
+        c = usage_components(resp.usage)
         total_in += c["input"] + c["cache_creation"] + c["cache_read"]
         total_out += c["output"]
         total_cc += c["cache_creation"]
@@ -340,7 +348,8 @@ def _run_monitor_llm(
             )
         except Exception:
             return text  # 再試行呼び出し自体が失敗したら元のテキストを返す
-        _accumulate(retry.usage)
+        obs["format_retries"] += 1
+        _accumulate(retry)
         return retry.text or text
 
     for _ in range(_MAX_TOOL_ITERATIONS):
@@ -356,7 +365,7 @@ def _run_monitor_llm(
             messages=messages,
             tools=tool_list or None,
         )
-        _accumulate(response.usage)
+        _accumulate(response)
 
         if use_tools and response.stop_reason == "tool_use":
             # assistant の tool_use ターンを（Anthropic 形式のブロックで）履歴に積む
@@ -402,7 +411,7 @@ def _run_monitor_llm(
     final = llm_client.complete(
         model=model, max_tokens=_MONITOR_MAX_TOKENS, system=system, messages=messages
     )
-    _accumulate(final.usage)
+    _accumulate(final)
     final_text = _retry_if_not_json(final.text)
     return final_text, total_in, total_out, total_cc, total_cr, executed, fetched
 
@@ -485,6 +494,7 @@ def _make_monitor(
         bq_sources = state.get("bq_sources") or {}
         source_runtime = state.get("source_runtime")
         started = time.perf_counter()
+        llm_stats: dict = {}
         raw, tokens_in, tokens_out, cache_creation, cache_read, bq_tool_calls, bq_fetched = (
             _run_monitor_llm(
                 model=model,
@@ -492,6 +502,7 @@ def _make_monitor(
                 user_blocks=user_blocks,
                 bq_sources=bq_sources,
                 source_runtime=source_runtime,
+                stats=llm_stats,
             )
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -534,6 +545,9 @@ def _make_monitor(
             "tool_target_service": target_service,
             "focus_hint_received": focus_hint,
             "_bq_fetched": bq_fetched,
+            # 出力の形の遵守と入力の切り捨て（docs/plan/slm_support.md §9-4 / §9-6）
+            "format_retries": llm_stats["format_retries"],
+            "input_truncated": llm_stats["input_truncated"],
         }
 
     _monitor.__name__ = f"{role}_monitor"
