@@ -4,7 +4,7 @@
 > 関連：[config_log_stages.md](./config_log_stages.md) / [source_code_analysis.md](./source_code_analysis.md) /
 > [reanalysis.md](./reanalysis.md) / [deploy-runbook.md](../deploy-runbook.md)。
 >
-> **状態（2026-10-15）**: **Phase 1〜3 完了**。次は Phase 4（観測基盤）。
+> **状態（2026-10-15）**: **Phase 1〜3 完了、Phase 4 進行中**（履歴へのモデル構成・入力の指紋の記録まで）。
 > 目的を「クラウド LLM と SLM の最終出力の精度差を観測する」に改訂し、**推論方法は同一（違うのはモデルだけ）**とした（§0 / §3-1）。
 >
 > **推論基盤は Ollama**（2026-10-02 決定）。実機 0.34.2 に対して
@@ -341,6 +341,10 @@ A40 48GB では Q4 の 26B / 31B の重み（18〜20GB）の残りを KV キャ�
   「入力が本当に全部入ったか」の確認値として扱う
 - `tracing.cost_usd` は未収載モデルで `None` を返す既存挙動を利用し、**ローカルはコスト非表示**にする
   （0 円と表示すると「無料」と誤読されるため。GPU 時間は別軸）
+  - **確認結果（2026-10-15）：追加実装は不要**。構成4 は単価未登録モデルの分をコストに含めず
+    `info_loss_flags` に `cost_unpriced_models` を残す仕組みが既にある。構成1・2・3・5 はクラウドでも
+    コストを計算しておらず常に 0.0 で、SLM だけが無料に見えるわけではない。UI はコストを表示していない。
+    `Metrics.cost_usd` を `None` 可にするのは schema の型変更（人の確認が必要）なので行わない
 - **思考トークンを分けて記録する**（`eval_count` に含まれてしまうため）。`think: false` が既定なので
   通常は 0 だが、thinking あり検証時に「本文に使われたトークン」と区別できないと比較が濁る
 - `prompt_slots.ANTHROPIC_MODELS` / `pipeline_runner.ALLOWED_MODELS` にローカルモデルを追加し、
@@ -452,8 +456,8 @@ Q4_K_M で使う。別リポジトリの検証（`slm検証`、2026-10-13、Runp
 
 | 何を | どうやって | 既存の仕組み |
 |---|---|---|
-| どのモデル構成で動いたか | `model_profile` / `models_json`（実績値）を履歴に記録（§9-3） | 列を追加 |
-| 同じ入力の実行を束ねる | 入力の指紋 `input_fingerprint` を記録する。リクエストからモデル指定（`model_overrides`）だけを除いて正規化し、ハッシュを取る | `analysis_history.request_json` に入力は丸ごと残っている |
+| どのモデル構成で動いたか | `model_profile` / `models_json`（実績値）を履歴に記録（§9-3）。**実装済み**（`run_profile.py`）。実績値は実行グラフの各ノードのモデル（2 段階解析は `round_metrics`）から取る。プロファイル名は**実績から機械的に決める**：すべてクラウド＝`cloud`、すべて同じ SLM＝`local:<タグ>`、混在＝`mixed`（§9-2 の名前付きプロファイルは実行時の指定名、こちらは記録上の分類） | 列を追加済み |
+| 同じ入力の実行を束ねる | 入力の指紋 `input_fingerprint` を記録する。**実装済み**：解析履歴の保存リクエスト（モデル指定は元々含まれない）から表示用の `view_mode` を除き、正規化して SHA-256 の先頭 16 桁。**入力ファイルは名前で識別**（保存リクエストに本文が無いため。同名で中身の違うファイルは区別できない） | `analysis_history.request_json` に条件は丸ごと残っている |
 | 正解に対する精度 | **主：手採点**（Excel「テストケース2」の真因への到達度）。**補助：`evaluation_agent`**（Opus 固定、解答シナリオに対し 0〜10 点） | `answer_scenarios` / `analysis_evaluations` がある |
 | 比較表 | 解析履歴に「同じ入力 × プロファイル」の比較ビューを足す。行＝入力、列＝プロファイル、セル＝採点・確信度・主要候補・フォールバック回数。セルから各結果を開いて並べて読める | 解析履歴タブを拡張 |
 | 手採点への受け渡し | 比較表を CSV で書き出す（Excel に貼る形） | 新規 |
@@ -500,7 +504,7 @@ Q4_K_M で使う。別リポジトリの検証（`slm検証`、2026-10-13、Runp
 | 変更 | `rally/{orchestrator,monitors,integrator}.py`（形の遵守・フォールバックの記録） | 4 |
 | 変更 | `api.py`（実績モデル・指紋を履歴に渡す、比較ビュー・CSV 用 API）／ `apps/ui/src/RunHistoryView.tsx`・`AnalysisHistoryView.tsx`（プロファイル列・絞り込み・比較ビュー） | 4 |
 | 変更 | `scripts/benchmark_questionnaire.py` / `compare_configs.py`（プロファイル・回数の指定） | 4 |
-| 変更 | `tracing.py`（ローカルモデルのコスト非表示） | 4 |
+| — | `tracing.py`（ローカルモデルのコスト非表示）→ **不要と判断**（§8） | 4 |
 
 ## 12. 決定事項
 
