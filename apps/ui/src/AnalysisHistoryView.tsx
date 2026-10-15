@@ -38,6 +38,9 @@ interface Props {
   langfuseHost: string | null
   // 再解析 (docs/plan/reanalysis.md): 前回推論を種に config-log 画面へ引き継ぐ
   onReanalyze: (seed: ReanalyzeSeed) => void
+  // 精度比較タブから開く解析履歴 ID。表示したら onOpenEntryConsumed で消す
+  openEntryId?: number | null
+  onOpenEntryConsumed?: () => void
 }
 
 function formatDate(iso: string): string {
@@ -80,7 +83,7 @@ function modeText(e: { analysis_mode: string | null; single_source: string | nul
   return e.analysis_mode ?? '-'
 }
 
-export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
+export function AnalysisHistoryView({ langfuseHost, onReanalyze, openEntryId, onOpenEntryConsumed }: Props) {
   const [entries, setEntries] = useState<AnalysisHistorySummary[]>([])
   // 失敗・中断した実行 (確認事項 B-4)。結果が無いので解析履歴には保存されず、
   // 実行履歴 (run_history) 側にだけ残る。同じ表に日時順で混ぜて表示する。
@@ -150,6 +153,15 @@ export function AnalysisHistoryView({ langfuseHost, onReanalyze }: Props) {
       setDetailLoading(false)
     }
   }
+
+  // 精度比較タブで実行をクリックしたとき、その詳細を開いた状態で表示する
+  useEffect(() => {
+    if (openEntryId == null) return
+    void openDetail(openEntryId)
+    onOpenEntryConsumed?.()
+    // openDetail は描画ごとに作り直される関数なので依存に入れない（ID が変わったときだけ開く）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openEntryId])
 
   const handleDelete = async (id: number) => {
     if (!confirm(`解析履歴 #${id} を削除しますか？`)) return

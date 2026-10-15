@@ -284,8 +284,24 @@ curl.exe http://localhost:11435/api/ps
 ```
 
 - Runpod に送ってよいのは合成ログ（`samples/logs/`）だけです。実ログ・顧客データは送らないでください
-- UI からノードごとに SLM を選ぶ機能と、クラウドとの比較ビューは未実装です（設計 Phase 4）。
-  それまではノードごとのモデル用の環境変数（`BASELINE_MODEL` / `RALLY_MONITOR_MODEL` など）で指定します
+- 構成ごとにモデルを選ぶ：構成の編集画面で構成4 の各ノードのモデルを Gemma 4 にし、ユーザー定義構成として
+  保存します（例：`all-local-26b`）。構成・ログ解析の画面でその構成を選んで実行します
+
+#### クラウドとの精度比較
+
+- 画面：「クラウド / SLM 比較」タブ。同じ入力（モデル以外の条件が同じ実行）を行、モデル構成
+  （クラウド / SLM <タグ> / 混在）を列に並べます。各実行をクリックすると解析履歴の詳細が開きます
+- 手採点：同じタブの「CSV をダウンロード」（1 実行 1 行、`manual_score` 列に記入）
+- 一括実行（**課金あり・人が実行**。バックエンドを先に起動しておく）：
+
+```powershell
+cd apps\agents
+.\.venv\Scripts\Activate.ps1
+# 計画だけ確認（LLM は呼ばない）
+python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario2_api_acl_missing --configs config4,user:3 --runs 3 --dry-run
+# 実行（構成ごとにまとめて N 回。ラウンド上限では自動で停止して統合）
+python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario2_api_acl_missing --configs config4,user:3 --runs 3
+```
 
 ---
 
@@ -332,7 +348,7 @@ curl.exe http://localhost:11435/api/ps
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 362 passed
+# 期待: 402 passed
 ```
 
 テストは **外部ネットワークへ出ません**。`apps/agents/tests/conftest.py` が localhost 以外への TCP 接続を落とすため、実 LLM API / BigQuery を誤って叩いて課金が発生することはありません（意図的に必要な場合のみ `@pytest.mark.allow_network`）。

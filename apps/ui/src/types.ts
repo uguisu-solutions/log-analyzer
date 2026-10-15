@@ -157,6 +157,42 @@ export interface AnalysisHistorySummary {
   parent_run_id: string | null
   root_run_id: string | null
   revision: number
+  // モデル構成と入力の指紋 (docs/plan/slm_support.md §9-3 / §9-6)。古い履歴は空
+  model_profile?: string
+  models?: Record<string, string>
+  input_fingerprint?: string
+}
+
+// ─── クラウドと SLM の精度比較 (GET /api/analysis-history/comparison) ───
+
+// 出力の形の遵守と入力の切り捨て (docs/plan/slm_support.md §9-4)
+export interface FormatIssues {
+  format_retries: number      // 再生成で救済を試みた回数
+  parse_fallbacks: number     // 再生成しても読めず既定値に落ちたノード
+  routing_violations: number  // 遷移制約違反で integrator に送られた回数
+  input_truncated: number     // 入力が切り捨てられた可能性のある呼び出し
+}
+
+export interface ComparisonRun {
+  id: number  // 解析履歴 ID (詳細画面を開くのに使う)
+  run_id: string
+  created_at: string
+  confidence: number | null
+  top_category: string | null
+  top_summary: string | null
+  eval_score: number | null  // 最新の採点 (evaluation_agent)。未採点は null
+  format_issues: FormatIssues
+}
+
+export interface ComparisonRow {
+  input_fingerprint: string
+  input_files: string[]
+  cells: Record<string, ComparisonRun[]>  // プロファイル → 実行順のリスト
+}
+
+export interface ComparisonResponse {
+  profiles: string[]  // cloud → SLM 単独 → mixed の順
+  rows: ComparisonRow[]
 }
 
 export interface AnalysisHistoryListResponse {

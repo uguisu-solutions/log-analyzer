@@ -9,6 +9,7 @@ import { RunHistoryView } from './RunHistoryView'
 import { TopologyAnalysis } from './TopologyAnalysis'
 import { ConfigLogAnalysis } from './ConfigLogAnalysis'
 import { AnalysisHistoryView } from './AnalysisHistoryView'
+import { ModelComparisonView } from './ModelComparisonView'
 import type {
   AnalysisResult,
   ConfigEntry,
@@ -23,7 +24,7 @@ import './App.css'
 
 import { API_BASE, apiFetch } from './api'
 
-type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-log' | 'analysis-history'
+type Mode = 'single' | 'compare' | 'builder' | 'logs' | 'history' | 'topology' | 'config-log' | 'analysis-history' | 'model-comparison'
 
 function ResultDetails({ result }: { result: AnalysisResult }) {
   return (
@@ -369,6 +370,8 @@ function App() {
   const [mode, setMode] = useState<Mode>('config-log')
   // 再解析 (docs/plan/reanalysis.md): 解析履歴画面 → config-log 画面へ引き継ぐ種
   const [reanalyzeSeed, setReanalyzeSeed] = useState<ReanalyzeSeed | null>(null)
+  // 精度比較タブ → 解析履歴の詳細を開くときの ID (docs/plan/slm_support.md §9-6)
+  const [historyOpenId, setHistoryOpenId] = useState<number | null>(null)
 
   const [configList, setConfigList] = useState<ConfigEntry[]>([])
   const [logs, setLogs] = useState<LogEntry[]>([])
@@ -864,6 +867,13 @@ function App() {
         >
           解析履歴
         </button>
+        <button
+          onClick={() => setMode('model-comparison')}
+          className={mode === 'model-comparison' ? 'tab active' : 'tab'}
+          disabled={singleRunning || isCompareRunning}
+        >
+          クラウド / SLM 比較
+        </button>
       </div>
 
       {mode === 'builder' && (
@@ -916,6 +926,14 @@ function App() {
         <AnalysisHistoryView
           langfuseHost={langfuseHost}
           onReanalyze={(seed) => { setReanalyzeSeed(seed); setMode('config-log') }}
+          openEntryId={historyOpenId}
+          onOpenEntryConsumed={() => setHistoryOpenId(null)}
+        />
+      )}
+
+      {mode === 'model-comparison' && (
+        <ModelComparisonView
+          onOpenRun={(id) => { setHistoryOpenId(id); setMode('analysis-history') }}
         />
       )}
 
