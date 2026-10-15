@@ -806,6 +806,24 @@ def list_analysis_history(
     return [dict(r) for r in rows], int(total)
 
 
+def list_history_for_comparison() -> list[dict]:
+    """比較ビュー用に、指紋のある解析履歴を実行順で返す（docs/plan/slm_support.md §9-6）。
+
+    指紋が空の行（列の追加前に保存された履歴）は、どの入力か判別できないため除く。
+    ``eval_score`` は最新の採点（未採点なら None）。
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT h.id, h.run_id, h.created_at, h.model_profile, h.input_fingerprint, "
+            " h.confidence, h.top_category, h.top_summary, h.request_json, h.result_json, "
+            " (SELECT e.score FROM analysis_evaluations e WHERE e.analysis_history_id = h.id "
+            "  ORDER BY e.id DESC LIMIT 1) AS eval_score "
+            "FROM analysis_history h WHERE h.input_fingerprint <> '' "
+            "ORDER BY h.created_at, h.id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_analysis_history(entry_id: int) -> dict | None:
     """個別取得。``request`` / ``result`` を JSON パースして返す（完全再現用）。"""
     with _connect() as conn:

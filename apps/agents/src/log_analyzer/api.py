@@ -31,6 +31,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import logging
 import contextlib
@@ -48,7 +50,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from log_analyzer import (
@@ -1276,6 +1278,90 @@ def list_analysis_history_endpoint(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+def _profile_order(profile: str) -> tuple[int, str]:
+    # 基準線の cloud を先頭に、次に SLM 単独、最後に混在
+    return (0 if profile == "cloud" else 2 if profile == "mixed" else 1, profile)
+
+
+def _comparison_run(row: dict) -> dict:
+    result = json.loads(row["result_json"] or "{}")
+    return {
+        "id": row["id"],
+        "run_id": row["run_id"],
+        "created_at": row["created_at"],
+        "confidence": row["confidence"],
+        "top_category": row["top_category"],
+        "top_summary": row["top_summary"],
+        "eval_score": row["eval_score"],
+        "format_issues": run_profile.format_issues(result),
+    }
+
+
+@app.get("/api/analysis-history/comparison")
+def analysis_history_comparison_endpoint() -> dict:
+    """同じ入力（指紋）の実行を、プロファイルごとに並べる（docs/plan/slm_support.md §9-6）。
+
+    返り値: ``{"profiles": [...], "rows": [{"input_fingerprint", "input_files",
+    "cells": {profile: [実行, ...]}}]}``。各セルは実行順のリスト（同じ条件で複数回流す前提）。
+    """
+    rows: dict[str, dict] = {}
+    profiles: set[str] = set()
+    for r in storage.list_history_for_comparison():
+        profile = r["model_profile"]
+        if not profile:
+            continue
+        profiles.add(profile)
+        fp = r["input_fingerprint"]
+        if fp not in rows:
+            request = json.loads(r["request_json"] or "{}")
+            rows[fp] = {
+                "input_fingerprint": fp,
+                "input_files": request.get("input_files") or [],
+                "cells": {},
+            }
+        rows[fp]["cells"].setdefault(profile, []).append(_comparison_run(r))
+    for row in rows.values():
+        row["cells"] = dict(sorted(row["cells"].items(), key=lambda kv: _profile_order(kv[0])))
+    return {"profiles": sorted(profiles, key=_profile_order), "rows": list(rows.values())}
+
+
+_COMPARISON_CSV_COLUMNS = [
+    "input_fingerprint", "input_files", "model_profile", "run_id", "created_at",
+    "confidence", "top_category", "top_summary", "eval_score",
+    "format_retries", "parse_fallbacks", "routing_violations", "input_truncated",
+    "manual_score",
+]
+
+
+@app.get("/api/analysis-history/comparison.csv")
+def analysis_history_comparison_csv_endpoint() -> Response:
+    """比較データを 1 実行 1 行で書き出す。手採点を書き込む ``manual_score`` 列は空欄。
+
+    Excel で開いて文字化けしないよう UTF-8 の BOM を付ける。
+    """
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_COMPARISON_CSV_COLUMNS)
+    writer.writeheader()
+    for row in analysis_history_comparison_endpoint()["rows"]:
+        for profile, runs in row["cells"].items():
+            for run in runs:
+                writer.writerow({
+                    "input_fingerprint": row["input_fingerprint"],
+                    "input_files": " / ".join(row["input_files"]),
+                    "model_profile": profile,
+                    **{k: run[k] for k in (
+                        "run_id", "created_at", "confidence", "top_category", "top_summary", "eval_score",
+                    )},
+                    **run["format_issues"],
+                    "manual_score": "",
+                })
+    return Response(
+        content="\ufeff" + buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="slm_comparison.csv"'},
     )
 
 
