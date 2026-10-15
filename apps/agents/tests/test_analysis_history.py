@@ -247,3 +247,42 @@ def test_init_db_adds_profile_columns_to_existing_history():
     assert total == 1
     assert rows[0]["run_id"] == "old-run"
     assert (rows[0]["model_profile"], rows[0]["models_json"], rows[0]["input_fingerprint"]) == ("", "{}", "")
+
+
+def _save_user_config(client, name: str, *, model: str | None = None, prompt: str | None = None) -> str:
+    slots = ("orchestrator", "fw_monitor", "integrator")
+    r = client.post("/api/configs/saved", json={
+        "name": name,
+        "base_config": "config4",
+        "overrides": {"integrator": prompt} if prompt else {},
+        "model_overrides": {s: model for s in slots} if model else {},
+    })
+    assert r.status_code == 200, r.text
+    return f"user:{r.json()['id']}"
+
+
+def test_fingerprint_matches_between_builtin_and_user_config_that_only_changes_models():
+    """画面は選んだ構成（config4 / user:N）を config_id に入れて保存する。
+    モデルだけを替えたユーザー定義構成は、元の構成と同じ入力として束ねる。"""
+    client = TestClient(api_mod.app)
+    slm = "ollama:gemma4:26b-a4b-it-q4_K_M"
+    user_cfg = _save_user_config(client, "all-local-26b", model=slm)
+
+    client.post("/api/analysis-history", json=_with_models(_sample_payload("run-builtin"), "claude-opus-4-7"))
+    client.post("/api/analysis-history",
+                json=_with_models(_sample_payload("run-user") | {"config_id": user_cfg}, slm))
+
+    entries = {e["run_id"]: e for e in client.get("/api/analysis-history").json()["entries"]}
+    assert entries["run-builtin"]["input_fingerprint"] == entries["run-user"]["input_fingerprint"]
+
+
+def test_fingerprint_differs_when_user_config_overrides_prompts():
+    """プロンプトを上書きした構成は条件が違うので、別の入力として扱う。"""
+    client = TestClient(api_mod.app)
+    user_cfg = _save_user_config(client, "prompt-tuned", prompt="別の統合プロンプト")
+
+    client.post("/api/analysis-history", json=_sample_payload("run-base"))
+    client.post("/api/analysis-history", json=_sample_payload("run-tuned") | {"config_id": user_cfg})
+
+    entries = {e["run_id"]: e for e in client.get("/api/analysis-history").json()["entries"]}
+    assert entries["run-base"]["input_fingerprint"] != entries["run-tuned"]["input_fingerprint"]

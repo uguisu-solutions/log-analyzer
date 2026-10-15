@@ -1249,9 +1249,27 @@ def create_analysis_history_endpoint(req: AnalysisHistorySaveRequest) -> dict:
         revision=req.revision,
         model_profile=run_profile.profile_of(models),
         models_json=json.dumps(models, ensure_ascii=False),
-        input_fingerprint=run_profile.input_fingerprint(request_payload),
+        input_fingerprint=run_profile.input_fingerprint(
+            {**request_payload, "config_id": _config_conditions(req.config_id)}
+        ),
     )
     return {"id": entry_id, "created": created}
+
+
+def _config_conditions(config_id: str) -> dict | str:
+    """指紋に入れる「構成の条件」。モデル指定だけを除く（docs/plan/slm_support.md §9-6）。
+
+    画面は選んだ構成（``config4`` / ``user:N``）をそのまま保存するため、``user:N`` は中身に
+    解決する。モデルだけを替えたユーザー定義構成は元の構成と同じ条件になり、プロンプトを
+    上書きした構成は別の条件になる。解決できない（削除済み等）ときは文字列のまま使う。
+    """
+    try:
+        base_config, prompt_overrides, _models, _pipeline = _resolve_run_target(
+            config_id, None, None, None
+        )
+    except HTTPException:
+        return config_id
+    return {"base_config": base_config, "prompt_overrides": prompt_overrides}
 
 
 def _history_summary(row: dict) -> AnalysisHistorySummary:
