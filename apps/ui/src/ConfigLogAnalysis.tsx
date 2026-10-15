@@ -25,6 +25,7 @@ import { ConfirmationModal } from './ConfirmationModal'
 import { PolicyProposalModal } from './PolicyProposalModal'
 import { PolicySummaryView, plannerUsage } from './PolicySummaryView'
 import { DelegationHistoryView } from './DelegationHistoryView'
+import { InferenceModelSelector } from './InferenceModelSelector'
 import { LiveChatView } from './LiveChatView'
 import { MonitorEvidenceSection } from './MonitorEvidenceView'
 import { RoundMetricsView } from './RoundMetricsView'
@@ -194,6 +195,13 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
     if (!selectedConfig && rallyConfigs.length > 0) setSelectedConfig(rallyConfigs[0].id)
   }, [rallyConfigs, selectedConfig])
   const [rallyMaxRounds, setRallyMaxRounds] = useState<number>(3)
+  // 推論モデル (docs/plan/slm_support.md §9-1)。'' = クラウド (既定・従来どおり何も送らない)
+  const [inferenceModel, setInferenceModel] = useState<string>('')
+  const [modelOverrides, setModelOverrides] = useState<Record<string, string> | undefined>(undefined)
+  const handleInferenceModel = useCallback((model: string, overrides: Record<string, string> | undefined) => {
+    setInferenceModel(model)
+    setModelOverrides(overrides)
+  }, [])
   // 解析モード (既定: 1 段階 config + log 同時)
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('single')
   const [singleSource, setSingleSource] = useState<SingleSource>('both')
@@ -689,6 +697,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
       const body = {
         config: selectedConfig,
         rally_max_rounds: rallyMaxRounds,
+        // 推論モデル。クラウド (既定) のときは undefined で送らない (従来と同じリクエスト)
+        model_overrides: modelOverrides,
         topology: {
           nodes: topology.nodes.map(n => ({ id: n.id, type: n.type, label: n.label, ip: n.ip })),
           links: topology.links,
@@ -1063,6 +1073,8 @@ export function ConfigLogAnalysis({ configList, logs, parseSSE, renderEventSumma
         onSingleSource={setSingleSource}
         onStageOrder={setStageOrder}
       />
+
+      <InferenceModelSelector value={inferenceModel} onChange={handleInferenceModel} disabled={isRunning} />
 
       <details className="advanced-settings">
         <summary>詳細設定（rally / GPT 監査 / 方針確認）</summary>

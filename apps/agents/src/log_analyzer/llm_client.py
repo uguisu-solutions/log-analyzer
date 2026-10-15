@@ -189,6 +189,26 @@ def _ollama_post(url: str, payload: dict, timeout: float) -> dict:
         raise RuntimeError(f"Ollama がエラーを返した（HTTP {e.code}）: {detail}") from e
 
 
+def _ollama_get(url: str, timeout: float) -> dict:
+    """Ollama のネイティブ API から JSON を GET する（テストではここを差し替える）。"""
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def ollama_base_url() -> str:
+    """いまの SLM の接続先（画面に表示する）。"""
+    return _ollama_base_url()
+
+
+def ollama_models(timeout: float = 5) -> list[str]:
+    """いまの接続先（手元の Ollama か Runpod のトンネル）にあるモデルを ``ollama:<タグ>`` で返す。
+
+    接続先に無いモデルを画面で選べないようにするために使う。つながらなければ例外を上げる。
+    """
+    data = _ollama_get(f"{_ollama_base_url()}/api/tags", timeout=timeout)
+    return [OLLAMA_PREFIX + m["name"] for m in data.get("models") or []]
+
+
 def _text_of(content: str | list[dict]) -> str:
     if isinstance(content, str):
         return content

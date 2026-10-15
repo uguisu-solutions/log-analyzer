@@ -284,9 +284,11 @@ curl.exe http://localhost:11435/api/ps
 ```
 
 - Runpod に送ってよいのは合成ログ（`samples/logs/`）だけです。実ログ・顧客データは送らないでください
-- 構成ごとにモデルを選ぶ：構成4 の各ノードのモデルを Gemma 4 にしたユーザー定義構成を
-  `POST /api/configs/saved` で保存し（構成の編集画面は現在非表示）、`scripts/compare_slm.py` の
-  `--configs user:N` で実行します。**構成・ログ解析の画面には構成を選ぶ欄が無く、常に構成4 で動きます**
+- 画面で選ぶ：構成・ログ解析の画面の「**推論モデル**」で、クラウド（既定）か SLM を選びます。
+  選んだモデルで構成4 の全ノード（7 個）が動きます。欄の下に SLM の接続先（手元の Ollama / Runpod の
+  SSH トンネル）が表示され、**接続先に無いモデルは選べません**（トンネルを張ってから「接続先を再確認」）
+- スクリプトで流す：構成4 の各ノードのモデルを指定したユーザー定義構成を `POST /api/configs/saved` で
+  保存し、`scripts/compare_slm.py` の `--configs user:N` で実行します（ノードごとに違うモデルも指定可）
 
 #### クラウドとの精度比較
 
@@ -349,7 +351,7 @@ python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario2_api_ac
 cd apps\agents
 .\.venv\Scripts\Activate.ps1
 pytest -q
-# 期待: 402 passed
+# 期待: 406 passed
 ```
 
 テストは **外部ネットワークへ出ません**。`apps/agents/tests/conftest.py` が localhost 以外への TCP 接続を落とすため、実 LLM API / BigQuery を誤って叩いて課金が発生することはありません（意図的に必要な場合のみ `@pytest.mark.allow_network`）。

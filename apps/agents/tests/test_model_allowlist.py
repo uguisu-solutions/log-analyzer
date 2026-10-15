@@ -54,3 +54,49 @@ def test_user_config_with_all_slm_models_can_be_saved():
 
     assert r.status_code == 200, r.text
     assert r.json()["model_overrides"]["integrator"] == _SLM_26B
+
+
+# ─── 画面の「推論モデル」選択欄（GET /api/inference-models）──────────────
+
+
+def test_inference_models_marks_what_the_current_endpoint_has(monkeypatch):
+    """Runpod のトンネルにつないでいれば 26B / 31B だけが使える（手元用の e4b は無い）。"""
+    from fastapi.testclient import TestClient
+
+    from log_analyzer import llm_client
+
+    monkeypatch.setattr(llm_client, "ollama_base_url", lambda: "http://localhost:11435")
+    monkeypatch.setattr(llm_client, "ollama_models", lambda timeout=5: [_SLM_26B, _SLM_31B])
+
+    data = TestClient(api_mod.app).get("/api/inference-models").json()
+
+    assert data["ollama_base_url"] == "http://localhost:11435"
+    assert data["ollama_reachable"] is True
+    assert data["models"] == [
+        {"id": _CLOUD, "available": True},
+        {"id": _SLM_26B, "available": True},
+        {"id": _SLM_31B, "available": True},
+        {"id": _SLM_LOCAL, "available": False},
+    ]
+    # 選んだモデルを適用する構成4 のノード（モデルを替えられるもの全部）
+    assert data["slots"] == [
+        "orchestrator", "fw_monitor", "routing_monitor", "app_monitor", "dns_monitor", "sec_monitor",
+        "integrator",
+    ]
+
+
+def test_inference_models_when_ollama_is_unreachable(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from log_analyzer import llm_client
+
+    def down(timeout=5):
+        raise OSError("接続できません")
+
+    monkeypatch.setattr(llm_client, "ollama_models", down)
+
+    data = TestClient(api_mod.app).get("/api/inference-models").json()
+
+    assert data["ollama_reachable"] is False
+    assert "接続できません" in data["ollama_error"]
+    assert [m["available"] for m in data["models"]] == [True, False, False, False]

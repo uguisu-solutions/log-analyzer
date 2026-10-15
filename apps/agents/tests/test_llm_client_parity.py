@@ -455,3 +455,45 @@ def test_ollama_timeout_from_env(monkeypatch):
     monkeypatch.setenv("OLLAMA_TIMEOUT_SEC", "1800")
     _call_ollama()
     assert timeouts == [600.0, 1800.0]
+
+
+# ─── 接続先で使えるモデルの一覧（画面の選択欄用）─────────────────────
+
+
+def test_ollama_models_lists_tags_at_current_endpoint(monkeypatch):
+    """接続先（手元 or Runpod トンネル）にあるモデルを ``ollama:<タグ>`` で返す。"""
+    urls: list[str] = []
+
+    def get(url, timeout):
+        urls.append(url)
+        return {"models": [{"name": "gemma4:26b-a4b-it-q4_K_M"}, {"name": "gemma4:31b-it-q4_K_M"}]}
+
+    monkeypatch.setattr(llm_client, "_ollama_get", get)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11435")
+
+    assert llm_client.ollama_models() == [
+        "ollama:gemma4:26b-a4b-it-q4_K_M", "ollama:gemma4:31b-it-q4_K_M",
+    ]
+    assert urls == ["http://localhost:11435/api/tags"]
+
+
+def test_ollama_get_reads_json_over_http():
+    import json
+    from http.server import BaseHTTPRequestHandler
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = json.dumps({"models": [{"name": "gemma4:e4b"}]}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = _serve(Handler)
+    try:
+        out = llm_client._ollama_get(f"http://127.0.0.1:{server.server_port}/api/tags", timeout=5)
+    finally:
+        server.shutdown()
+    assert out == {"models": [{"name": "gemma4:e4b"}]}

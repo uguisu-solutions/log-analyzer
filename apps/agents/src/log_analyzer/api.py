@@ -56,6 +56,7 @@ from pydantic import BaseModel
 from log_analyzer import (
     evaluation_agent,
     filestore,
+    llm_client,
     pipeline_runner,
     prompt_slots,
     run_profile,
@@ -1412,6 +1413,31 @@ def get_audit_prompt() -> AuditPromptResponse:
         prompt=SYSTEM_PROMPT,
         model=os.environ.get("AUDIT_MODEL") or _DEFAULT_AUDIT_MODEL,
     )
+
+
+@app.get("/api/inference-models")
+def inference_models_endpoint() -> dict:
+    """構成・ログ解析の画面の「推論モデル」選択欄用（docs/plan/slm_support.md §9-1）。
+
+    選べるモデル（先頭がクラウド＝既定）と、いまの SLM の接続先（手元の Ollama か
+    Runpod の SSH トンネル）にそのモデルがあるか。接続先に無いモデルは画面で選べなくする。
+    ``slots`` は選んだモデルを適用する構成4 のノード（モデルを替えられるもの全部）。
+    """
+    try:
+        present = set(llm_client.ollama_models())
+        reachable, error = True, None
+    except Exception as e:  # noqa: BLE001 — つながらなくてもクラウドは選べるようにする
+        present, reachable, error = set(), False, str(e)
+    return {
+        "ollama_base_url": llm_client.ollama_base_url(),
+        "ollama_reachable": reachable,
+        "ollama_error": error,
+        "models": [
+            {"id": m, "available": m in present or not m.startswith(llm_client.OLLAMA_PREFIX)}
+            for m in prompt_slots.SELECTABLE_MODELS
+        ],
+        "slots": [s["slot_id"] for s in prompt_slots.get_slots("config4") if s["allowed_models"]],
+    }
 
 
 @app.get("/api/runtime-config", response_model=RuntimeConfigResponse)

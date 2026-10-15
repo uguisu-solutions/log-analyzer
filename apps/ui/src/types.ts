@@ -190,6 +190,15 @@ export interface ComparisonRow {
   cells: Record<string, ComparisonRun[]>  // プロファイル → 実行順のリスト
 }
 
+// 構成・ログ解析の「推論モデル」選択欄 (GET /api/inference-models)
+export interface InferenceModelsResponse {
+  ollama_base_url: string       // SLM の接続先 (手元の Ollama か Runpod の SSH トンネル)
+  ollama_reachable: boolean
+  ollama_error: string | null
+  models: { id: string; available: boolean }[]  // 先頭がクラウド (既定)
+  slots: string[]               // 選んだモデルを適用する構成4 のノード
+}
+
 export interface ComparisonResponse {
   profiles: string[]  // cloud → SLM 単独 → mixed の順
   rows: ComparisonRow[]
