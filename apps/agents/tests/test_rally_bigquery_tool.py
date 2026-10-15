@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from log_analyzer import llm_client
 from log_analyzer import bigquery_client as bq_mod
 from log_analyzer.rally import monitors as mon_mod
 from log_analyzer.rally import tools as tools_mod
@@ -168,7 +169,7 @@ def test_run_monitor_llm_executes_tool_then_returns_text(monkeypatch):
         _text_resp('{"findings": [], "next": "integrator"}'),
     ]
     fake_client = _FakeAnthropic(responses)
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", lambda: fake_client)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake_client)
 
     executed = {}
 
@@ -204,7 +205,7 @@ def test_run_monitor_llm_executes_tool_then_returns_text(monkeypatch):
 
 def test_run_monitor_llm_no_tools_when_no_bq(monkeypatch):
     fake_client = _FakeAnthropic([_text_resp('{"next": "integrator"}')])
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", lambda: fake_client)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake_client)
     text, tin, tout, cc, cr, calls, fetched = mon_mod._run_monitor_llm(
         model="m", system_prompt="sys",
         user_blocks=[{"type": "text", "text": "x"}], bq_sources={},
@@ -273,3 +274,34 @@ def test_bq_tool_resolves_by_host_and_table(monkeypatch):
     monkeypatch.setattr("log_analyzer.bigquery_client.query_logs", _fake_query)
     tools_mod.run_bigquery_tool({"host": "h1", "table": "t_b"}, allowed)
     assert captured["table"] == "t_b"
+
+
+def test_run_monitor_llm_appends_tool_turn_in_anthropic_form(monkeypatch):
+    """2 回目の呼び出しの履歴に、assistant の tool_use ブロックと user の tool_result が
+    Anthropic 形式の dict で積まれる（llm_client 経由でもリクエストの形は従来どおり）。"""
+    responses = [
+        _tool_use_resp("t1", {"host": "fw-01"}),
+        _text_resp('{"next": "integrator"}'),
+    ]
+    fake_client = _FakeAnthropic(responses)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake_client)
+    monkeypatch.setattr(mon_mod, "run_bigquery_tool", lambda tool_input, allowed: "結果")
+
+    mon_mod._run_monitor_llm(
+        model="claude-opus-4-7",
+        system_prompt="sys",
+        user_blocks=[{"type": "text", "text": "x"}],
+        bq_sources={"fw-01": {"table": "device_logs"}},
+    )
+
+    second = fake_client.messages.calls[1]["messages"]
+    assert second[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "t1", "name": "bigquery_query", "input": {"host": "fw-01"}}
+        ],
+    }
+    assert second[2] == {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "結果"}],
+    }

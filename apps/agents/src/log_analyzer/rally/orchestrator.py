@@ -17,8 +17,7 @@ from __future__ import annotations
 import os
 import time
 
-import anthropic
-
+from log_analyzer import llm_client
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.rally.state import Config4State
 from log_analyzer.tracing import usage_components
@@ -115,7 +114,6 @@ def orchestrator_select_first(state: Config4State) -> dict:
     system_prompt = p_overrides.get("orchestrator", ORCHESTRATOR_PROMPT)
 
     user_input = _build_user_input(state)
-    client = anthropic.Anthropic()
     started = time.perf_counter()
     # system プロンプトに ephemeral キャッシュを設定。同一ログの再実行 / 同一プロンプトの
     # 連続テストで 2 回目以降の入力 token を大幅削減する。
@@ -133,11 +131,11 @@ def orchestrator_select_first(state: Config4State) -> dict:
         total_cc += c["cache_creation"]
         total_cr += c["cache_read"]
 
-    response = client.messages.create(
+    response = llm_client.complete(
         model=model, max_tokens=_ORCHESTRATOR_MAX_TOKENS, system=system, messages=messages
     )
     _accumulate(response.usage)
-    raw = response.content[0].text
+    raw = response.text
     raw_decision, parse_error = safe_extract_json(
         raw,
         fallback={
@@ -160,11 +158,11 @@ def orchestrator_select_first(state: Config4State) -> dict:
             ),
         })
         try:
-            retry = client.messages.create(
+            retry = llm_client.complete(
                 model=model, max_tokens=_ORCHESTRATOR_MAX_TOKENS, system=system, messages=messages
             )
             _accumulate(retry.usage)
-            rtext = retry.content[0].text
+            rtext = retry.text
             retry_decision, retry_err = safe_extract_json(rtext, fallback=raw_decision)
             if retry_err is None:
                 raw_decision, parse_error, raw = retry_decision, None, rtext

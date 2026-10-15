@@ -60,7 +60,7 @@ def test_audit_parses_agree_verdict(monkeypatch):
         '"alternative_hypotheses": []}',
         input_tokens=1200, output_tokens=80,
     )
-    with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
+    with patch("log_analyzer.llm_client.openai.OpenAI", return_value=fake_client):
         report = run_audit("log", {"nodes": [{"id": "fw-01"}]}, _sample_analysis())
     assert report.verdict == "agree"
     assert report.confidence == 0.9
@@ -75,7 +75,7 @@ def test_audit_normalizes_bad_verdict(monkeypatch):
     """規定外 verdict は 'uncertain' に正規化。"""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
     fake_client = _fake_responses_client('{"verdict": "STRONGLY_AGREE", "confidence": 0.99, "summary": "x"}')
-    with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
+    with patch("log_analyzer.llm_client.openai.OpenAI", return_value=fake_client):
         report = run_audit("log", None, _sample_analysis())
     assert report.verdict == "uncertain"
 
@@ -85,7 +85,7 @@ def test_audit_handles_openai_exception(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
     fake_client = MagicMock()
     fake_client.responses.create.side_effect = RuntimeError("network error")
-    with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
+    with patch("log_analyzer.llm_client.openai.OpenAI", return_value=fake_client):
         report = run_audit("log", None, _sample_analysis())
     assert report.verdict == "uncertain"
     assert "network error" in report.summary
@@ -96,7 +96,7 @@ def test_audit_uses_custom_system_prompt(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
     fake_client = _fake_responses_client('{"verdict": "agree", "confidence": 0.7, "summary": "ok"}')
     custom = "あなたは厳格な監査者です。必ず disagree を疑え。"
-    with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
+    with patch("log_analyzer.llm_client.openai.OpenAI", return_value=fake_client):
         run_audit("log", None, _sample_analysis(), system_prompt=custom)
     _, kwargs = fake_client.responses.create.call_args
     assert kwargs["instructions"] == custom
@@ -107,7 +107,7 @@ def test_audit_blank_system_prompt_falls_back_to_default(monkeypatch):
     from log_analyzer.audit_agent import SYSTEM_PROMPT
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
     fake_client = _fake_responses_client('{"verdict": "agree", "confidence": 0.7, "summary": "ok"}')
-    with patch("log_analyzer.audit_agent.openai.OpenAI", return_value=fake_client):
+    with patch("log_analyzer.llm_client.openai.OpenAI", return_value=fake_client):
         run_audit("log", None, _sample_analysis(), system_prompt="   ")
     _, kwargs = fake_client.responses.create.call_args
     assert kwargs["instructions"] == SYSTEM_PROMPT

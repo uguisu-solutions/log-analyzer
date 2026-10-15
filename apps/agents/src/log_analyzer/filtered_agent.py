@@ -16,8 +16,7 @@ import json
 import os
 import time
 
-import anthropic
-
+from log_analyzer import llm_client
 from log_analyzer.baseline_agent import SYSTEM_PROMPT
 from log_analyzer.filters import FilterResult, filter_log
 from log_analyzer.schema import (
@@ -73,18 +72,16 @@ def run_filtered(
 
     fr = filter_log(log_text)
 
-    client = anthropic.Anthropic()
-
     haiku_input = _format_haiku_input(fr)
     haiku_started = time.perf_counter()
-    haiku_response = client.messages.create(
+    haiku_response = llm_client.complete(
         model=haiku_model,
         max_tokens=800,
         system=triage_prompt,
         messages=[{"role": "user", "content": haiku_input}],
     )
     haiku_latency = int((time.perf_counter() - haiku_started) * 1000)
-    triage_card = haiku_response.content[0].text.strip()
+    triage_card = haiku_response.text.strip()
 
     trace.generation(
         name=f"{haiku_model}-triage",
@@ -97,14 +94,14 @@ def run_filtered(
 
     sonnet_input = _format_sonnet_input(triage_card, fr)
     sonnet_started = time.perf_counter()
-    sonnet_response = client.messages.create(
+    sonnet_response = llm_client.complete(
         model=sonnet_model,
         max_tokens=2000,
         system=analyze_prompt,
         messages=[{"role": "user", "content": sonnet_input}],
     )
     sonnet_latency = int((time.perf_counter() - sonnet_started) * 1000)
-    raw_text = sonnet_response.content[0].text
+    raw_text = sonnet_response.text
     parsed = _extract_json(raw_text)
 
     sent_bytes = len(sonnet_input.encode("utf-8"))

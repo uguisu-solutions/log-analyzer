@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from log_analyzer import llm_client
 from log_analyzer.rally import monitors as mon_mod
 from log_analyzer.rally import source_tools as st
 from log_analyzer.source.db_schema import extract_db_schema
@@ -64,7 +65,7 @@ def test_monitor_uses_source_tools(tmp_path, monkeypatch):
         _text_resp('{"findings": [], "next": "integrator"}'),
     ]
     fake = _FakeAnthropic(responses)
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", lambda: fake)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake)
 
     text, tin, tout, cc, cr, calls, fetched = mon_mod._run_monitor_llm(
         model="claude-opus-4-7",
@@ -91,7 +92,7 @@ def test_monitor_uses_source_tools(tmp_path, monkeypatch):
 
 def test_monitor_no_tools_when_no_source_no_bq(tmp_path, monkeypatch):
     fake = _FakeAnthropic([_text_resp('{"next": "integrator"}')])
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", lambda: fake)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake)
     text, *_ = mon_mod._run_monitor_llm(
         model="m", system_prompt="sys",
         user_blocks=[{"type": "text", "text": "x"}],
@@ -105,7 +106,7 @@ def test_bq_and_source_tools_coexist(tmp_path, monkeypatch):
     """BQ ソースとソースコードが両方あれば両方のツールが渡る。"""
     rt = _runtime(tmp_path)
     fake = _FakeAnthropic([_text_resp('{"next": "integrator"}')])
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", lambda: fake)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake)
     mon_mod._run_monitor_llm(
         model="m", system_prompt="sys",
         user_blocks=[{"type": "text", "text": "x"}],

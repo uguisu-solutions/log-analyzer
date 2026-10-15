@@ -33,8 +33,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any
 
-import anthropic
-
+from log_analyzer import llm_client
 from log_analyzer.schema import (
     SCHEMA_VERSION,
     AnalysisResult,
@@ -245,16 +244,15 @@ async def _run_llm_node(
     )
     user_input = _format_input(node, log_text, upstream_outputs)
 
-    client = anthropic.AsyncAnthropic()
     started = time.perf_counter()
-    response = await client.messages.create(
+    response = await llm_client.acomplete(
         model=model,
         max_tokens=2000,
         system=system_prompt,
         messages=[{"role": "user", "content": user_input}],
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    text = response.content[0].text
+    text = response.text
     return text, {
         "model": model,
         "latency_ms": latency_ms,

@@ -19,9 +19,7 @@ import os
 import time
 from dataclasses import dataclass
 
-import anthropic
-import openai
-
+from log_analyzer import llm_client
 from log_analyzer.baseline_agent import SYSTEM_PROMPT
 from log_analyzer.schema import (
     SCHEMA_VERSION,
@@ -68,16 +66,15 @@ class _ModelRunResult:
 async def _analyze_with_anthropic(
     log_text: str, model: str, role: str, system_prompt: str
 ) -> _ModelRunResult:
-    client = anthropic.AsyncAnthropic()
     started = time.perf_counter()
-    response = await client.messages.create(
+    response = await llm_client.acomplete(
         model=model,
         max_tokens=2000,
         system=system_prompt,
         messages=[{"role": "user", "content": log_text}],
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    raw_text = response.content[0].text
+    raw_text = response.text
     parsed = _extract_json(raw_text)
     return _ModelRunResult(
         role=role,
@@ -92,27 +89,22 @@ async def _analyze_with_anthropic(
 async def _analyze_with_openai(
     log_text: str, model: str, role: str, system_prompt: str
 ) -> _ModelRunResult:
-    client = openai.AsyncOpenAI()
     started = time.perf_counter()
-    # GPT-5.x は Responses API + reasoning.effort / text.verbosity が推奨 (OpenAI 公式ガイダンス)。
-    response = await client.responses.create(
+    # Responses API（reasoning.effort=low / text.verbosity=low）への変換は llm_client が行う
+    response = await llm_client.acomplete(
         model=model,
-        instructions=system_prompt,
-        input=log_text,
-        max_output_tokens=4000,
-        reasoning={"effort": "low"},
-        text={"verbosity": "low"},
+        max_tokens=4000,
+        system=system_prompt,
+        messages=[{"role": "user", "content": log_text}],
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    raw_text = getattr(response, "output_text", None) or ""
-    parsed = _extract_json(raw_text)
-    usage = getattr(response, "usage", None)
+    parsed = _extract_json(response.text)
     return _ModelRunResult(
         role=role,
         model=model,
         parsed=parsed,
-        tokens_in=int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-        tokens_out=int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
+        tokens_in=response.usage.input_tokens,
+        tokens_out=response.usage.output_tokens,
         latency_ms=latency_ms,
     )
 
@@ -139,16 +131,15 @@ async def _integrate(
 async def _analyze_with_anthropic_raw(
     system: str, user_content: str, model: str, role: str
 ) -> _ModelRunResult:
-    client = anthropic.AsyncAnthropic()
     started = time.perf_counter()
-    response = await client.messages.create(
+    response = await llm_client.acomplete(
         model=model,
         max_tokens=2000,
         system=system,
         messages=[{"role": "user", "content": user_content}],
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    raw_text = response.content[0].text
+    raw_text = response.text
     parsed = _extract_json(raw_text)
     return _ModelRunResult(
         role=role,

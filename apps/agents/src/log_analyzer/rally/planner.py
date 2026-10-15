@@ -25,8 +25,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-import anthropic
-
+from log_analyzer import llm_client
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.tracing import usage_components
 
@@ -172,17 +171,16 @@ def plan_policy(
         "missing_data_notes": "",
     }
 
-    client = anthropic.Anthropic()
     messages: list[dict] = [{"role": "user", "content": user_input}]
     total_in = 0
     total_out = 0
     started = time.perf_counter()
     started_at = datetime.now(timezone.utc)
 
-    response = client.messages.create(
+    response = llm_client.complete(
         model=chosen_model, max_tokens=max_toks, system=system, messages=messages
     )
-    raw = response.content[0].text
+    raw = response.text
     uc = usage_components(response.usage)
     total_in += uc["input"] + uc["cache_creation"] + uc["cache_read"]
     total_out += uc["output"]
@@ -202,10 +200,10 @@ def plan_policy(
             ),
         })
         try:
-            retry = client.messages.create(
+            retry = llm_client.complete(
                 model=chosen_model, max_tokens=max_toks, system=system, messages=messages
             )
-            rtext = retry.content[0].text
+            rtext = retry.text
             ruc = usage_components(retry.usage)
             total_in += ruc["input"] + ruc["cache_creation"] + ruc["cache_read"]
             total_out += ruc["output"]

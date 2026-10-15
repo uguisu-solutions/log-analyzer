@@ -28,8 +28,7 @@ import re
 import time
 from typing import Callable
 
-import anthropic
-
+from log_analyzer import llm_client
 from log_analyzer.rally import source_tools
 from log_analyzer.rally._helpers import extract_json, safe_extract_json
 from log_analyzer.rally.state import Config4State
@@ -272,20 +271,6 @@ def _blocks_to_text(blocks: list[dict]) -> str:
     return "\n\n".join(b.get("text", "") for b in blocks)
 
 
-def _extract_text(content) -> str:
-    """Messages API レスポンスの content から text ブロックを連結して返す。
-
-    実 SDK の text ブロックは ``type == "text"``。``type`` を持たないブロック
-    (テストの SimpleNamespace 等) も text 属性があれば拾う。tool_use ブロックは除外。
-    """
-    parts = []
-    for block in content:
-        btype = getattr(block, "type", None)
-        if btype == "text" or (btype is None and hasattr(block, "text")):
-            parts.append(getattr(block, "text", "") or "")
-    return "".join(parts)
-
-
 def _run_monitor_llm(
     *,
     model: str,
@@ -303,7 +288,6 @@ def _run_monitor_llm(
 
     bq_sources が空の場合は従来通りツール無しの単発呼び出しと等価。
     """
-    client = anthropic.Anthropic()
     use_bq = bool(bq_sources)
     use_source = source_tools.has_source_tools(source_runtime)
     use_tools = use_bq or use_source
@@ -351,68 +335,59 @@ def _run_monitor_llm(
             ),
         })
         try:
-            retry = client.messages.create(
+            retry = llm_client.complete(
                 model=model, max_tokens=_MONITOR_MAX_TOKENS, system=system, messages=messages
             )
         except Exception:
             return text  # 再試行呼び出し自体が失敗したら元のテキストを返す
         _accumulate(retry.usage)
-        retry_text = _extract_text(retry.content)
-        return retry_text or text
+        return retry.text or text
 
     for _ in range(_MAX_TOOL_ITERATIONS):
-        kwargs: dict = {
-            "model": model,
-            "max_tokens": _MONITOR_MAX_TOKENS,
-            "system": system,
-            "messages": messages,
-        }
-        if use_tools:
-            tool_list: list[dict] = []
-            if use_bq:
-                tool_list += [BIGQUERY_SCHEMA_TOOL_SCHEMA, BIGQUERY_TOOL_SCHEMA]
-            if use_source:
-                tool_list += source_tools.source_tool_schemas(source_runtime)
-            kwargs["tools"] = tool_list
-        response = client.messages.create(**kwargs)
+        tool_list: list[dict] = []
+        if use_bq:
+            tool_list += [BIGQUERY_SCHEMA_TOOL_SCHEMA, BIGQUERY_TOOL_SCHEMA]
+        if use_source:
+            tool_list += source_tools.source_tool_schemas(source_runtime)
+        response = llm_client.complete(
+            model=model,
+            max_tokens=_MONITOR_MAX_TOKENS,
+            system=system,
+            messages=messages,
+            tools=tool_list or None,
+        )
         _accumulate(response.usage)
 
         if use_tools and response.stop_reason == "tool_use":
-            # assistant の tool_use ターンをそのまま履歴に積む
-            messages.append({"role": "assistant", "content": response.content})
+            # assistant の tool_use ターンを（Anthropic 形式のブロックで）履歴に積む
+            messages.append({"role": "assistant", "content": response.content_blocks})
             tool_results: list[dict] = []
-            for block in response.content:
-                if getattr(block, "type", None) != "tool_use":
-                    continue
-                if block.name == "bigquery_query":
-                    result_str = run_bigquery_tool(dict(block.input or {}), bq_sources)
-                    executed.append(
-                        f"bigquery_query(host={ (block.input or {}).get('host')!r})"
-                    )
+            for call in response.tool_calls:
+                args = dict(call.input)
+                if call.name == "bigquery_query":
+                    result_str = run_bigquery_tool(args, bq_sources)
+                    executed.append(f"bigquery_query(host={args.get('host')!r})")
                     # 取得した実ログを監査の証拠として保持 (エラー文字列は除く)
                     if not result_str.startswith("エラー"):
                         fetched.append({
-                            "host": str((block.input or {}).get("host") or ""),
+                            "host": str(args.get("host") or ""),
                             "content": result_str,
                         })
-                elif block.name == "bigquery_schema":
-                    result_str = run_bigquery_schema_tool(dict(block.input or {}), bq_sources)
-                    executed.append(
-                        f"bigquery_schema(host={ (block.input or {}).get('host')!r})"
-                    )
-                elif block.name in source_tools.SOURCE_TOOL_NAMES:
-                    args = dict(block.input or {})
+                elif call.name == "bigquery_schema":
+                    result_str = run_bigquery_schema_tool(args, bq_sources)
+                    executed.append(f"bigquery_schema(host={args.get('host')!r})")
+                elif call.name in source_tools.SOURCE_TOOL_NAMES:
                     result_str = source_tools.dispatch_source_tool(
-                        block.name, args, source_runtime or {}
+                        call.name, args, source_runtime or {}
                     )
                     label = args.get("path") or args.get("query") or args.get("table") or ""
-                    executed.append(f"{block.name}({label!r})")
+                    executed.append(f"{call.name}({label!r})")
                 else:
-                    result_str = f"エラー: 未知のツール {block.name}"
+                    result_str = f"エラー: 未知のツール {call.name}"
                 tool_results.append(
                     {
                         "type": "tool_result",
-                        "tool_use_id": block.id,
+                        "tool_use_id": call.id,
                         "content": result_str,
                     }
                 )
@@ -420,15 +395,15 @@ def _run_monitor_llm(
             continue
 
         # tool_use 以外 (end_turn 等) → 最終テキスト。JSON が取れなければ 1 回リトライ
-        final_text = _retry_if_not_json(_extract_text(response.content))
+        final_text = _retry_if_not_json(response.text)
         return final_text, total_in, total_out, total_cc, total_cr, executed, fetched
 
     # 反復上限に到達: ツール無しで呼び直し、最終 JSON を強制する
-    final = client.messages.create(
+    final = llm_client.complete(
         model=model, max_tokens=_MONITOR_MAX_TOKENS, system=system, messages=messages
     )
     _accumulate(final.usage)
-    final_text = _retry_if_not_json(_extract_text(final.content))
+    final_text = _retry_if_not_json(final.text)
     return final_text, total_in, total_out, total_cc, total_cr, executed, fetched
 
 

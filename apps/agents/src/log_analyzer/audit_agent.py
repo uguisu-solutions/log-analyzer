@@ -23,8 +23,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-import openai
-
+from log_analyzer import llm_client
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.schema import AnalysisResult, AuditReport
 from log_analyzer.tracing import get_client, usage_for
@@ -285,20 +284,17 @@ def run_audit(
     started_at = datetime.now(timezone.utc)
     user_input = _build_user_input(log_text, topology_context, analysis_result, bq_evidence)
     try:
-        client = openai.OpenAI()
-        # GPT-5.x は Responses API + reasoning.effort / text.verbosity が推奨
-        # (OpenAI 公式 GPT-5.5 ガイダンス)。監査は補助タスクなので effort=low / verbosity=low。
-        # reasoning トークンが出力枠を食って空応答になるのを避けるため max_output_tokens は余裕を持たせる。
-        response = client.responses.create(
+        # GPT-5.x は Responses API（reasoning.effort=low / text.verbosity=low）で呼ぶ。
+        # 変換は llm_client が行う。reasoning トークンが出力枠を食って空応答になるのを
+        # 避けるため max_tokens（= max_output_tokens）は余裕を持たせる。
+        response = llm_client.complete(
             model=chosen_model,
-            instructions=sys_prompt,
-            input=user_input,
-            max_output_tokens=4000,
-            reasoning={"effort": "low"},
-            text={"verbosity": "low"},
+            max_tokens=4000,
+            system=sys_prompt,
+            messages=[{"role": "user", "content": user_input}],
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        raw = (getattr(response, "output_text", None) or "")
+        raw = response.text
         parsed, parse_error = safe_extract_json(
             raw,
             fallback={
@@ -312,10 +308,8 @@ def run_audit(
         verdict = str(parsed.get("verdict") or "uncertain").strip().lower()
         if verdict not in {"agree", "partial", "disagree", "uncertain"}:
             verdict = "uncertain"
-        usage = getattr(response, "usage", None)
-        # Responses API の usage は input_tokens / output_tokens
-        tokens_in = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-        tokens_out = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+        tokens_in = response.usage.input_tokens
+        tokens_out = response.usage.output_tokens
         summary = str(parsed.get("summary") or "").strip()
         if parse_error:
             summary = (summary + f" [parse_error: {parse_error[:120]}]").strip()

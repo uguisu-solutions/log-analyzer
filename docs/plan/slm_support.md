@@ -4,9 +4,8 @@
 > 関連：[config_log_stages.md](./config_log_stages.md) / [source_code_analysis.md](./source_code_analysis.md) /
 > [reanalysis.md](./reanalysis.md) / [deploy-runbook.md](../deploy-runbook.md)。
 >
-> **状態（2026-10-15）**: **設計確定・Phase 1 着手**（branch `feature/slm-support`。
-> 開発カーネル・ガードレールの整備と本設計書のみ。実装はこれから）。
-> 未確定の論点は無い（§12）。**Phase 1 から着手可能**で、Phase 1・2 は GPU もローカルサーバも不要。
+> **状態（2026-10-15）**: **Phase 1 完了**（branch `feature/slm-support`。`llm_client.py` へ集約済み・振る舞い不変）。
+> 未確定の論点は無い（§12）。次は Phase 2。Phase 1・2 は GPU もローカルサーバも不要。
 >
 > **推論基盤は Ollama**（2026-10-02 決定）。実機 0.34.2 に対して
 > OpenAI 互換 / 構造化出力 / tool-use / コンテキスト長の挙動を**実測して設計に反映済み**
@@ -157,7 +156,14 @@ async def acomplete(...) -> LlmResponse: ...          # multi_model / pipeline_r
 - **Ollama はネイティブ `/api/chat` を使う**（OpenAI 互換 `/v1` ではない）。理由は §7-1 の
   `num_ctx` 問題。`/v1` でもリクエストは通るが**コンテキスト長を変えられず、長いログが黙って切られる**
 - 将来 vLLM を足す場合は `openai_compat` プロバイダとして横に追加する（この層の形は変えない）
-- **テストの差し替え点は `llm_client.complete` の 1 箇所**にする（22 → 1 箇所）
+- **テストの差し替え点は `llm_client` の中の SDK クライアント生成 1 箇所**にする
+  （`llm_client.anthropic.Anthropic` / `AsyncAnthropic` / `llm_client.openai.OpenAI` / `AsyncOpenAI`）。
+  `llm_client.complete` ごと差し替えるより、**SDK に渡るリクエストの形を既存テストのまま検証できる**ため
+  （Phase 1 の受け入れ条件「振る舞い不変」をテストで担保する）。SDK を import してよいのは
+  `llm_client.py` だけで、`test_llm_client.py` がこれを固定している
+- OpenAI 経路は `gpt-*` のみ。従来の直書きと同じ Responses API（`instructions` / `input` /
+  `max_output_tokens` / `reasoning.effort=low` / `text.verbosity=low`）に変換する。
+  そのため `AUDIT_MODEL` / `OPENAI_MODEL` に `gpt-` 以外を指定すると Anthropic 経路に入る点に注意
 
 > 検討したが採らない案：LangChain / LiteLLM の導入。依存が重く、
 > `cache_control` と tool-use ループの制御を取り戻すために結局ラッパを書くことになる。
@@ -398,7 +404,7 @@ Q4_K_M で使う。別リポジトリの検証（`slm検証`、2026-10-13、Runp
 
 | Phase | 内容 | 受け入れ条件 |
 |---|---|---|
-| **1** | `llm_client.py` を新設し 10 箇所を寄せる。**振る舞いは不変**。テスト 22 箇所の差し替え点を `llm_client.complete` へ移行 | `node scripts/check.mjs` が緑（pytest 321 件を維持）。クラウドでの実行結果が従来と一致 |
+| **1**（**完了** 2026-10-15） | `llm_client.py` を新設し 10 箇所を寄せる。**振る舞いは不変**。テスト 22 箇所の差し替え点を `llm_client` 内の SDK 生成へ移行 | `node scripts/check.mjs` が緑（pytest 321 → 335 件。既存の期待値は不変）。LLM 経路のテストが無かった構成1・2・3・5 は特性テスト（`test_llm_call_sites.py`）を先に足して固定 |
 | **2** | 中間出力の Pydantic 化（§6）。**クラウドのまま**入れる。プロンプトのスキーマ部分をモデルから生成 | 既存の parse フォールバック経路に到達しなくなる。出力トークンの減少を計測 |
 | **3** | Ollama アダプタ（`/api/chat`・§5 の tool-use 変換・`format` による構造化出力・`num_ctx` 明示・`think:false`）＋ 起動・SSH トンネル・モデル切替の手順 | ローカルの `gemma4:e4b` で構成1 が完走し `AnalysisResult` が返る。tool-use と切り捨て検知は単体テストでカバー。`/api/ps` の実効 ctx が意図どおり。Runpod（26B / 31B）での実機確認は Phase 5 とまとめて行う |
 | **4** | **検証基盤**：許可モデルの追加・検証プロファイル（§9-2）・履歴へのモデル列追加（§9-3） | 同じログを `cloud` と `monitors-local` で走らせ、履歴一覧でプロファイル別に並べられる |

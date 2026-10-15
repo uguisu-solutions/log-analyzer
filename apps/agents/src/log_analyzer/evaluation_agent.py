@@ -17,8 +17,7 @@ import json
 import os
 import time
 
-import anthropic
-
+from log_analyzer import llm_client
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.schema import EvaluationResult
 
@@ -205,18 +204,17 @@ def run_evaluation(
 
     started = time.perf_counter()
     try:
-        client = anthropic.Anthropic()
         # 注: claude-opus-4-7 は temperature 非対応 (指定すると 400)。採点のブレは
         # モデル既定の挙動に委ねる。厳密な再現性が要る場合は temperature 対応モデルを
         # EVAL_MODEL に指定する運用とする。
-        response = client.messages.create(
+        response = llm_client.complete(
             model=chosen_model,
             max_tokens=_env_int("EVAL_MAX_TOKENS", 3000),
             system=sys_prompt,
             messages=[{"role": "user", "content": _build_user_input(result, scenario)}],
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        raw = response.content[0].text if response.content else ""
+        raw = response.text
         parsed, parse_error = safe_extract_json(
             raw,
             fallback={"score": 0, "axis_assessment": [], "good_points": [], "bad_points": [],
@@ -236,7 +234,6 @@ def run_evaluation(
         summary = str(parsed.get("summary") or "").strip()
         if parse_error:
             summary = (summary + f" [parse_error: {parse_error[:120]}]").strip()
-        usage = getattr(response, "usage", None)
         return EvaluationResult(
             scenario_key=scenario_key,
             score=score,
@@ -247,8 +244,8 @@ def run_evaluation(
             pitfalls_hit=_strlist(parsed.get("pitfalls_hit")),
             summary=summary,
             model=chosen_model,
-            tokens_in=int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-            tokens_out=int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
+            tokens_in=response.usage.input_tokens,
+            tokens_out=response.usage.output_tokens,
             latency_ms=latency_ms,
         )
     except Exception as e:  # noqa: BLE001 — 評価は補助機能、本流を壊さない

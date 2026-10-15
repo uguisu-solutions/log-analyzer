@@ -11,8 +11,7 @@ import json
 import os
 import time
 
-import anthropic
-
+from log_analyzer import llm_client
 from log_analyzer.schema import (
     SCHEMA_VERSION,
     AnalysisResult,
@@ -75,8 +74,7 @@ def run_baseline(
     )
 
     started = time.perf_counter()
-    client = anthropic.Anthropic()
-    response = client.messages.create(
+    response = llm_client.complete(
         model=model,
         max_tokens=2000,
         system=system_prompt,
@@ -84,7 +82,7 @@ def run_baseline(
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
 
-    raw_text = response.content[0].text
+    raw_text = response.text
     parsed = _extract_json(raw_text)
 
     result = AnalysisResult(

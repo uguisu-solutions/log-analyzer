@@ -9,8 +9,7 @@ import json
 import os
 import time
 
-import anthropic
-
+from log_analyzer import llm_client
 from log_analyzer.rally._helpers import safe_extract_json
 from log_analyzer.rally.state import Config4State
 from log_analyzer.tracing import usage_components
@@ -193,7 +192,6 @@ def integrator_node(state: Config4State) -> dict:
     ]
     user_input = log_block + "\n\n" + dynamic_block  # token_log 保存用
 
-    client = anthropic.Anthropic()
     started = time.perf_counter()
     # 複数ラウンドのラリーで monitor_results が肥大すると応答も長くなりやすい。
     # 推奨アクションに手順/リスク/ロールバックが加わり出力が増えるため余裕を持たせる。
@@ -211,11 +209,11 @@ def integrator_node(state: Config4State) -> dict:
         total_cc += c["cache_creation"]
         total_cr += c["cache_read"]
 
-    response = client.messages.create(
+    response = llm_client.complete(
         model=model, max_tokens=_integrator_max_tokens(), system=system, messages=messages
     )
     _accumulate(response.usage)
-    raw = response.content[0].text
+    raw = response.text
     parsed, parse_error = safe_extract_json(
         raw,
         fallback={
@@ -239,11 +237,11 @@ def integrator_node(state: Config4State) -> dict:
             ),
         })
         try:
-            retry = client.messages.create(
+            retry = llm_client.complete(
                 model=model, max_tokens=_integrator_max_tokens(), system=system, messages=messages
             )
             _accumulate(retry.usage)
-            rtext = retry.content[0].text
+            rtext = retry.text
             retry_parsed, retry_err = safe_extract_json(rtext, fallback=parsed)
             if retry_err is None:
                 parsed, parse_error, raw = retry_parsed, None, rtext

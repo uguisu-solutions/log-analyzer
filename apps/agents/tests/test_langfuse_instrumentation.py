@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from log_analyzer import llm_client
 from test_rally_orchestrator import _setup_three_step_chain
 
 
@@ -84,9 +85,8 @@ def test_parse_error_marks_generation_warning(monkeypatch, fake_langfuse):
 
     _setup_three_step_chain(monkeypatch)
     # fw 監視だけ JSON にならない応答を返させる
-    from log_analyzer.rally import monitors as mon_mod
 
-    original = mon_mod.anthropic.Anthropic
+    original = llm_client.anthropic.Anthropic
 
     def _factory():
         client = original()
@@ -106,7 +106,7 @@ def test_parse_error_marks_generation_warning(monkeypatch, fake_langfuse):
         client.messages.create = _create
         return client
 
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", _factory)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", _factory)
 
     async def _run():
         return [
@@ -140,7 +140,7 @@ def test_audit_emits_generation(monkeypatch, fake_langfuse):
                     '"concerns": [], "alternative_hypotheses": []}',
         usage=SimpleNamespace(input_tokens=1200, output_tokens=300),
     )
-    monkeypatch.setattr(audit_mod.openai, "OpenAI", lambda: fake_openai)
+    monkeypatch.setattr(llm_client.openai, "OpenAI", lambda: fake_openai)
 
     result = AnalysisResult(
         config_id=ConfigId.CONFIG4, input_log_ref="inline",
@@ -171,7 +171,7 @@ def test_audit_without_trace_id_does_not_emit(monkeypatch, fake_langfuse):
                     '"concerns": [], "alternative_hypotheses": []}',
         usage=SimpleNamespace(input_tokens=10, output_tokens=5),
     )
-    monkeypatch.setattr(audit_mod.openai, "OpenAI", lambda: fake_openai)
+    monkeypatch.setattr(llm_client.openai, "OpenAI", lambda: fake_openai)
     result = AnalysisResult(
         config_id=ConfigId.CONFIG4, input_log_ref="inline",
         root_cause_candidates=[], recommended_actions=[], confidence=0.5,
@@ -191,7 +191,7 @@ def test_audit_failure_is_recorded(monkeypatch, fake_langfuse):
     ))
     fake_openai = MagicMock()
     fake_openai.responses.create.side_effect = RuntimeError("boom")
-    monkeypatch.setattr(audit_mod.openai, "OpenAI", lambda: fake_openai)
+    monkeypatch.setattr(llm_client.openai, "OpenAI", lambda: fake_openai)
     result = AnalysisResult(
         config_id=ConfigId.CONFIG4, input_log_ref="inline",
         root_cause_candidates=[], recommended_actions=[], confidence=0.5,
@@ -227,7 +227,7 @@ def test_planner_returns_timestamps(monkeypatch):
         content=[SimpleNamespace(text=json.dumps(payload, ensure_ascii=False))],
         usage=SimpleNamespace(input_tokens=500, output_tokens=100),
     )
-    monkeypatch.setattr(planner_mod.anthropic, "Anthropic", lambda: fake)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake)
 
     proposal = planner_mod.plan_policy("ログ本文")
     assert isinstance(proposal["started_at"], datetime)

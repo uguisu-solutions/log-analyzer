@@ -10,9 +10,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from log_analyzer.rally import monitors as mon_mod
-from log_analyzer.rally import orchestrator as orch_mod
-from log_analyzer.rally import integrator as integ_mod
+from log_analyzer import llm_client
 from log_analyzer.rally.monitors import _normalize_monitor_output
 from log_analyzer.rally.orchestrator import _normalize_decision, orchestrator_select_first
 from log_analyzer.rally_agent import run_rally_stream
@@ -111,7 +109,7 @@ def test_orchestrator_returns_chosen_first_node(monkeypatch):
     payload = {"first_node": "dns", "focus_hint": "SERVFAIL を最優先", "rationale": "dns 系のエラーが多い"}
     fake_client = MagicMock()
     fake_client.messages.create.return_value = _mock_resp(payload)
-    monkeypatch.setattr(orch_mod.anthropic, "Anthropic", lambda: fake_client)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake_client)
 
     out = orchestrator_select_first({"log_text": "named SERVFAIL", "prompt_overrides": {}, "model_overrides": {}})
     assert out["first_node"] == "dns"
@@ -175,9 +173,7 @@ def _setup_three_step_chain(monkeypatch):
     fake_client = MagicMock()
     fake_client.messages.create.side_effect = _create
     factory = lambda: fake_client  # noqa: E731
-    monkeypatch.setattr(orch_mod.anthropic, "Anthropic", factory)
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", factory)
-    monkeypatch.setattr(integ_mod.anthropic, "Anthropic", factory)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", factory)
     return call_log
 
 
@@ -262,9 +258,7 @@ def test_stream_pauses_at_max_rounds_and_awaits_confirmation(monkeypatch):
     fake_client = MagicMock()
     fake_client.messages.create.side_effect = _create
     factory = lambda: fake_client  # noqa: E731
-    monkeypatch.setattr(orch_mod.anthropic, "Anthropic", factory)
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", factory)
-    monkeypatch.setattr(integ_mod.anthropic, "Anthropic", factory)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", factory)
 
     async def _stop_waiter() -> dict:
         return {"action": "stop"}
@@ -341,9 +335,7 @@ def test_stream_continues_when_user_extends(monkeypatch):
     fake_client = MagicMock()
     fake_client.messages.create.side_effect = _create
     factory = lambda: fake_client  # noqa: E731
-    monkeypatch.setattr(orch_mod.anthropic, "Anthropic", factory)
-    monkeypatch.setattr(mon_mod.anthropic, "Anthropic", factory)
-    monkeypatch.setattr(integ_mod.anthropic, "Anthropic", factory)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", factory)
 
     call_count = {"n": 0}
 

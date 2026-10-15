@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from log_analyzer import llm_client
 from log_analyzer.rally import planner as planner_mod
 
 
@@ -40,7 +41,7 @@ _VALID = json.dumps({
 
 def test_plan_policy_parses_valid_json(monkeypatch):
     fake = _FakeAnthropic([_VALID])
-    monkeypatch.setattr(planner_mod.anthropic, "Anthropic", lambda: fake)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake)
     out = planner_mod.plan_policy("log")
     assert out["parse_error"] is None
     assert out["suggested_first_node"] == "app"
@@ -51,7 +52,7 @@ def test_plan_policy_retries_on_truncated_json(monkeypatch):
     # 1 回目は途中で切れた JSON (パース不可) → 2 回目で復旧
     truncated = '{"situation_summary": "途中で切れ'
     fake = _FakeAnthropic([truncated, _VALID])
-    monkeypatch.setattr(planner_mod.anthropic, "Anthropic", lambda: fake)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake)
     out = planner_mod.plan_policy("log")
     assert out["parse_error"] is None          # リトライで解消
     assert out["suggested_first_node"] == "app"
@@ -63,7 +64,7 @@ def test_plan_policy_retries_on_truncated_json(monkeypatch):
 
 def test_plan_policy_falls_back_when_both_fail(monkeypatch):
     fake = _FakeAnthropic(["not json at all", "still not json"])
-    monkeypatch.setattr(planner_mod.anthropic, "Anthropic", lambda: fake)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", lambda: fake)
     out = planner_mod.plan_policy("log")
     assert out["parse_error"] is not None       # 2 回とも失敗 → フォールバック
     assert out["suggested_first_node"] == "fw"   # 既定方針

@@ -6,7 +6,7 @@ import json
 from fastapi.testclient import TestClient
 
 from log_analyzer import api as api_mod
-from log_analyzer import evaluation_agent, storage
+from log_analyzer import evaluation_agent, llm_client, storage
 from log_analyzer.schema import EvaluationResult
 
 
@@ -42,7 +42,7 @@ class _FakeClient:
 
 def _patch_anthropic(monkeypatch, text: str):
     monkeypatch.setattr(
-        evaluation_agent.anthropic, "Anthropic", lambda *a, **k: _FakeClient(text)
+        llm_client.anthropic, "Anthropic", lambda *a, **k: _FakeClient(text)
     )
 
 
@@ -76,7 +76,7 @@ def test_run_evaluation_clamps_score(monkeypatch):
 def test_run_evaluation_fallback_on_error(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("api down")
-    monkeypatch.setattr(evaluation_agent.anthropic, "Anthropic", _boom)
+    monkeypatch.setattr(llm_client.anthropic, "Anthropic", _boom)
     ev = evaluation_agent.run_evaluation(_RESULT, _SCENARIO)
     assert ev.score == 0
     assert "エラー" in ev.summary
