@@ -272,7 +272,7 @@ Pod の 11434 番は外部に公開しません。
 ssh -N -L 11435:127.0.0.1:11434 root@<POD_IP> -p <SSH_PORT> -i ~\.ssh\<鍵>
 
 # 疎通とモデルの確認
-curl http://localhost:11435/api/tags
+curl.exe http://localhost:11435/api/tags
 
 # バックエンドを Runpod に向けて起動（例: 構成1 を 26B で）
 $env:OLLAMA_BASE_URL = "http://localhost:11435"
@@ -280,7 +280,7 @@ $env:BASELINE_MODEL = "ollama:gemma4:26b-a4b-it-q4_K_M"
 uvicorn log_analyzer.api:app --port 8000
 
 # 実効コンテキスト長の確認（1 回推論した後。context_length が OLLAMA_NUM_CTX と一致すること）
-curl http://localhost:11435/api/ps
+curl.exe http://localhost:11435/api/ps
 ```
 
 - Runpod に送ってよいのは合成ログ（`samples/logs/`）だけです。実ログ・顧客データは送らないでください
