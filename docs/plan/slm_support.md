@@ -485,8 +485,12 @@ Q4_K_M で使う。別リポジトリの検証（`slm検証`、2026-10-13、Runp
   同じ入力でも結果が揺れる。**1 つの入力をプロファイルごとに複数回（既定 3 回）流し**、
   プロファイル間の差が回ごとのばらつきより大きいかで判断する。回数は課金に直結するため
   実行時に人が決める
-- 一括実行は既存の比較スクリプト（`benchmark_questionnaire.py` / `compare_configs.py`）に
-  プロファイル指定と回数指定を足して行う。**課金が発生するため実行は人が行う**
+- 一括実行は**新しいスクリプト `scripts/compare_slm.py`**（2026-10-15 実装）。シナリオ × 構成
+  （`config4` / 保存済みの `user:N`）× N 回（既定 3）を、**起動中のバックエンドに画面と同じリクエストを
+  HTTP で送って**流し、画面と同じ形で解析履歴に保存する（比較 API・CSV にそのまま並ぶ）。
+  構成ごとにまとめて流す（Pod でのモデル入れ替えを最小にする）。ラウンド上限の確認には「停止」を返す
+  （CLI と同じ。どの構成でも同じ条件）。`--dry-run` で計画だけ表示。1 回の失敗で止めず、最後に失敗を一覧する。
+  **課金が発生するため実行は人が行う**（既存の `benchmark_questionnaire.py` は問診票比較専用のため使わない）
 - 審判（`evaluation_agent`）は全プロファイルで Opus 固定（§9-2）。審判のモデルを替えると比較が成立しない
 
 ## 10. フェーズ分割
@@ -521,7 +525,7 @@ Q4_K_M で使う。別リポジトリの検証（`slm検証`、2026-10-13、Runp
 | 変更 | `storage.py`（`run_history` / `analysis_history` に `model_profile` / `models_json` / `input_fingerprint` を後付け） | 4 |
 | 変更 | `rally/{orchestrator,monitors,integrator}.py`（形の遵守・フォールバックの記録） | 4 |
 | 変更 | `api.py`（実績モデル・指紋を履歴に渡す、比較ビュー・CSV 用 API）／ `apps/ui/src/RunHistoryView.tsx`・`AnalysisHistoryView.tsx`（プロファイル列・絞り込み・比較ビュー） | 4 |
-| 変更 | `scripts/benchmark_questionnaire.py` / `compare_configs.py`（プロファイル・回数の指定） | 4 |
+| 新規 | `scripts/compare_slm.py`（シナリオ × 構成 × N 回の一括実行）＋ `tests/test_compare_slm.py` | 4 |
 | — | `tracing.py`（ローカルモデルのコスト非表示）→ **不要と判断**（§8） | 4 |
 
 ## 12. 決定事項
