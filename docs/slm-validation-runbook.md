@@ -5,7 +5,7 @@
 
 | 項目 | 値 |
 |---|---|
-| シナリオ | `samples/topology/scenario2_api_acl_missing`（FW の ACL コメントアウト漏れで API が片肺。正解は同フォルダの README「障害ストーリ」） |
+| シナリオ | `samples/topology/scenario1_lb_fw_denial`（FW ポリシ反映漏れで LB のヘルスチェック失敗）と `samples/topology/scenario2_api_acl_missing`（FW の ACL コメントアウト漏れで API が片肺）。正解は各フォルダの README。2 本にしたのは、scenario2 は手元の e4b（8B 級）でも正解したため、1 本だけでは差が出ない恐れがあるから（2026-10-16） |
 | 構成 | 構成4（委譲チェーン、7 ノード）。ラウンド上限 3（`compare_slm.py` の既定） |
 | 比べるもの | `config4`（クラウド）／ 26B 版のユーザー定義構成 ／ 31B 版のユーザー定義構成 |
 | 回数 | 各 **3 回** |
@@ -100,9 +100,10 @@
 1. 前提：手順 1 のバックエンドが起動中
 2. 実行：
    ```powershell
+   python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario1_lb_fw_denial --configs config4 --runs 3
    python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario2_api_acl_missing --configs config4 --runs 3
    ```
-3. 期待結果：最後に `完了 3 件 / 失敗 0 件`。比較タブの「クラウド」列に 3 件並ぶ（手順 3 の e4b と同じ行）
+3. 期待結果：それぞれ最後に `完了 3 件 / 失敗 0 件`。比較タブにシナリオごとの行ができ、「クラウド」列に 3 件ずつ並ぶ（scenario2 は手順 3 の e4b と同じ行）
 4. 失敗の見分け方：`401` / `credit` → API キーか残高（<https://console.anthropic.com/settings/billing>）。
    別の行に並んだ → 入力の条件がずれている（シナリオのパス・ラウンド上限を手順 3 と揃える）
 5. 貼り返すもの：スクリプトの最後の 10 行
@@ -161,9 +162,10 @@
    ```
 3. 実行（ターミナル B）：
    ```powershell
+   python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario1_lb_fw_denial --configs user:<26B> --runs 3
    python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario2_api_acl_missing --configs user:<26B> --runs 3
    ```
-4. 期待結果：最後に `完了 3 件 / 失敗 0 件`。比較タブの「SLM gemma4:26b-a4b-it-q4_K_M」列に 3 件並ぶ（クラウドと同じ行）
+4. 期待結果：それぞれ最後に `完了 3 件 / 失敗 0 件`。比較タブの「SLM gemma4:26b-a4b-it-q4_K_M」列に、2 行とも 3 件ずつ並ぶ（クラウドと同じ行）。モデルの入れ替えを減らすため、1 つのモデルで 2 シナリオを続けて流す
 5. 失敗の見分け方：
    - タイムアウト → `OLLAMA_TIMEOUT_SEC`（既定 600 秒）を `1800` にしてバックエンドを起動し直し、失敗した回だけ `--runs 1` で足す
    - `接続先に無い` 系のエラー → トンネルが切れた（手順 5）
@@ -171,13 +173,14 @@
 
 ## 8. 31B を 3 回（Pod）
 
-手順 7 と同じ。実行するのは次の 1 行だけ（バックエンドの起動し直しは不要）：
+手順 7 と同じ。実行するのは次の 2 行だけ（バックエンドの起動し直しは不要）：
 
 ```powershell
+python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario1_lb_fw_denial --configs user:<31B> --runs 3
 python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario2_api_acl_missing --configs user:<31B> --runs 3
 ```
 
-期待結果：「SLM gemma4:31b-it-q4_K_M」列に 3 件。貼り返すもの：スクリプトの最後の 10 行。
+期待結果：「SLM gemma4:31b-it-q4_K_M」列に、2 行とも 3 件ずつ。貼り返すもの：スクリプトの最後の 10 行。
 
 ## 9. Pod を止める
 
@@ -190,7 +193,7 @@ python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario2_api_ac
 ## 10. CSV を書き出して手採点（Pod 後）
 
 1. 画面「クラウド / SLM 比較」タブ →「CSV をダウンロード」（1 実行 1 行・UTF-8 BOM 付きで Excel でそのまま開ける）
-2. 正解は `samples/topology/scenario2_api_acl_missing/README.md` の「障害ストーリ（種明かし）」
+2. 正解は各シナリオの `README.md`（`scenario1_lb_fw_denial` / `scenario2_api_acl_missing`）。scenario2 は「障害ストーリ（種明かし）」
 3. 各行の `manual_score` に真因への到達度を記入する（採点の基準は Excel「テストケース2」と同じ考え方）
 4. 合わせて見る列：`input_truncated`（1 なら入力が入りきらなかった。その実行は精度比較から分けて扱う）、
    `format_retries` / `parse_fallbacks`（出力形式を守れたか）、レイテンシ
@@ -198,7 +201,7 @@ python scripts\compare_slm.py --scenario ..\..\samples\topology\scenario2_api_ac
 
 ## 11. 審判 evaluation_agent（任意・Opus 課金あり）
 
-1. 前提：`GET /api/answer-scenarios` に scenario2 に当たる解答シナリオがある
+1. 前提：`GET /api/answer-scenarios` に scenario1 / scenario2 に当たる解答シナリオがある
    ```powershell
    Invoke-RestMethod http://localhost:8000/api/answer-scenarios | ConvertTo-Json -Depth 3
    ```
