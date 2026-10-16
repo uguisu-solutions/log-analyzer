@@ -1422,6 +1422,9 @@ def inference_models_endpoint() -> dict:
     選べるモデル（先頭がクラウド＝既定）と、いまの SLM の接続先（手元の Ollama か
     Runpod の SSH トンネル）にそのモデルがあるか。接続先に無いモデルは画面で選べなくする。
     ``slots`` は選んだモデルを適用する構成4 のノード（モデルを替えられるもの全部）。
+    方針プランナー（``planner``。方針確認を有効にしたときだけ動く）も含める。
+    all-local-* は評価役以外の全ノードを SLM にする（§9-2）。プランナーは slot 定義に無いが、
+    方針確認ゲートが ``model_overrides["planner"]`` を読む。
     """
     try:
         present = set(llm_client.ollama_models())
@@ -1436,7 +1439,8 @@ def inference_models_endpoint() -> dict:
             {"id": m, "available": m in present or not m.startswith(llm_client.OLLAMA_PREFIX)}
             for m in prompt_slots.SELECTABLE_MODELS
         ],
-        "slots": [s["slot_id"] for s in prompt_slots.get_slots("config4") if s["allowed_models"]],
+        "slots": ["planner"]
+        + [s["slot_id"] for s in prompt_slots.get_slots("config4") if s["allowed_models"]],
     }
 
 

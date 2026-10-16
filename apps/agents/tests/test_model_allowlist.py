@@ -78,8 +78,10 @@ def test_inference_models_marks_what_the_current_endpoint_has(monkeypatch):
         {"id": _SLM_31B, "available": True},
         {"id": _SLM_LOCAL, "available": False},
     ]
-    # 選んだモデルを適用する構成4 のノード（モデルを替えられるもの全部）
+    # 選んだモデルを適用する構成4 のノード（モデルを替えられるもの全部）。方針プランナーも含める
+    # （all-local-* は評価役以外の全ノードを SLM にする。docs/plan/slm_support.md §9-2）
     assert data["slots"] == [
+        "planner",
         "orchestrator", "fw_monitor", "routing_monitor", "app_monitor", "dns_monitor", "sec_monitor",
         "integrator",
     ]

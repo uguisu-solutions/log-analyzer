@@ -1,7 +1,7 @@
 /**
  * 構成・ログ解析の「推論モデル」選択欄。
  *
- * クラウド（既定）か SLM（Ollama 経由の Gemma 4）を選び、構成4 の全ノードをそのモデルで動かす。
+ * クラウド（既定）か SLM（Ollama 経由の Gemma 4）を選び、構成4 の全ノードと方針プランナーをそのモデルで動かす。
  * SLM の接続先はバックエンドの OLLAMA_BASE_URL で決まる（手元の Ollama か Runpod の SSH トンネル）。
  * 接続先に無いモデルは選べないようにする（実行してから「モデルが無い」で失敗するのを防ぐ）。
  *
@@ -86,7 +86,7 @@ export function InferenceModelSelector({ value, onChange, disabled }: Props) {
         <div className="small muted">
           SLM の接続先: {endpointLabel(info.ollama_base_url)}（{info.ollama_base_url}）
           {info.ollama_reachable ? '' : ` — つながりません: ${info.ollama_error ?? ''}`}
-          {value && ` / 構成4 の全ノード（${info.slots.length} 個）をこのモデルで動かします`}
+          {value && ` / 構成4 の全ノードと方針プランナー（${info.slots.length} 個）をこのモデルで動かします`}
         </div>
       )}
       {error && <div className="error">推論モデルの一覧を取得できません: {error}</div>}
