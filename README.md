@@ -294,6 +294,9 @@ curl.exe http://localhost:11435/api/ps
 
 #### クラウドとの精度比較
 
+Phase 5（Runpod での検証）の通し手順は [docs/slm-validation-runbook.md](docs/slm-validation-runbook.md)。
+
+
 - 画面：「クラウド / SLM 比較」タブ。同じ入力（モデル以外の条件が同じ実行）を行、モデル構成
   （クラウド / SLM <タグ> / 混在）を列に並べます。各実行をクリックすると解析履歴の詳細が開きます
 - 手採点：同じタブの「CSV をダウンロード」（1 実行 1 行、`manual_score` 列に記入）
