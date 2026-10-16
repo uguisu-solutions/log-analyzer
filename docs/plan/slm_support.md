@@ -210,9 +210,14 @@ async def acomplete(...) -> LlmResponse: ...          # multi_model / pipeline_r
   監視ノードの tool-use ループ全体の両方で、全往復のリクエスト中身が Anthropic 経路と一致する
 - 複数 text ブロックは空行（`"\n\n"`）で連結して 1 つの文字列にする（既存の `_blocks_to_text` と同じ約束）
 - Ollama が tool call の ID を返さない場合は振る（履歴で tool_result と対応付けるため）
-- 切り捨て検知は「`prompt_eval_count` が `num_ctx` に達した」で判定し、`LlmResponse.input_truncated`
-  に立てる。Ollama のプロンプトキャッシュで評価済みトークンが少なく報告される場合に見逃す可能性があるため、
-  **Phase 5 の最初に、わざと長い入力を送って実機の挙動を確かめる**
+- 切り捨て検知（2026-10-16 改訂・§7-1）：毎回 `truncate: false` で送る。入力が `num_ctx` を超えると
+  Ollama は HTTP 400（本文に `exceeds the available context size`）を返すので、`_ollama_post` が
+  `OllamaContextExceeded` を上げる。`_ollama_complete` はこれを受けて **`truncate: true` で 1 回だけ**送り直し
+  （truncate 以外は同じ内容）、`LlmResponse.input_truncated` を立てて返す（実行は完走させ、印を付けて比較に残す）。
+  旧来の「`prompt_eval_count` が `num_ctx` に達した」判定も補助として残す
+- 旧方式だけでは検知できないことを手元の実機で確認した（Ollama 0.40.5・`gemma4:e4b`、2026-10-16、
+  `scripts/probe_ollama_ctx.py`）：num_ctx の 1.2 倍の入力を送ると Ollama は**黙って約半分に切り詰め**、
+  `prompt_eval_count` は 8192 → 4,099、16384 → 8,195 で num_ctx に届かない
 - 環境変数：`OLLAMA_BASE_URL` / `OLLAMA_NUM_CTX`（既定 32768）/ `OLLAMA_TIMEOUT_SEC`（既定 600）
 
 ## 5. tool-use の変換（実機確認済み）
@@ -307,8 +312,9 @@ dict をそのまま扱っている。そのため「モデルが形を守る」
 **対策（実装に入れる）**：
 
 1. ローカル呼び出しでは `options.num_ctx` を必ず明示する（`OLLAMA_NUM_CTX`、既定 32768）
-2. 呼び出し後に `prompt_eval_count` を記録し、**送ったはずのトークン数と大きく乖離したら警告を出す**
-   （切り捨てを黙って通さないための検知）
+2. **`truncate: false` で送り、超過は Ollama の 400 で検知する**（2026-10-16 改訂、§4-1）。
+   Ollama は超過した入力を黙って約半分に切り詰め、`prompt_eval_count` も `num_ctx` に届かないため、
+   トークン数だけでは見逃す（実測）。検知したら `truncate: true` で 1 回だけ送り直して完走させ、印を付ける
 3. 起動時に `/api/ps` の `context_length` を読み、意図した値かを確認する手順を `README` に残す
 
 ### 7-2. プロンプトキャッシュの効き方
@@ -331,13 +337,15 @@ Anthropic の `cache_control` とは効く条件が異なる。
 代わりに **`num_ctx` を入力が全部入る値まで上げる**（`OLLAMA_NUM_CTX`）。
 A40 48GB では Q4 の 26B / 31B の重み（18〜20GB）の残りを KV キャッシュに使える。
 どこまで上げられるかは Phase 5 の最初に実測し、決めた値を本節に追記する。
-それでも入らない入力は `prompt_eval_count` で切り捨てを検知し、その実行に印を付けて記録する（§8）。
+それでも入らない入力は Ollama の 400 で切り捨てを検知し（§7-1）、その実行に印を付けて記録する（§8）。
+実測は `scripts/probe_ollama_ctx.py`（num_ctx ごとに入力を 0.5 / 0.9 / 1.2 倍まで埋め、実効値・VRAM・
+検知の有無を表にして、使ってよい最大の num_ctx を推奨する）。
 
 ## 8. 観測とコスト
 
 - `tracing.usage_components` はそのまま使える。Ollama の `/api/chat` が返す
   `prompt_eval_count` → `input`、`eval_count` → `output` に写す。`cache_creation` / `cache_read` は 0
-- **`prompt_eval_count` は切り捨て検知にも使う**（§7-1 の対策 2）。観測のためだけでなく
+- **`prompt_eval_count` は切り捨て検知の補助にも使う**（§7-1 の対策 2）。観測のためだけでなく
   「入力が本当に全部入ったか」の確認値として扱う
 - `tracing.cost_usd` は未収載モデルで `None` を返す既存挙動を利用し、**ローカルはコスト非表示**にする
   （0 円と表示すると「無料」と誤読されるため。GPU 時間は別軸）
@@ -553,7 +561,7 @@ Q4_K_M で使う。別リポジトリの検証（`slm検証`、2026-10-13、Runp
 | **Runpod への接続** | **SSH トンネル**（`localhost:11435` → Pod の `127.0.0.1:11434`）。`OLLAMA_BASE_URL` で切替、認証ヘッダは持たない | Ollama は無認証のため HTTP ポートを公開しない（§1） |
 | **Runpod に送るデータ** | **合成ログのみ** | Runpod は外部クラウドのため実ログ・顧客データは送らない（§1） |
 | **呼び出す API** | Ollama の**ネイティブ `/api/chat`**（OpenAI 互換 `/v1` は使わない） | `/v1` では `num_ctx` を変えられず、既定 4,096 のまま**長いログが黙って切られる**（実機確認済み・§7-1） |
-| コンテキスト長 | `options.num_ctx` を**毎回明示**（`OLLAMA_NUM_CTX`、既定 32768）＋ `prompt_eval_count` で切り捨て検知 | 黙って切られると「SLM は精度が出ない」という誤った結論になる（§7-1） |
+| コンテキスト長 | `options.num_ctx` を**毎回明示**（`OLLAMA_NUM_CTX`、既定 32768）＋ `truncate: false` の 400 で切り捨て検知（1 回だけ切り詰めを許して再送） | 黙って切られると「SLM は精度が出ない」という誤った結論になる（§7-1） |
 | thinking | 解析ノードは**常に `think: false`**（2026-10-15 改訂） | 基準線の Opus 4.7 は思考なしで動いているため揃える。思考は出力トークンも食い切る（実機で 2 フィールドの JSON に 477 トークン消費）（§6-2） |
 | サンプリング | SLM 側も `temperature` 等を**送らない**（モデル既定） | Opus 4.7 はサンプリング指定を受け付けず既定値で動くため、片方だけ固定しない（§3-1） |
 | コンテキスト予算 | **SLM だけ下げない**。`num_ctx` を入力が全部入る値にし、入らなければ切り捨てを記録（2026-10-15 改訂） | SLM にだけ渡る情報が減ると入力の差になる（§7-3） |

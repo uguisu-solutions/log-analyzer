@@ -352,6 +352,75 @@ def test_ollama_flags_input_truncation_when_prompt_fills_context(monkeypatch):
     assert _call_ollama().input_truncated is False
 
 
+def test_ollama_request_refuses_silent_truncation(monkeypatch):
+    """Ollama は num_ctx を超えた入力を黙って約半分に切り詰め、prompt_eval_count も num_ctx に
+    届かない（0.40.5 で実測）。truncate=false で、切り詰めずにエラーを返させる（§7-1）。"""
+    sent = _capture_ollama(monkeypatch)
+    _call_ollama()
+    assert sent[0]["truncate"] is False
+
+
+def test_ollama_context_exceeded_is_flagged_and_resent_once_with_truncation(monkeypatch):
+    """入力が num_ctx を超えたら、切り捨ての印を付けたうえで truncate=true で 1 回だけ送り直し、
+    実行は完走させる（溢れた実行も比較表に残す）。送り直しは truncate 以外を変えない。"""
+    sent: list[dict] = []
+
+    def post(url, payload, timeout):
+        sent.append(copy.deepcopy(payload))
+        if payload["truncate"] is False:
+            raise llm_client.OllamaContextExceeded(
+                "request (9626 tokens) exceeds the available context size (8192 tokens)"
+            )
+        return {"message": {"content": "x"}, "done_reason": "stop",
+                "prompt_eval_count": 4099, "eval_count": 1}
+
+    monkeypatch.setattr(llm_client, "_ollama_post", post)
+
+    out = _call_ollama()
+
+    assert out.input_truncated is True
+    assert out.text == "x"
+    assert [p["truncate"] for p in sent] == [False, True]
+    assert {k: v for k, v in sent[0].items() if k != "truncate"} == {
+        k: v for k, v in sent[1].items() if k != "truncate"
+    }
+
+
+def test_ollama_post_raises_context_exceeded_on_400_context_error():
+    """Ollama の「context size を超えた」400 だけを専用の例外にする（他の 400 は従来どおり）。"""
+    import json
+    from http.server import BaseHTTPRequestHandler
+
+    import pytest
+
+    errors = iter([
+        "request (9626 tokens) exceeds the available context size (8192 tokens), try increasing it",
+        "invalid request",
+    ])
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            body = json.dumps({"error": next(errors)}).encode()
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = _serve(Handler)
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/api/chat"
+        with pytest.raises(llm_client.OllamaContextExceeded, match="9626 tokens"):
+            llm_client._ollama_post(url, {}, timeout=5)
+        with pytest.raises(RuntimeError, match="invalid request") as e:
+            llm_client._ollama_post(url, {}, timeout=5)
+        assert not isinstance(e.value, llm_client.OllamaContextExceeded)
+    finally:
+        server.shutdown()
+
+
 def test_anthropic_response_is_never_flagged_truncated(monkeypatch):
     _capture_anthropic(monkeypatch)
     out = llm_client.complete(model="claude-opus-4-7", system="s", messages=[], max_tokens=1)

@@ -261,7 +261,9 @@ python scripts\compare_configs.py ..\..\samples\logs\*.log --include-user --csv 
 | `OLLAMA_TIMEOUT_SEC` | `600` | 1 回の呼び出しのタイムアウト（秒） |
 
 推論方法はクラウドと同じです（思考なし・サンプリング指定なし・出力形式の強制なし・出力上限も同じ値）。
-入力が `OLLAMA_NUM_CTX` に達した呼び出しは、切り捨ての可能性として印が付きます。
+入力が `OLLAMA_NUM_CTX` に入らない呼び出しは、Ollama がエラー（HTTP 400）を返すので
+切り詰めを許して 1 回だけ送り直し、切り捨ての印を付けて完走させます（Ollama は既定では黙って切り詰めるため）。
+`OLLAMA_NUM_CTX` の決め方は `python scripts\probe_ollama_ctx.py --model <タグ>`（num_ctx ごとの実測と推奨値）。
 
 **Runpod（Gemma 4 26B / 31B）につなぐ**: Pod 側の準備（Ollama の起動・モデル取得）は
 別リポジトリの検証資料（`slm検証/docs/runpod_gemma4_a6000_validation.md`）に従います。

@@ -13,7 +13,7 @@ import os
 import urllib.error
 import urllib.request
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import anthropic
@@ -172,6 +172,14 @@ def _ollama_timeout() -> float:
     return float(os.environ.get("OLLAMA_TIMEOUT_SEC") or 600)
 
 
+class OllamaContextExceeded(RuntimeError):
+    """入力が num_ctx を超えた（``truncate: false`` で送ったときに Ollama が返す 400）。"""
+
+
+# Ollama 0.40.5 の 400 本文: "request (9626 tokens) exceeds the available context size (8192 tokens), ..."
+_CONTEXT_EXCEEDED = "exceeds the available context size"
+
+
 def _ollama_post(url: str, payload: dict, timeout: float) -> dict:
     """Ollama のネイティブ API に JSON を POST する（テストではここを差し替える）。"""
     req = urllib.request.Request(
@@ -186,7 +194,10 @@ def _ollama_post(url: str, payload: dict, timeout: float) -> dict:
     except urllib.error.HTTPError as e:
         # Ollama はエラー理由を JSON 本文で返す（例: モデル未取得）。原因が分かるよう残す
         detail = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Ollama がエラーを返した（HTTP {e.code}）: {detail}") from e
+        message = f"Ollama がエラーを返した（HTTP {e.code}）: {detail}"
+        if e.code == 400 and _CONTEXT_EXCEEDED in detail:
+            raise OllamaContextExceeded(message) from e
+        raise RuntimeError(message) from e
 
 
 def _ollama_get(url: str, timeout: float) -> dict:
@@ -257,12 +268,14 @@ def _ollama_payload(
     tools: list[dict] | None,
 ) -> dict[str, Any]:
     # think=False・サンプリング指定なしは、基準線の Opus 4.7（思考なし・既定サンプリング）に揃えるため。
-    # num_ctx は必ず明示する（Ollama の既定 4,096 では長いログが黙って切られる。§7-1）
+    # num_ctx は必ず明示する（Ollama の既定 4,096 では長いログが黙って切られる。§7-1）。
+    # truncate=False：超えた入力を黙って約半分に切り詰めさせず、400 を返させる（§7-1）
     payload: dict[str, Any] = {
         "model": model[len(OLLAMA_PREFIX):],
         "messages": _ollama_messages(system, messages),
         "stream": False,
         "think": False,
+        "truncate": False,
         "options": {"num_predict": max_tokens, "num_ctx": _ollama_num_ctx()},
     }
     if tools:
@@ -328,13 +341,17 @@ def _ollama_complete(
     max_tokens: int,
     tools: list[dict] | None,
 ) -> LlmResponse:
-    return _from_ollama(
-        _ollama_post(
-            f"{_ollama_base_url()}/api/chat",
-            _ollama_payload(model, system, messages, max_tokens, tools),
-            timeout=_ollama_timeout(),
+    url = f"{_ollama_base_url()}/api/chat"
+    payload = _ollama_payload(model, system, messages, max_tokens, tools)
+    try:
+        return _from_ollama(_ollama_post(url, payload, timeout=_ollama_timeout()))
+    except OllamaContextExceeded:
+        # 入力が num_ctx に入らない。切り詰めを許して 1 回だけ送り直し、実行は完走させる。
+        # 切り捨ての印を付けて結果に残す（黙って比較に混ぜない。§7-1）
+        resp = _from_ollama(
+            _ollama_post(url, {**payload, "truncate": True}, timeout=_ollama_timeout())
         )
-    )
+        return replace(resp, input_truncated=True)
 
 
 def complete(
