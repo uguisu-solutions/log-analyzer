@@ -76,7 +76,7 @@ UI・`storage.py`・評価エージェントが同じ形に依存しているた
 - `gcloud` は `describe` / `list` / `config get` などの参照のみ。手順書では PowerShell から
   `& $gc` の形で呼ぶ
 - BigQuery は読み取り専用（MCP Toolbox を `writeMode=blocked` で使う）。`bq` CLI からも書き込まない
-- 課金が発生するスクリプト（`benchmark_questionnaire.py` / `compare_configs.py` /
+- 課金が発生するスクリプト（`benchmark_questionnaire.py` / `compare_configs.py` / `compare_slm.py` /
   `ingest_logs_to_bq.py`、`log-analyze` CLI）は人が実行する
 
 # ガードレール
