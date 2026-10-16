@@ -1422,9 +1422,8 @@ def inference_models_endpoint() -> dict:
     選べるモデル（先頭がクラウド＝既定）と、いまの SLM の接続先（手元の Ollama か
     Runpod の SSH トンネル）にそのモデルがあるか。接続先に無いモデルは画面で選べなくする。
     ``slots`` は選んだモデルを適用する構成4 のノード（モデルを替えられるもの全部）。
-    方針プランナー（``planner``。方針確認を有効にしたときだけ動く）も含める。
-    all-local-* は評価役以外の全ノードを SLM にする（§9-2）。プランナーは slot 定義に無いが、
-    方針確認ゲートが ``model_overrides["planner"]`` を読む。
+    方針プランナー（``planner``。方針確認を有効にしたときだけ動く）も含める
+    （``prompt_slots.MODEL_ONLY_SLOTS``。方針確認ゲートが ``model_overrides["planner"]`` を読む）。
     """
     try:
         present = set(llm_client.ollama_models())
@@ -1439,7 +1438,7 @@ def inference_models_endpoint() -> dict:
             {"id": m, "available": m in present or not m.startswith(llm_client.OLLAMA_PREFIX)}
             for m in prompt_slots.SELECTABLE_MODELS
         ],
-        "slots": ["planner"]
+        "slots": prompt_slots.MODEL_ONLY_SLOTS["config4"]
         + [s["slot_id"] for s in prompt_slots.get_slots("config4") if s["allowed_models"]],
     }
 
@@ -1782,13 +1781,14 @@ def _validate_overrides(base_config: str, prompt_overrides: dict[str, str], mode
     invalid_p = [sid for sid in prompt_overrides if sid not in valid_slot_ids]
     if invalid_p:
         raise HTTPException(status_code=400, detail=f"unknown slot_id(s) for {base_config}: {invalid_p}")
-    invalid_m = [sid for sid in model_overrides if sid not in valid_slot_ids]
+    model_only = prompt_slots.MODEL_ONLY_SLOTS.get(base_config, [])
+    invalid_m = [sid for sid in model_overrides if sid not in valid_slot_ids and sid not in model_only]
     if invalid_m:
         raise HTTPException(status_code=400, detail=f"unknown model slot_id(s) for {base_config}: {invalid_m}")
     # 各 slot の allowed_models をチェック（empty なら model 上書き不可）
     by_id = {s["slot_id"]: s for s in slots}
     for sid, model_name in model_overrides.items():
-        allowed = by_id[sid]["allowed_models"]
+        allowed = by_id[sid]["allowed_models"] if sid in by_id else prompt_slots.SELECTABLE_MODELS
         if not allowed:
             raise HTTPException(status_code=400, detail=f"slot '{sid}' は model 上書き不可")
         if model_name not in allowed:

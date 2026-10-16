@@ -102,3 +102,22 @@ def test_inference_models_when_ollama_is_unreachable(monkeypatch):
     assert data["ollama_reachable"] is False
     assert "接続できません" in data["ollama_error"]
     assert [m["available"] for m in data["models"]] == [True, False, False, False]
+
+
+def test_what_the_ui_sends_for_every_inference_slot_passes_validation(monkeypatch):
+    """画面は /api/inference-models の slots 全部に選んだモデルを入れて送る。それが実行前の検証を通ること。
+
+    方針プランナー（planner）は slot 定義に無いが、モデルだけは替えられる（プロンプトの上書きは不可）。
+    """
+    from fastapi.testclient import TestClient
+
+    from log_analyzer import llm_client
+
+    monkeypatch.setattr(llm_client, "ollama_models", lambda timeout=5: [_SLM_26B])
+    slots = TestClient(api_mod.app).get("/api/inference-models").json()["slots"]
+
+    api_mod._validate_overrides("config4", {}, {sid: _SLM_26B for sid in slots})  # 例外にならない
+    with pytest.raises(HTTPException):
+        api_mod._validate_overrides("config4", {}, {"planner": "ollama:unknown"})
+    with pytest.raises(HTTPException):
+        api_mod._validate_overrides("config4", {"planner": "独自プロンプト"}, {})

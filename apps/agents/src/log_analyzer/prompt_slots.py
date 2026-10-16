@@ -73,6 +73,13 @@ SLOT_DEFS: dict[str, dict[str, dict]] = {
 
 VALID_BASE_CONFIGS = list(SLOT_DEFS.keys())
 
+# プロンプトは編集できないが、モデルだけは替えられるノード（model_overrides のキーとしてのみ有効）。
+# 方針プランナーは方針確認を有効にしたときだけ動く。all-local-* は評価役以外の全ノードを SLM にするため
+# 含める（docs/plan/slm_support.md §9-2）。選べるモデルは SELECTABLE_MODELS
+MODEL_ONLY_SLOTS: dict[str, list[str]] = {
+    "config4": ["planner"],
+}
+
 
 def get_default_prompts(base_config: str) -> dict[str, str]:
     """``base_config`` のデフォルトプロンプトを ``{slot_id: prompt}`` で返す。
